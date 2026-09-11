@@ -1,0 +1,684 @@
+/* ==========================================================================
+   taipola — instant-rendering markdown editor
+   Design notes:
+   - The editing surface is two stacked layers that MUST share identical text
+     metrics (font, size, line-height, padding, wrapping). Any divergence breaks
+     caret alignment, so all shared values live in the variables below and are
+     applied to both a source line and its rendered counterpart.
+   - Body text is monospace on purpose: it is the only way to guarantee the
+     source layer and the rendered layer wrap at exactly the same glyph.
+   ========================================================================== */
+
+@import 'highlight.js/styles/github.css';
+
+/* ==========================================================================
+   Theme
+   `:root` carries the light palette. Dark is applied either because the OS asks
+   for it (the media query) or because the user overrode it explicitly — the
+   `[data-theme]` rules come last so an explicit choice always wins.
+   ========================================================================== */
+
+:root {
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace,
+    'Menlo', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --font-serif-read: 'Iowan Old Style', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
+
+  /* --- light palette --- */
+  --bg: #ffffff;
+  --bg-panel: #fafaf9;
+  --bg-elevated: #ffffff;
+  --text: #1f1f22;
+  --text-soft: #6b6b73;
+  --text-faint: #9a9aa2;
+  --border: #e8e8e4;
+  --border-strong: #d8d8d2;
+  --accent: #2f6f5e;
+  --accent-soft: rgba(47, 111, 94, 0.12);
+  --code-bg: #f4f4f1;
+  --mark-bg: #fff2a8;
+  --selection: rgba(47, 111, 94, 0.2);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+
+  /* --- shared metrics for the two editing layers (do not diverge) --- */
+  --editor-font-size: 15px;
+  --doc-line: 1.75;
+  --editor-pad-x: 40px;
+  --editor-pad-y: 32px;
+  --editor-max-width: 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #16171a;
+    --bg-panel: #1c1d21;
+    --bg-elevated: #212227;
+    --text: #e4e4e7;
+    --text-soft: #9d9da6;
+    --text-faint: #6e6e77;
+    --border: #2b2c31;
+    --border-strong: #3a3b42;
+    --accent: #6cc4a8;
+    --accent-soft: rgba(108, 196, 168, 0.16);
+    --code-bg: #212227;
+    --mark-bg: #4d4416;
+    --selection: rgba(108, 196, 168, 0.24);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #16171a;
+  --bg-panel: #1c1d21;
+  --bg-elevated: #212227;
+  --text: #e4e4e7;
+  --text-soft: #9d9da6;
+  --text-faint: #6e6e77;
+  --border: #2b2c31;
+  --border-strong: #3a3b42;
+  --accent: #6cc4a8;
+  --accent-soft: rgba(108, 196, 168, 0.16);
+  --code-bg: #212227;
+  --mark-bg: #4d4416;
+  --selection: rgba(108, 196, 168, 0.24);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* highlight.js ships a light theme in the base import; re-tint its tokens for
+   the dark palette so code blocks keep their contrast in either theme.
+   Each rule is written twice — once for an explicit dark choice, once inside
+   the system-preference query — because CSS cannot merge an at-rule into a
+   selector list. */
+:root[data-theme='dark'] .ln-code .hljs,
+:root[data-theme='dark'] .ln-code code {
+  color: #e4e4e7;
+  background: transparent;
+}
+
+:root[data-theme='dark'] .ln-code .hljs-keyword,
+:root[data-theme='dark'] .ln-code .hljs-built_in,
+:root[data-theme='dark'] .ln-code .hljs-type {
+  color: #ff9db1;
+}
+
+:root[data-theme='dark'] .ln-code .hljs-string,
+:root[data-theme='dark'] .ln-code .hljs-attr {
+  color: #a8d8a0;
+}
+
+:root[data-theme='dark'] .ln-code .hljs-comment,
+:root[data-theme='dark'] .ln-code .hljs-quote {
+  color: #7d7d88;
+}
+
+:root[data-theme='dark'] .ln-code .hljs-number,
+:root[data-theme='dark'] .ln-code .hljs-literal {
+  color: #d3b0ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ln-code .hljs,
+  :root:not([data-theme='light']) .ln-code code {
+    color: #e4e4e7;
+    background: transparent;
+  }
+
+  :root:not([data-theme='light']) .ln-code .hljs-keyword,
+  :root:not([data-theme='light']) .ln-code .hljs-built_in,
+  :root:not([data-theme='light']) .ln-code .hljs-type {
+    color: #ff9db1;
+  }
+
+  :root:not([data-theme='light']) .ln-code .hljs-string,
+  :root:not([data-theme='light']) .ln-code .hljs-attr {
+    color: #a8d8a0;
+  }
+
+  :root:not([data-theme='light']) .ln-code .hljs-comment,
+  :root:not([data-theme='light']) .ln-code .hljs-quote {
+    color: #7d7d88;
+  }
+
+  :root:not([data-theme='light']) .ln-code .hljs-number,
+  :root:not([data-theme='light']) .ln-code .hljs-literal {
+    color: #d3b0ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ==========================================================================
+   Shell
+   ========================================================================== */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 46px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  user-select: none;
+}
+
+.titlebar-left,
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.titlebar-left {
+  min-width: 180px;
+}
+
+.titlebar-right {
+  margin-left: auto;
+}
+
+.doc-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doc-name {
+  font-size: 13px;
+  color: var(--text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.doc-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.icon-button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.icon-lines,
+.icon-lines::before,
+.icon-lines::after {
+  display: block;
+  width: 14px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.icon-lines {
+  position: relative;
+}
+
+.icon-lines::before,
+.icon-lines::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.icon-lines::before {
+  top: -4.5px;
+}
+
+.icon-lines::after {
+  top: 4.5px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 auto;
+  padding: 3px 6px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.tool-button {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tool-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tool-button.is-bold {
+  font-weight: 700;
+}
+
+.tool-button.is-italic {
+  font-style: italic;
+}
+
+.tool-button.is-strike {
+  text-decoration: line-through;
+}
+
+.text-button {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Outline
+   ========================================================================== */
+
+.outline {
+  width: 244px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.outline-header {
+  padding: 14px 16px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.outline-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 20px;
+  margin: 0;
+  list-style: none;
+}
+
+.outline-empty {
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-item:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.outline-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.outline-item[data-level='1'] {
+  padding-left: 8px;
+  font-size: 13px;
+}
+.outline-item[data-level='2'] {
+  padding-left: 20px;
+}
+.outline-item[data-level='3'] {
+  padding-left: 32px;
+}
+.outline-item[data-level='4'] {
+  padding-left: 44px;
+}
+.outline-item[data-level='5'] {
+  padding-left: 56px;
+}
+.outline-item[data-level='6'] {
+  padding-left: 68px;
+}
+
+/* ==========================================================================
+   Document surface
+   One scrolling container holding the source-backed view. Wrapping is the
+   browser's job: markers stay in the DOM and collapse to zero width, so a
+   paragraph reflows naturally and columns line up without any height maths.
+   ========================================================================== */
+
+.doc {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-width: var(--editor-max-width);
+  margin: 0 auto;
+  padding: var(--editor-pad-y) var(--editor-pad-x);
+  font-family: var(--font-mono);
+  font-size: var(--editor-font-size);
+  line-height: var(--doc-line);
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: normal;
+  white-space: pre-wrap;
+  tab-size: 4;
+  outline: none;
+}
+
+.doc:focus-within {
+  outline: none;
+}
+
+.blk {
+  padding: 0;
+  margin: 0;
+}
+
+.blk-active {
+  /* The caret's block; nothing needs to change visually. */
+}
+
+/* One source line. Its height is whatever the browser needs — no constraint. */
+.vl {
+  min-height: var(--doc-line);
+  line-height: var(--doc-line);
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Collapsed syntax markers contribute no width but keep their text in the DOM,
+   so the source stays intact and the caret never lands on nothing.
+   `!important` is required inside table rows: a `display: grid` container
+   blockifies its direct children, and blockification beats a plain
+   `display: none`, which left markers occupying a whole column. */
+.rn-marker {
+  display: none !important;
+}
+
+.rn-bold {
+  font-weight: 700;
+}
+
+.rn-italic {
+  font-style: italic;
+}
+
+.rn-strike {
+  text-decoration: line-through;
+  color: var(--text-soft);
+}
+
+.rn-code {
+  font-family: inherit;
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0 0.22em;
+  color: color-mix(in srgb, var(--text) 88%, var(--accent));
+}
+
+.rn-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.rn-codeblock {
+  color: var(--text);
+}
+
+.vl-code,
+.vl-fence {
+  background: var(--code-bg);
+}
+
+.vl-fence {
+  /* The fence line keeps its box but draws nothing. */
+  color: transparent;
+}
+
+.vl-heading .rn,
+.vl-heading {
+  font-family: var(--font-ui);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.vl-heading {
+  font-size: calc(var(--editor-font-size) * 1.28);
+}
+
+.vl-rule {
+  color: transparent;
+}
+
+.vl-rule::before {
+  content: '';
+  display: block;
+  height: 1px;
+  margin: calc(var(--doc-line) / 2 - 1px) 0;
+  background: var(--border-strong);
+}
+
+.vl-quote {
+  color: var(--text-soft);
+}
+
+.vl-quote::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  margin-right: 0.6em;
+  vertical-align: -0.12em;
+  background: var(--border-strong);
+}
+
+.vl-table-delim {
+  color: transparent;
+}
+
+/* Table rows share one grid, so columns line up across every row. */
+.blk[data-kind='table'] .vl-table,
+.blk[data-kind='table'] .vl-table-delim {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0 1em;
+  align-items: start;
+}
+
+/* The rule row keeps its line box but shows nothing. */
+.blk[data-kind='table'] {
+  margin: 0.25em 0;
+}
+
+.blk[data-kind='table'] .vl-table {
+  background: var(--bg);
+}
+
+.blk[data-kind='table'] .rn {
+  display: inline;
+}
+
+.blk[data-kind='table'] .vl-table::before,
+.blk[data-kind='table'] .vl-table::after {
+  display: none;
+}
+
+/* ==========================================================================
+   Status bar, toast
+   ========================================================================== */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  padding: 0 14px;
+  flex: none;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11.5px;
+  user-select: none;
+}
+
+.statusbar-spacer {
+  flex: 1;
+}
+
+.status-dirty {
+  color: #c98a2b;
+}
+
+.status-clean {
+  color: var(--accent);
+}
+
+.status-hint {
+  color: var(--text-faint);
+  opacity: 0.7;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12.5px;
+  z-index: 50;
+  animation: toast-in 160ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+}
+
+@media (max-width: 900px) {
+  .outline {
+    display: none;
+  }
+
+  .titlebar-right {
+    display: none;
+  }
+}
