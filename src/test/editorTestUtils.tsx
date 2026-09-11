@@ -177,5 +177,9 @@ export async function flush(): Promise<void> {
 export async function assertDomMatchesSource(r: Rendering): Promise<void> {
   const doc = r.getDoc()
   const dom = readDocumentSource(r.container)
-  expect(dom.replace(/\n+$/, '')).toBe(normalizeTables(doc).replace(/\n+$/, ''))
+  // Both sides go through the same canonicalization: table cell text is rebuilt
+  // from the DOM without its original padding, and delimiter rows collapse.
+  expect(normalizeTables(dom).replace(/\n+$/, '')).toBe(
+    normalizeTables(doc).replace(/\n+$/, ''),
+  )
 }

@@ -67,6 +67,16 @@ function runElement(
   return span
 }
 
+/** A run that carries source text without occupying any space. */
+function hiddenRun(text: string): HTMLElement {
+  const span = document.createElement('span')
+  span.setAttribute('data-run', '0')
+  span.setAttribute('data-src', '0')
+  span.className = 'rn rn-marker'
+  span.textContent = text
+  return span
+}
+
 /** The filler that gives an empty line a real editing position. */
 function brElement(): HTMLElement {
   const br = document.createElement('br')
@@ -79,6 +89,7 @@ function lineElement(
   line: BlockView['lines'][number],
   index: number,
   state: LineState | undefined,
+  raw: string,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-vline') ? existing : document.createElement('div')
   setAttr(el, 'data-vline', String(index))
@@ -92,10 +103,26 @@ function lineElement(
   }
 
   if (line.runs.length === 0) {
-    // An empty line gets a real `<br>` so the browser has a text position INSIDE
-    // it. Without one, a caret anchored on the empty line box is resolved back to
-    // the end of the previous text node when the user types: the characters then
-    // land at the end of the line above (observed as `…内容ZZZQY`).
+    // A table's `| --- |` row renders as an EMPTY line box in both states (the
+    // view never emits runs for it), and in Typora it is not a visible row at
+    // all: it collapses so the table has no blank band in the middle, and the
+    // separator it stands for is drawn by the header row's border.
+    if (state?.kind === 'table-delim') {
+      // The row shows nothing (Typora has no visible delimiter row) but its
+      // SOURCE must stay recoverable from the DOM. With no trace of `| --- |` in
+      // the DOM, absorbing the document deleted that row outright: type one
+      // character in a table and the delimiter vanished, so the table stopped
+      // being a table. `normalizeTables` blanked the row on BOTH sides of the
+      // comparison, which is why nothing caught it.
+      syncChildren(el, 1, (_index, current) =>
+        current && current.hasAttribute('data-run') ? current : hiddenRun(raw),
+      )
+      return el
+    }
+    // Every other empty line gets a real `<br>` so the browser has a text
+    // position INSIDE it. Without one, a caret anchored on the empty line box is
+    // resolved back to the end of the previous text node when the user types:
+    // the characters then land at the end of the line above (`…内容ZZZQY`).
     // The old implementation rendered no child and relied on `min-height`, only
     // because React's reconciliation fought over a `<br>` it had not created —
     // the kernel owns this DOM, so the workaround is obsolete.
@@ -140,9 +167,11 @@ function blockElement(
   setAttr(el, 'data-block', String(block.index))
   setAttr(el, 'data-src-start', String(start))
   setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
-  syncChildren(el, view.lines.length, (index, current) =>
-    lineElement(current, view.lines[index], index, lineStates[block.startLine + index]),
-  )
+  syncChildren(el, view.lines.length, (index, current) => {
+    const line = view.lines[index]
+    const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
+    return lineElement(current, line, index, lineStates[block.startLine + index], raw)
+  })
   return el
 }
 
@@ -629,8 +658,11 @@ function textOfLine(lineEl: HTMLElement): string {
 
 /**
  * Normalizes table rows in a SOURCE string to the canonical form the DOM
- * rebuild produces. Table pipes never render as text, so a comparison against
- * the DOM has to put the model in the same shape first.
+ * rebuild produces, so a model and a DOM can be compared.
+ *
+ * Delimiter rows collapse to one canonical row rather than to nothing: the DOM
+ * DOES carry their source (in a hidden run) and a blank placeholder would hide a
+ * real difference.
  */
 export function normalizeTables(text: string): string {
   const DELIMITER = /^\|?[\s:|-]+\|[\s:|-]*$/
@@ -638,7 +670,7 @@ export function normalizeTables(text: string): string {
     .split('\n')
     .map((line) => {
       const t = line.trim()
-      if (t.startsWith('|') && t.length > 1 && DELIMITER.test(t)) return ''
+      if (t.startsWith('|') && t.length > 1 && DELIMITER.test(t)) return '| --- |'
       if (t.startsWith('|') && t.length > 1) {
         const inner = line.split('|').slice(1, -1).map((c) => c.trim())
         return `| ${inner.join(' | ')} |`

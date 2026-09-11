@@ -648,15 +648,16 @@ body {
   color: transparent;
 }
 
-/* Table rows share one grid, so columns line up across every row. Each CELL is
-   one grid item; the runs inside it are plain inline spans, so a cell whose
-   inline markers are revealed keeps its single column. */
+/* Every row is its own grid, so columns line up across rows (same container
+   width, one `1fr` per column). Each CELL is one grid item; the runs inside it
+   are plain inline spans, so a cell whose inline markers are revealed keeps its
+   single column. No column gap: the cell borders have to touch to read as a grid. */
 .blk[data-kind='table'] .vl-table,
 .blk[data-kind='table'] .vl-table-delim {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  gap: 0 1em;
+  gap: 0;
   align-items: start;
 }
 
@@ -669,10 +670,6 @@ body {
   margin: 0.25em 0;
 }
 
-.blk[data-kind='table'] .vl-table {
-  background: var(--bg);
-}
-
 .blk[data-kind='table'] .rn {
   display: inline;
 }
@@ -683,32 +680,46 @@ body {
 }
 
 /* ==========================================================================
-   Tables (default styling)
-   ========================================================================== */
+   Tables — Typora-style grid
+   ==========================================================================
+   A real table: 1px lines between every cell plus an outer frame, a shaded bold
+   header row, and comfortable cell padding.
 
-.blk[data-kind='table'] .vl-table {
+   The frame comes from TWO places because every row is a separate grid element:
+   the block draws the top/left edges, and each cell draws its own right/bottom
+   edge. That way consecutive rows never double a line (a border-top on row N+1
+   would add 1px on top of row N's border-bottom). */
+
+.blk[data-kind='table'] {
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+
+.blk[data-kind='table'] .cell {
+  padding: 6px 12px;
+  min-height: 1.6em;
+  border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  padding: 0.1em 0.2em;
 }
 
 /* Header row: the first line box of the table block. */
-.blk[data-kind='table'] .vl-table:first-child {
-  border-top: 1px solid var(--border-strong);
+.blk[data-kind='table'] .vl-table:first-child .cell {
+  background: var(--bg-panel);
   font-weight: 650;
 }
 
-/* Separator row renders as a full-width hairline (it holds no cells); it must
-   leave the grid (a grid item would claim a whole column). */
+/* The `| --- |` source row is NOT a visible row: it collapses to nothing, and
+   the separator it stands for is drawn by the header row's bottom border. (It
+   must leave the grid — as a grid item it would claim a whole column — and it
+   regains its height the moment the caret reveals it as source text.) */
 .blk[data-kind='table'] .vl-table-delim {
   display: block;
+  min-height: 0;
+  line-height: 0;
 }
 
 .blk[data-kind='table'] .vl-table-delim::before {
-  content: '';
-  display: block;
-  height: 1px;
-  background: var(--border-strong);
-  margin: calc(var(--doc-line) / 2 - 1px) 0;
+  display: none;
 }
 
 /* ==========================================================================

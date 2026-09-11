@@ -411,6 +411,26 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     const row = block?.querySelector('.vl-table') as HTMLElement | null
     expect(row).not.toBeNull()
     expect(getComputedStyle(row as HTMLElement).display).toBe('grid')
+    // 单元格自带右边线与下边线，外框由块上的 top/left 提供 —— 相邻行不会叠出 2px。
+    const cell = block?.querySelector('.cell') as HTMLElement | null
+    expect(getComputedStyle(cell as HTMLElement).borderRightWidth).toBe('1px')
+    expect(getComputedStyle(block as HTMLElement).borderTopWidth).toBe('1px')
+    // `| --- |` 行在渲染态不占高度（Typora 里它不是一个可见行）。
+    const delim = block?.querySelector('.vl-table-delim') as HTMLElement | null
+    expect(delim).not.toBeNull()
+    expect((delim as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1)
+  })
+
+  it('表格单元格可点进去就地编辑，源码结构不丢', async () => {
+    const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
+    await flush()
+    await clickInRun(r, 0, 2, 0, 0)
+    await r.user.keyboard('X')
+    await flush()
+    // 三行结构一字不差：分隔行必须留在源码里（它不可见，只能从 DOM 的隐藏副本重建），
+    // 改动只落在那一个单元格里。
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1X | 2 |\n')
+    await assertDomMatchesSource(r)
   })
 
   it('有序列表块重置计数器（每段编号从 1 开始）', async () => {
