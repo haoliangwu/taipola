@@ -222,6 +222,11 @@ export class EditorKernel {
   private render(): boolean {
     const host = this.host
     if (!host) return false
+    // NEVER touch the DOM during an IME composition. Rewriting the line takes the
+    // composing text node with it, the browser's composition region is gone, and
+    // the committed characters land beside the pinyin instead of replacing it —
+    // typing `w` then committing 我 left `w我` in the document.
+    if (this.composing) return false
     const signature = markupSignature(this.blocks, this.views, this.lineStates, this.offsets)
     if (signature === this.signature) return false
     renderDocument(host, this.blocks, this.views, this.lineStates, this.offsets)
@@ -312,6 +317,10 @@ export class EditorKernel {
     // placement is ignored, otherwise a browser-clamped reading feeds back into
     // the model and the caret walks backwards by the length of every marker.
     if (this.placedByUs) return
+    // `selectionchange` fires constantly while an IME composition is open, and
+    // the reveal state around the caret changes as it grows. Reacting here would
+    // rewrite the DOM mid-composition (see `render`).
+    if (this.composing) return
     const source = this.caretFromDom()
     if (source === null) return
     this.caret = source
@@ -335,6 +344,11 @@ export class EditorKernel {
 
   private handleCompositionEnd = (): void => {
     this.composing = false
+    // Deliberately no render here. The browser may fire `compositionend` BEFORE
+    // the `input` that carries the committed text: at that moment the DOM already
+    // holds the final characters while the model still holds the pinyin, and
+    // rebuilding from the model would erase what was just committed. The
+    // following `input` absorbs the committed DOM and renders as usual.
   }
 
   private handleInput = (): void => {
@@ -465,17 +479,18 @@ export class EditorKernel {
       return
     }
 
-    if (event.key === 'Tab' && live !== null) {
-      // Tab nests a list item one level, Shift+Tab lifts it back out. Everything
-      // else (a plain paragraph, a code line) keeps the browser default, so the
-      // editor stays reachable by keyboard.
+    if (event.key === 'Tab') {
+      // Tab ALWAYS stops here. Letting it through moves focus out of the page —
+      // with nothing focusable left, the browser hands it to its own chrome (the
+      // address bar), which is jarring mid-edit. On a list item it nests the item
+      // (Shift+Tab lifts it back out); anywhere else it does nothing.
+      event.preventDefault()
+      if (live === null) return
       const indented = indentListItem(this.doc, live, event.shiftKey ? 'out' : 'in')
-      if (indented) {
-        event.preventDefault()
-        this.pushUndo({ value: this.doc, caret: this.caret })
-        this.commit(indented.doc, indented.caret)
-        return
-      }
+      if (!indented) return
+      this.pushUndo({ value: this.doc, caret: this.caret })
+      this.commit(indented.doc, indented.caret)
+      return
     }
 
     // Backspace at the START of a source line: join it with the previous line by
@@ -501,6 +516,7 @@ export class EditorKernel {
     // the mousedown default also kills the browser's native text selection, so
     // text could never be sweep-selected with the mouse.
     this.placedByUs = false
+    if (this.composing) return
     const host = this.host
     if (!host || this.readOnly) return
     const hit = sourceOffsetAtPoint(event.clientX, event.clientY, event.target as Element | null)

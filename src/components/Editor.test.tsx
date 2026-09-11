@@ -421,6 +421,69 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect((delim as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1)
   })
 
+  it('Tab 在非列表位置也被拦截（焦点不会跑到浏览器地址栏）', async () => {
+    const r = renderEditor('普通段落\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 1.0)
+    await flush()
+    let prevented = false
+    const watch = (event: KeyboardEvent) => {
+      if (event.key === 'Tab') prevented = event.defaultPrevented
+    }
+    document.addEventListener('keydown', watch)
+    await r.user.keyboard('{Tab}')
+    await flush()
+    document.removeEventListener('keydown', watch)
+    expect(prevented).toBe(true)
+    // 不缩进也不换行：只是吃掉这次 Tab。
+    expect(r.getDoc()).toBe('普通段落\n')
+  })
+
+  it('IME 合成期间不重写 DOM（否则提交后会残留拼音字母）', async () => {
+    const r = renderEditor('~~删除线~~\n')
+    await flush()
+    const line = r.container.querySelector('.vl') as HTMLElement
+    const run = [...line.querySelectorAll<HTMLElement>('[data-run]')].find(
+      (el) => el.textContent === '删除线',
+    ) as HTMLElement
+
+    // 合成开始，浏览器把拼音写进 DOM。
+    line.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const composing = document.createTextNode('w')
+    run.appendChild(composing)
+    line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    line.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'w' }))
+    await flush()
+    expect(r.getDoc()).toBe('~~删除线w~~\n')
+
+    // 合成期间光标/选区变化很频繁，且随着文本增长会改变显现状态。
+    const range = document.createRange()
+    range.setStart(composing, 1)
+    range.collapse(true)
+    const sel = window.getSelection() as Selection
+    sel.removeAllRanges()
+    sel.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+    await flush()
+
+    // 关键不变量：合成期间 DOM 一个节点都不能被换掉。
+    expect(line.isConnected).toBe(true)
+    expect(run.isConnected).toBe(true)
+    expect(run.lastChild).toBe(composing)
+
+    // 提交：合成文本被最终字符替换。
+    composing.textContent = '我'
+    line.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    line.dispatchEvent(new InputEvent('input', { bubbles: true, data: '我' }))
+    await flush()
+
+    const doc = r.getDoc()
+    expect(doc).toBe('~~删除线我~~\n')
+    expect(doc).not.toContain('w')
+    await assertDomMatchesSource(r)
+  })
+
   it('有序列表中间回车：后面的编号顺延，不再出现重复编号', async () => {
     const r = renderEditor('1. 甲\n2. 乙\n3. 丙\n')
     await clickInRun(r, 0, 1, 1, 1.0)
@@ -527,11 +590,24 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     const blocks = [...r.container.querySelectorAll<HTMLElement>('[data-block]')]
     const lists = blocks.filter((b) => b.getAttribute('data-kind') === 'list')
     expect(lists.length).toBe(2)
-    for (const list of lists) expect(getComputedStyle(list).counterReset).toContain('vl-item')
-    // 每个有序行都要拿到计数器的增量来源（顺序渲染态下由 ::before 显示）。
+    for (const list of lists) expect(getComputedStyle(list).counterReset).toContain('vl-l0')
+    // 每个有序行都要拿到计数器的增量来源（渲染态下由 ::before 显示）。
     for (const list of lists) {
       expect(list.querySelector('.vl-ordered')).not.toBeNull()
     }
+  })
+
+  it('嵌套有序列表按层级各自计数：源码 1/1/2 与渲染一致', async () => {
+    const r = renderEditor('1. 甲\n   1. 乙\n2. 丙\n')
+    await flush()
+    const lines = [...r.container.querySelectorAll<HTMLElement>('.vl-ordered')]
+    expect(lines.map((l) => l.className.match(/vl-l\d/)?.[0])).toEqual(['vl-l0', 'vl-l1', 'vl-l0'])
+    // 渲染编号来自每层自己的计数器：内层递增 vl-l1，外层只递增 vl-l0 并重置更深层。
+    expect(getComputedStyle(lines[1]).counterIncrement).toContain('vl-l1')
+    expect(getComputedStyle(lines[0]).counterReset).toContain('vl-l1')
+    // 源码里层数编号就是 1 / 1 / 2，与渲染顺序一致。
+    expect(r.getDoc()).toBe('1. 甲\n   1. 乙\n2. 丙\n')
+    await assertDomMatchesSource(r)
   })
 
   it('空行渲染一个 <br> 作为可编辑落点（真实浏览器的插入点依赖它）', async () => {

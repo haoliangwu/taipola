@@ -27,6 +27,9 @@ function lineClass(state: LineState | undefined): string {
   if (!state) return 'vl'
   const cls = ['vl', `vl-${state.kind}`]
   if (state.level) cls.push(`vl-h${state.level}`)
+  // One class per nesting level: the rendered numbering is counted per level, so
+  // a nested list restarts at 1 instead of continuing the outer list.
+  if (state.listLevel !== undefined) cls.push(`vl-l${Math.min(state.listLevel, 5)}`)
   if (state.ordered) cls.push('vl-ordered')
   if (state.checked === true) cls.push('vl-checked')
   else if (state.checked === false) cls.push('vl-unchecked')

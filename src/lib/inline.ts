@@ -90,6 +90,12 @@ export interface LineState {
   kind: 'blank' | 'text' | 'heading' | 'rule' | 'fence' | 'code' | 'quote' | 'list' | 'task' | 'table' | 'table-delim'
   /** Heading depth (1-6) for `kind === 'heading'`, so the six levels can differ. */
   level?: number
+  /**
+   * Nesting depth (0-based) of a list item, derived from the indent stack. The
+   * rendered numbering is per level, so a nested list restarts at 1 and the outer
+   * list carries on after it.
+   */
+  listLevel?: number
   /** Ordered or unordered, for list markers. */
   ordered: boolean
   checked: boolean | null
@@ -105,6 +111,8 @@ export interface LineState {
  */
 export function computeLineStates(lines: string[]): LineState[] {
   const states: LineState[] = []
+  /** Indent stack of the list we are inside, for `listLevel`. */
+  const indents: number[] = []
   let inFence = false
 
   for (const raw of lines) {
@@ -163,17 +171,22 @@ export function computeLineStates(lines: string[]): LineState[] {
     if (listMatch || taskMatch) {
       const isTask = !!taskMatch
       const marker = listMatch?.[2] ?? ''
+      // Source indentation in characters — drives the rendered nesting offset
+      // once the list prefix collapses, and the nesting level below.
+      const indent = (listMatch?.[1] ?? '').length
+      while (indents.length > 0 && indents[indents.length - 1] > indent) indents.pop()
+      if (indents.length === 0 || indents[indents.length - 1] < indent) indents.push(indent)
       states.push({
         ...base,
         kind: isTask ? 'task' : 'list',
         ordered: /\d/.test(marker),
         checked: isTask ? /[xX]/.test(taskMatch![1]) : null,
-        // Source indentation in characters — drives the rendered nesting
-        // offset once the list prefix collapses.
-        indent: (listMatch?.[1] ?? '').length,
+        indent,
+        listLevel: indents.length - 1,
       })
       continue
     }
+    indents.length = 0
 
     if (/^\s*>/.test(raw)) {
       states.push({ ...base, kind: 'quote' })

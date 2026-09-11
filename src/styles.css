@@ -655,19 +655,79 @@ body {
   color: var(--text-soft);
 }
 
-/* Ordered items use a per-block counter, so each list restarts at 1. */
+/* Numbering is counted per NESTING LEVEL, not per block: a nested list restarts
+   at 1 while the outer list carries on after it — `1.`, nested `1.`, `2.`, which
+   is exactly the source the kernel writes on Tab (`1. a / 1. b / 2. c`). Each
+   level resets the deeper counters, so returning to a shallower item drops the
+   nested numbering instead of leaving it behind.
+   The reset must sit on the ELEMENT, not on its `::before`: a counter reset
+   inside a pseudo-element is scoped to that pseudo-element and would never reach
+   the following items. */
 .blk[data-kind='list'] {
-  counter-reset: vl-item;
+  counter-reset: vl-l0 vl-l1 vl-l2 vl-l3 vl-l4 vl-l5;
+}
+
+.vl-ordered.vl-l0 {
+  counter-increment: vl-l0;
+  counter-reset: vl-l1 vl-l2 vl-l3 vl-l4 vl-l5;
+}
+
+.vl-ordered.vl-l1 {
+  counter-increment: vl-l1;
+  counter-reset: vl-l2 vl-l3 vl-l4 vl-l5;
+}
+
+.vl-ordered.vl-l2 {
+  counter-increment: vl-l2;
+  counter-reset: vl-l3 vl-l4 vl-l5;
+}
+
+.vl-ordered.vl-l3 {
+  counter-increment: vl-l3;
+  counter-reset: vl-l4 vl-l5;
+}
+
+.vl-ordered.vl-l4 {
+  counter-increment: vl-l4;
+  counter-reset: vl-l5;
+}
+
+.vl-ordered.vl-l5 {
+  counter-increment: vl-l5;
 }
 
 .vl-list.vl-ordered:not(.revealed)::before {
-  counter-increment: vl-item;
-  content: counter(vl-item) '.';
+  counter-increment: vl-any;
+  content: counter(vl-any) '.';
   display: inline-block;
   min-width: 2ch;
   text-align: right;
   margin-right: 0.55em;
   color: var(--text-soft);
+}
+
+.vl-ordered.vl-l0:not(.revealed)::before {
+  content: counter(vl-l0) '.';
+}
+
+.vl-ordered.vl-l1:not(.revealed)::before {
+  content: counter(vl-l1) '.';
+}
+
+.vl-ordered.vl-l2:not(.revealed)::before {
+  content: counter(vl-l2) '.';
+}
+
+.vl-ordered.vl-l3:not(.revealed)::before {
+  content: counter(vl-l3) '.';
+}
+
+.vl-ordered.vl-l4:not(.revealed)::before {
+  content: counter(vl-l4) '.';
+}
+
+.vl-ordered.vl-l5:not(.revealed)::before {
+  content: counter(vl-l5) '.';
 }
 
 /* Task items */
