@@ -232,6 +232,42 @@ describe('跨块编辑（回归：DOM 与模型必须同步）', () => {
   })
 })
 
+describe('渲染态装饰（列表 / 任务 / 分割线）', () => {
+  it('列表与任务行的渲染态 class 就位', async () => {
+    const r = renderEditor('# t\n\n1. 甲\n2. 乙\n\n- 丙\n\n- [x] 丁\n')
+    await flush()
+    const ol = r.container.querySelector('.vl-list.vl-ordered')
+    expect(ol?.className).toContain('vl-ordered')
+    const ul = r.container.querySelector('.vl-list:not(.vl-ordered)')
+    expect(ul?.className).toContain('vl-list')
+    expect(ul?.className).not.toContain('vl-ordered')
+    const task = r.container.querySelector('.vl-task')
+    expect(task?.className).toContain('vl-task')
+    expect(task?.className).toContain('vl-checked')
+    await assertDomMatchesSource(r)
+  })
+
+  it('光标进入分割线块时源码显现（光标不再消失）', async () => {
+    const r = renderEditor('文本\n\n---\n')
+    await flush()
+    const rule = r.container.querySelector('[data-block="2"] [data-vline="0"]')
+    expect(rule?.className).toContain('vl-rule')
+    expect(rule?.className).not.toContain('revealed')
+    const sel = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(rule as Node, 0)
+    range.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+    await flush()
+    expect(rule?.className).toContain('revealed')
+    const run = r.container.querySelector('[data-block="2"] [data-vline="0"] [data-run]')
+    expect(run?.textContent).toBe('---')
+    await assertDomMatchesSource(r)
+  })
+})
+
 describe('表格与完整文档（DOM 重建须与模型可比较）', () => {
   const TABLE_DOC = `| 快捷键 | 作用 |\n| --- | --- |\n| Cmd/Ctrl + B | 加粗 |\n| Cmd/Ctrl + I | 斜体 |\n`
 

@@ -565,8 +565,9 @@ body {
   font-size: calc(var(--editor-font-size) * 1.28);
 }
 
-.vl-rule {
+.vl-rule:not(.revealed) {
   color: transparent;
+  caret-color: var(--text-soft);
 }
 
 .vl-rule::before {
@@ -575,6 +576,12 @@ body {
   height: 1px;
   margin: calc(var(--doc-line) / 2 - 1px) 0;
   background: var(--border-strong);
+}
+
+/* While the caret is inside the rule's block the `---` source shows (dim), so
+   the ruled line yields — text and caret stay visible. */
+.vl-rule.revealed::before {
+  display: none;
 }
 
 .vl-quote {
@@ -589,6 +596,54 @@ body {
   margin-right: 0.6em;
   vertical-align: -0.12em;
   background: var(--border-strong);
+}
+
+/* ==========================================================================
+   List decorations (rendered state)
+   ==========================================================================
+   While the caret is outside a list block, its markers are collapsed, so the
+   bullet / ordinal / checkbox must come back from CSS. `:not(.revealed)`
+   matches the collapsed state — the `.revealed` line shows the dim source
+   marker instead and the decoration disappears. */
+
+/* Nesting: source indentation drives the rendered offset. */
+.vl-list:not(.revealed),
+.vl-task:not(.revealed) {
+  margin-left: calc(var(--vl-indent, 0) * 0.5em);
+}
+
+/* Unordered items */
+.vl-list:not(.revealed)::before {
+  content: '•';
+  margin-right: 0.55em;
+  color: var(--text-soft);
+}
+
+/* Ordered items use a per-block counter, so each list restarts at 1. */
+.blk[data-kind='list'] {
+  counter-reset: vl-item;
+}
+
+.vl-list.vl-ordered:not(.revealed)::before {
+  counter-increment: vl-item;
+  content: counter(vl-item) '.';
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
+  margin-right: 0.55em;
+  color: var(--text-soft);
+}
+
+/* Task items */
+.vl-task:not(.revealed)::before {
+  content: '☐';
+  margin-right: 0.5em;
+  color: var(--text-soft);
+}
+
+.vl-task.vl-checked:not(.revealed)::before {
+  content: '☑';
+  color: var(--accent);
 }
 
 .vl-table-delim {
@@ -627,6 +682,35 @@ body {
 .blk[data-kind='table'] .vl-table::before,
 .blk[data-kind='table'] .vl-table::after {
   display: none;
+}
+
+/* ==========================================================================
+   Tables (default styling)
+   ========================================================================== */
+
+.blk[data-kind='table'] .vl-table {
+  border-bottom: 1px solid var(--border);
+  padding: 0.1em 0.2em;
+}
+
+/* Header row: the first line box of the table block. */
+.blk[data-kind='table'] .vl-table:first-child {
+  border-top: 1px solid var(--border-strong);
+  font-weight: 650;
+}
+
+/* Separator row renders as a full-width hairline (it holds no cells); it must
+   leave the grid (a grid item would claim a whole column). */
+.blk[data-kind='table'] .vl-table-delim {
+  display: block;
+}
+
+.blk[data-kind='table'] .vl-table-delim::before {
+  content: '';
+  display: block;
+  height: 1px;
+  background: var(--border-strong);
+  margin: calc(var(--doc-line) / 2 - 1px) 0;
 }
 
 /* ==========================================================================

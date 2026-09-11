@@ -356,15 +356,21 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     for (let k = token.innerEnd; k < token.end; k++) hidden.add(k)
   }
 
-  // Block-level marker: a whole fence line, or the line's leading prefix.
-  // Fence lines collapse entirely (the box stays so the block keeps its
-  // proportions); prefixes collapse while the caret is outside the block. Both
-  // are revealed while the caret is inside this block.
+  // Block-level marker: a whole fence line, a horizontal rule, or the line's
+  // leading prefix. Fence lines and rules collapse entirely (the rule keeps a
+  // ruled line via CSS; the box stays so the block keeps its proportions);
+  // prefixes collapse while the caret is outside the block. All of them are
+  // revealed as dim source text while the caret is inside this block — a rule
+  // shows as `---` again, so the caret always has visible text to anchor to.
   let blockMarker: { start: number; end: number } | null = null
   if (isFenceLine) {
     blockMarker = { start: 0, end: raw.length }
   } else if (!inCode && !isTableCell) {
-    blockMarker = blockPrefixRange(raw)
+    if (raw.trim() !== '' && /^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(raw)) {
+      blockMarker = { start: 0, end: raw.length }
+    } else {
+      blockMarker = blockPrefixRange(raw)
+    }
   }
   const markerShown = blockMarker !== null && revealInBlock
   if (blockMarker !== null && !markerShown) {

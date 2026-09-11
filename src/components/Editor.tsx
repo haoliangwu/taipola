@@ -608,7 +608,13 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
                   </span>
                 )
                 return (
-                  <div key={li} data-vline={li} data-src={line.sourceStart} className={lineClass(state)}>
+                  <div
+                    key={li}
+                    data-vline={li}
+                    data-src={line.sourceStart}
+                    className={`${lineClass(state)}${line.runs.some((run) => run.dim) ? ' revealed' : ''}`}
+                    style={{ '--vl-indent': `${state?.indent ?? 0}` } as React.CSSProperties}
+                  >
                     {line.runs.length === 0 ? null : line.cellRuns ? (
                       // A table row is a grid of CELLS, not of runs: one cell per
                       // grid item, so revealed inline markers inside a cell stay
@@ -633,7 +639,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
 function lineClass(state: ReturnType<typeof computeLineStates>[number] | undefined): string {
   if (!state) return 'vl'
-  return `vl vl-${state.kind}`
+  const cls = [`vl`, `vl-${state.kind}`]
+  if (state.ordered) cls.push('vl-ordered')
+  if (state.checked === true) cls.push('vl-checked')
+  else if (state.checked === false) cls.push('vl-unchecked')
+  return cls.join(' ')
 }
 
 function runClass(

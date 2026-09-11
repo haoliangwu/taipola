@@ -153,6 +153,8 @@ export interface LineState {
   ordered: boolean
   marker: string
   checked: boolean | null
+  /** Source indentation (in characters) of a list line, for nesting. */
+  indent: number
   /** Language of the enclosing code fence. */
   lang: string
   /** Rendered HTML content for this line (never block-level). */
@@ -179,6 +181,7 @@ export function computeLineStates(lines: string[]): LineState[] {
       ordered: false,
       marker: '',
       checked: null,
+      indent: 0,
       lang: '',
       html: '',
     }
@@ -248,6 +251,9 @@ export function computeLineStates(lines: string[]): LineState[] {
         ordered: /\d/.test(marker),
         marker,
         checked: isTask ? /[xX]/.test(taskMatch![1]) : null,
+        // Source indentation in characters — drives the rendered nesting
+        // offset once the list prefix collapses.
+        indent: (listMatch?.[1] ?? '').length,
         html: renderInlineText(content),
       })
       prevDelimiter = false
