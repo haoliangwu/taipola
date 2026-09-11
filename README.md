@@ -53,7 +53,7 @@ pnpm test:watch    # 监听
 - 导出 HTML / 导出 MD
 - 主题：默认跟随系统，右上角可切换 **浅色 → 深色 → 跟随系统**（选择会被记住）
 
-快捷键：`Cmd/Ctrl + B/I/K/E`（粗体/斜体/链接/行内代码）、`Cmd/Ctrl + 1..6`（标题级别，重复按同级别可取消）、`Cmd/Ctrl + Shift + K`（删除整行）、`Cmd/Ctrl + O/S`（打开/保存）、`Cmd/Ctrl + Shift + S`（另存为）、`Cmd/Ctrl + Shift + \`（切换大纲）。
+快捷键：`Cmd/Ctrl + B/I/K/E`（粗体/斜体/链接/行内代码）、`Cmd/Ctrl + 1..6`（标题级别，重复按同级别可取消）、`Cmd/Ctrl + Shift + K`（删除整行）、`Tab` / `Shift+Tab`（列表项缩进 / 退回一层）、`Cmd/Ctrl + O/S`（打开/保存）、`Cmd/Ctrl + Shift + S`（另存为）、`Cmd/Ctrl + Shift + \`（切换大纲）。
 
 ### 主题
 

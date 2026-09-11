@@ -24,6 +24,7 @@ import { parseDocument, type Block } from '../lib/markdown'
 import { computeLineStates, type LineState } from '../lib/inline'
 import { buildBlockView, type BlockView } from '../lib/view'
 import type { EditBuffers } from '../lib/editCommands'
+import { indentListItem, renumberLists } from '../lib/lists'
 import {
   applyCaret,
   domToLocal,
@@ -427,7 +428,8 @@ export class EditorKernel {
       if (prefix !== '' && currentLine === prefix && body.trim() === '') {
         const withoutBullet =
           this.doc.slice(0, lineStart) + this.doc.slice(lineStart + prefix.length)
-        this.commit(withoutBullet, lineStart)
+        // Leaving the list splits it in two, so the tail starts again at 1.
+        this.commit(renumberLists(withoutBullet), lineStart)
         return
       }
       if (prefix !== '') {
@@ -438,7 +440,11 @@ export class EditorKernel {
             )
           : prefix
         const insert = `\n${nextPrefix}`
-        this.commit(this.doc.slice(0, live) + insert + this.doc.slice(live), live + insert.length)
+        const edited = this.doc.slice(0, live) + insert + this.doc.slice(live)
+        // The item below keeps its own number in the source, so the new item must
+        // push the rest down: renumber the lists instead of only bumping ours
+        // (`1 2 3` + Enter on 2 used to give `1 2 3 3`).
+        this.commit(renumberLists(edited), live + insert.length)
         return
       }
       // A plain line, caret at its very END: split AFTER the line's newline, so a
@@ -457,6 +463,19 @@ export class EditorKernel {
       }
       this.commit(this.doc.slice(0, live) + '\n' + this.doc.slice(live), live + 1)
       return
+    }
+
+    if (event.key === 'Tab' && live !== null) {
+      // Tab nests a list item one level, Shift+Tab lifts it back out. Everything
+      // else (a plain paragraph, a code line) keeps the browser default, so the
+      // editor stays reachable by keyboard.
+      const indented = indentListItem(this.doc, live, event.shiftKey ? 'out' : 'in')
+      if (indented) {
+        event.preventDefault()
+        this.pushUndo({ value: this.doc, caret: this.caret })
+        this.commit(indented.doc, indented.caret)
+        return
+      }
     }
 
     // Backspace at the START of a source line: join it with the previous line by

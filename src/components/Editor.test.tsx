@@ -421,6 +421,41 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect((delim as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1)
   })
 
+  it('有序列表中间回车：后面的编号顺延，不再出现重复编号', async () => {
+    const r = renderEditor('1. 甲\n2. 乙\n3. 丙\n')
+    await clickInRun(r, 0, 1, 1, 1.0)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // 回车插在第二项之后：新项拿 3，原来的第三项被推到 4（修复前是 1 2 3 3）。
+    expect(r.getDoc()).toBe('1. 甲\n2. 乙\n3. \n4. 丙\n')
+    await r.user.keyboard('X')
+    await flush()
+    expect(r.getDoc()).toBe('1. 甲\n2. 乙\n3. X\n4. 丙\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('Tab 缩进列表项、Shift+Tab 退回（有序与无序都支持）', async () => {
+    const ordered = renderEditor('1. 甲\n2. 乙\n')
+    await clickInRun(ordered, 0, 1, 1, 1.0)
+    await flush()
+    await ordered.user.keyboard('{Tab}')
+    await flush()
+    expect(ordered.getDoc()).toBe('1. 甲\n   1. 乙\n')
+    await ordered.user.keyboard('{Shift>}{Tab}{/Shift}')
+    await flush()
+    expect(ordered.getDoc()).toBe('1. 甲\n2. 乙\n')
+    await assertDomMatchesSource(ordered)
+
+    const plain = renderEditor('- 甲\n- 乙\n')
+    await clickInRun(plain, 0, 1, 1, 1.0)
+    await flush()
+    await plain.user.keyboard('{Tab}')
+    await flush()
+    expect(plain.getDoc()).toBe('- 甲\n  - 乙\n')
+    await assertDomMatchesSource(plain)
+  })
+
   it('图片在渲染态是真的 <img>，源码一字不丢', async () => {
     const url = 'https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1'
     const r = renderEditor(`看图：\n\n![示例图片](${url})\n`)
