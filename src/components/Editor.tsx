@@ -798,7 +798,6 @@ function domToLocal(view: BlockView, node: Node, offset: number): number | null 
       // Only laid-out characters inside this run count towards the offset.
       return src + Math.min(within, el.textContent?.length ?? 0)
     }
-    void width
   }
 
   // Caret anchored on the line element itself (empty line, or past the end).
@@ -1063,7 +1062,7 @@ function sanitizeDom(root: HTMLElement | null): void {
 }
 
 /** Character offset of the start of a 1-based line. */
-export function offsetForLine(text: string, line: number): number {
+function offsetForLine(text: string, line: number): number {
   if (line <= 1) return 0
   let seen = 1
   for (let i = 0; i < text.length; i++) {
@@ -1076,7 +1075,7 @@ export function offsetForLine(text: string, line: number): number {
 }
 
 /** 1-based line number containing a character offset. */
-export function lineOfOffset(text: string, offset: number): number {
+function lineOfOffset(text: string, offset: number): number {
   let line = 1
   const end = Math.min(offset, text.length)
   for (let i = 0; i < end; i++) if (text[i] === '\n') line++

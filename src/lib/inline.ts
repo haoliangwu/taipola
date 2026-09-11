@@ -1,10 +1,5 @@
-import MarkdownIt from 'markdown-it'
-import hljs from 'highlight.js/lib/common'
-import DOMPurify from 'dompurify'
-import type { Config as DOMPurifyConfig } from 'dompurify'
-
 /**
- * Per-line inline markdown rendering.
+ * Per-line render-state computation.
  *
  * The editor renders **one source line as exactly one line box**. Block syntax
  * (list bullets, quote markers, fences) is stripped from the line's start and
@@ -12,25 +7,7 @@ import type { Config as DOMPurifyConfig } from 'dompurify'
  * element with padding or margins would make a rendered line taller than its
  * source line — and any such difference accumulates into vertical drift between
  * the caret and the text.
- *
- * `stripLine` and `renderInline` must agree: whatever `stripLine` removes from
- * the text, `renderInline` must not produce a visible equivalent of, so that a
- * click measured against rendered text can be mapped back to a source offset.
  */
-
-const md: MarkdownIt = new MarkdownIt({
-  html: false,
-  linkify: true,
-  typographer: true,
-  breaks: false,
-})
-
-const SANITIZE: DOMPurifyConfig = {
-  ADD_ATTR: ['target', 'rel'],
-  FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'object', 'embed', 'div', 'p', 'ul', 'ol', 'li', 'pre', 'table', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'hr'],
-  FORBID_ATTR: ['style', 'class', 'onerror', 'onload', 'onclick'],
-  RETURN_TRUSTED_TYPE: false,
-}
 
 export interface LineParts {
   /** Leading block markup: list bullet, quote marker, task checkbox. */
@@ -39,8 +16,6 @@ export interface LineParts {
   depth: number
   /** True when the line opens or closes a fenced code block. */
   isFence: boolean
-  /** Language of a fence opener. */
-  fenceLang: string
   /** True for a horizontal rule line. */
   isRule: boolean
   /** True for a table delimiter row (`| --- |`). */
@@ -63,7 +38,6 @@ export function parseLine(raw: string): LineParts {
     prefix: '',
     depth: 0,
     isFence: false,
-    fenceLang: '',
     isRule: RULE_RE.test(raw),
     isTableDelimiter: false,
     isTableRow: raw.trim().startsWith('|') || (raw.includes('|') && raw.trim().endsWith('|')),
@@ -74,7 +48,6 @@ export function parseLine(raw: string): LineParts {
   const fence = FENCE_RE.exec(raw)
   if (fence) {
     parts.isFence = true
-    parts.fenceLang = fence[3].trim()
     parts.prefix = fence[1] + fence[2] + fence[3]
     return parts
   }
@@ -113,52 +86,13 @@ export function parseLine(raw: string): LineParts {
   return parts
 }
 
-/** The text a line contributes to the rendered document (markup removed). */
-export function stripLine(raw: string): string {
-  const parts = parseLine(raw)
-  // A fence marker itself renders as nothing; the line still occupies its box.
-  if (parts.isFence) return ''
-  if (parts.isRule) return ''
-
-  let rest = raw
-  const heading = HEADING_RE.exec(rest)
-  if (heading) rest = heading[4]
-
-  for (;;) {
-    const before = rest
-    const quote = QUOTE_RE.exec(rest)
-    if (quote && !LIST_RE.test(rest)) {
-      rest = quote[4]
-    } else {
-      const list = LIST_RE.exec(rest)
-      if (list) rest = list[4]
-      else {
-        const task = TASK_RE.exec(rest)
-        if (task) rest = task[3]
-      }
-    }
-    if (rest === before) break
-  }
-
-  return rest
-}
-
 export interface LineState {
   kind: 'blank' | 'text' | 'heading' | 'rule' | 'fence' | 'code' | 'quote' | 'list' | 'task' | 'table' | 'table-delim'
-  /** 1-6 for headings. */
-  level: number
-  /** List/quote nesting, used for indentation. */
-  depth: number
   /** Ordered or unordered, for list markers. */
   ordered: boolean
-  marker: string
   checked: boolean | null
   /** Source indentation (in characters) of a list line, for nesting. */
   indent: number
-  /** Language of the enclosing code fence. */
-  lang: string
-  /** Rendered HTML content for this line (never block-level). */
-  html: string
 }
 
 /**
@@ -169,72 +103,56 @@ export interface LineState {
  */
 export function computeLineStates(lines: string[]): LineState[] {
   const states: LineState[] = []
-  let fenceLang: string | null = null
-  let prevDelimiter = false
+  let inFence = false
 
   for (const raw of lines) {
     const parts = parseLine(raw)
     const base: LineState = {
       kind: 'text',
-      level: 0,
-      depth: 0,
       ordered: false,
-      marker: '',
       checked: null,
       indent: 0,
-      lang: '',
-      html: '',
     }
 
-    if (fenceLang !== null) {
+    if (inFence) {
       if (parts.isFence) {
-        fenceLang = null
+        inFence = false
         states.push({ ...base, kind: 'fence' })
         continue
       }
-      states.push({ ...base, kind: 'code', lang: fenceLang, html: renderCodeLine(raw, fenceLang) })
+      states.push({ ...base, kind: 'code' })
       continue
     }
 
     if (parts.isFence) {
-      fenceLang = parts.fenceLang.split(/\s+/)[0] ?? ''
-      states.push({ ...base, kind: 'fence', lang: fenceLang })
+      inFence = true
+      states.push({ ...base, kind: 'fence' })
       continue
     }
 
     if (raw.trim() === '') {
       states.push({ ...base, kind: 'blank' })
-      prevDelimiter = false
       continue
     }
 
     if (parts.isRule) {
       states.push({ ...base, kind: 'rule' })
-      prevDelimiter = false
       continue
     }
 
-    if (parts.isTableDelimiter || (prevDelimiter && false)) {
+    if (parts.isTableDelimiter) {
       states.push({ ...base, kind: 'table-delim' })
-      prevDelimiter = false
       continue
     }
 
     const heading = HEADING_RE.exec(raw)
     if (heading) {
-      states.push({
-        ...base,
-        kind: 'heading',
-        level: heading[2].length,
-        html: renderInlineText(heading[4]),
-      })
-      prevDelimiter = false
+      states.push({ ...base, kind: 'heading' })
       continue
     }
 
     if (parts.isTableRow) {
-      states.push({ ...base, kind: 'table', html: renderInlineText(stripLine(raw)) })
-      prevDelimiter = false
+      states.push({ ...base, kind: 'table' })
       continue
     }
 
@@ -243,31 +161,24 @@ export function computeLineStates(lines: string[]): LineState[] {
     if (listMatch || taskMatch) {
       const isTask = !!taskMatch
       const marker = listMatch?.[2] ?? ''
-      const content = taskMatch ? taskMatch[3] : (listMatch?.[4] ?? raw)
       states.push({
         ...base,
         kind: isTask ? 'task' : 'list',
-        depth: parts.depth,
         ordered: /\d/.test(marker),
-        marker,
         checked: isTask ? /[xX]/.test(taskMatch![1]) : null,
         // Source indentation in characters — drives the rendered nesting
         // offset once the list prefix collapses.
         indent: (listMatch?.[1] ?? '').length,
-        html: renderInlineText(content),
       })
-      prevDelimiter = false
       continue
     }
 
     if (/^\s*>/.test(raw)) {
-      states.push({ ...base, kind: 'quote', depth: parts.depth, html: renderInlineText(stripLine(raw)) })
-      prevDelimiter = false
+      states.push({ ...base, kind: 'quote' })
       continue
     }
 
-    states.push({ ...base, html: renderInlineText(stripLine(raw)) })
-    prevDelimiter = false
+    states.push({ ...base })
   }
 
   return states
@@ -281,25 +192,6 @@ function stripListPrefix(raw: string): string {
   const m = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(raw)
   return m ? raw.slice(m[0].length) : raw
 }
-
-/** Inline markdown for a line whose block markup has already been removed. */
-function renderInlineText(content: string): string {
-  if (content.trim() === '') return ''
-  return DOMPurify.sanitize(md.renderInline(content, {}), SANITIZE)
-}
-
-const defaultLinkOpen =
-  md.renderer.rules.link_open ??
-  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
-
-md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  tokens[idx].attrSet('target', '_blank')
-  tokens[idx].attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen(tokens, idx, options, env, self)
-}
-
-const escapeHtml = (text: string): string =>
-  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**
  * Removes inline markdown syntax, returning the visible text.
@@ -389,15 +281,3 @@ export function visibleToSourceIndex(raw: string, visible: number): number {
   return Math.min(i, raw.length)
 }
 
-/** Highlighted HTML for one line of a fenced code block. */
-export function renderCodeLine(raw: string, lang: string): string {
-  if (raw.trim() === '') return ''
-  if (lang && hljs.getLanguage(lang)) {
-    try {
-      return DOMPurify.sanitize(hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value, SANITIZE)
-    } catch {
-      /* fall through to plain escaped text */
-    }
-  }
-  return escapeHtml(raw)
-}

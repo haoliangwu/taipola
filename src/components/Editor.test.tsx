@@ -15,7 +15,7 @@ import {
 
 import { WELCOME_DOC } from '../lib/welcome'
 
-export const WELCOME = `# 欢迎使用 taipola
+const WELCOME = `# 欢迎使用 taipola
 
 一个极简但强大的 Markdown 编辑器。**光标所在的那一行显示 Markdown 源码，光标一离开就渲染成最终的样子** —— 没有左右分栏，也不需要预览按钮。
 

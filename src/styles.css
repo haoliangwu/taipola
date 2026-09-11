@@ -471,17 +471,9 @@ body {
   outline: none;
 }
 
-.doc:focus-within {
-  outline: none;
-}
-
 .blk {
   padding: 0;
   margin: 0;
-}
-
-.blk-active {
-  /* The caret's block; nothing needs to change visually. */
 }
 
 /* One source line. Its height is whatever the browser needs — no constraint. */

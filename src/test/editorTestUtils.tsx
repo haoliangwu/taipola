@@ -1,9 +1,8 @@
-import { render, waitFor } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi, expect } from 'vitest'
 import { useState, useRef } from 'react'
-import { Editor, type EditorHandle } from '../components/Editor'
-import { readDocumentSource, normalizeTables } from '../components/Editor'
+import { Editor, type EditorHandle, readDocumentSource, normalizeTables } from '../components/Editor'
 
 /**
  * Real-browser operation helpers.
@@ -19,14 +18,10 @@ export interface Rendering {
   container: HTMLElement
   /** The latest committed source (whatever onChange delivered). */
   getDoc: () => string
-  /** Current DOM caret as a document source offset, or null. */
-  getCaret: () => number | null
-  getActiveBlock: () => string | null
   blockEl: (index: number) => HTMLElement | null
   runEl: (block: number, vline: number, run: number) => HTMLElement | null
   /** Preconfigured userEvent instance. */
   user: ReturnType<typeof userEvent.setup>
-  onChangeCount: () => number
 }
 
 export function renderEditor(source: string): Rendering {
@@ -66,11 +61,6 @@ export function renderEditor(source: string): Rendering {
       return containerOf()
     },
     getDoc: () => latest,
-    getCaret: () => caretFromDom(),
-    getActiveBlock: () => {
-      const active = containerOf().querySelector('.blk-active')
-      return active ? (active as HTMLElement).dataset.block ?? null : null
-    },
     blockEl: (index) =>
       containerOf().querySelector(`[data-block="${index}"]`) as HTMLElement | null,
     runEl: (block, vline, run) =>
@@ -78,7 +68,6 @@ export function renderEditor(source: string): Rendering {
         `[data-block="${block}"] [data-vline="${vline}"] [data-run="${run}"]`,
       ) as HTMLElement | null,
     user: userEvent.setup({ delay: null }),
-    onChangeCount: () => count,
   }
 }
 
@@ -153,11 +142,6 @@ export async function clickAtLine(
   })
 }
 
-/** Waits until the DOM caret maps to the given source offset. */
-export async function waitForCaret(_r: Rendering, expected: number | null): Promise<void> {
-  await waitFor(() => expect(caretFromDom()).toBe(expected), { timeout: 3000 })
-}
-
 /** Type text at the current caret — a REAL keystroke sequence. */
 export async function typeText(r: Rendering, text: string): Promise<void> {
   await r.user.type(r.container, text)
@@ -181,14 +165,6 @@ export async function pressShiftEnter(r: Rendering): Promise<void> {
 /** Flush pending React work. */
 export async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0))
-}
-
-/** All runs of a line (visible + collapsed markers) as one string. */
-export function sourceLineText(block: number, vline: number, r: Rendering): string {
-  const blk = r.blockEl(block)
-  const line = blk?.querySelector(`[data-vline="${vline}"]`)
-  if (!line) return ''
-  return [...line.querySelectorAll('[data-run]')].map((rn) => rn.textContent).join('')
 }
 
 /**

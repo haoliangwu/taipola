@@ -11,7 +11,7 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
-export interface MarkerCell {
+interface MarkerCell {
   /** Source range of the opening marker, e.g. the `**` of `**bold**`. */
   openStart: number
   openEnd: number
@@ -20,7 +20,7 @@ export interface MarkerCell {
   closeEnd: number
 }
 
-export interface Mark {
+interface Mark {
   bold?: boolean
   italic?: boolean
   strike?: boolean
@@ -55,7 +55,7 @@ interface BuildOptions {
   cell?: boolean
 }
 
-export interface ViewLine {
+interface ViewLine {
   /**
    * Block-local source offset where this line begins.
    *
@@ -108,7 +108,7 @@ const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
  * A linear scan with balanced-pair matching, so nesting resolves into separate
  * non-overlapping tokens.
  */
-export function findTokens(text: string): Token[] {
+function findTokens(text: string): Token[] {
   const tokens: Token[] = []
   let i = 0
 
@@ -203,11 +203,11 @@ function isTableRow(raw: string): boolean {
 const TABLE_DELIMITER_RE = /^\|?[\s:|-]+\|[\s:|-]*$/
 
 /** A table's `| --- |` rule line renders as an empty line box. */
-export function isTableDelimiter(raw: string): boolean {
+function isTableDelimiter(raw: string): boolean {
   return isTableRow(raw) && TABLE_DELIMITER_RE.test(raw.trim())
 }
 
-export function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
+function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
   if (isTableDelimiter(raw)) return emptyLine(raw.length, sourceStart)
   if (isTableRow(raw)) return buildTableLine(raw, revealFrom, sourceStart, opts)
   return buildInlineLine(raw, revealFrom, sourceStart, opts)
@@ -218,7 +218,6 @@ function emptyLine(length: number, sourceStart = 0): ViewLine {
   return {
     sourceStart,
     runs: [],
-    cellRuns: [],
     visibleToSource: [],
     sourceToVisible: new Array(length).fill(-1) as number[],
     sourceToMarker: new Array(length).fill(-1) as number[],
