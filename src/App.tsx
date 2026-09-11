@@ -14,7 +14,7 @@ import {
   supportsFileSystemAccess,
   type DocumentFile,
 } from './lib/files'
-import { renderMarkdown } from './lib/markdown'
+import { renderDocumentHtml } from './platform/html'
 import { THEME_LABEL, useTheme } from './lib/theme'
 import {
   TABLE_SNIPPET,
@@ -293,7 +293,7 @@ export default function App() {
             type="button"
             className="text-button"
             onClick={() =>
-              downloadHtml(renderMarkdown(value), fileName, fileName.replace(/\.\w+$/, ''))
+              downloadHtml(renderDocumentHtml(value), fileName, fileName.replace(/\.\w+$/, ''))
             }
           >
             导出 HTML

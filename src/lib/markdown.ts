@@ -1,9 +1,12 @@
-import MarkdownIt from 'markdown-it'
-import footnote from 'markdown-it-footnote'
-import taskLists from 'markdown-it-task-lists'
-import hljs from 'highlight.js/lib/common'
-import DOMPurify from 'dompurify'
-import type { Config as DOMPurifyConfig } from 'dompurify'
+/**
+ * Parsing: source text in, plain data out.
+ *
+ * Everything here runs on every keystroke and every export, and none of it
+ * touches the DOM — the units are blocks, lines, offsets, headings and counts.
+ * Rendering markdown to HTML is a separate concern that needs DOMPurify and
+ * therefore lives in `../platform/html.ts`.
+ */
+import { md } from './markdownIt'
 
 /**
  * A block is a source-range slice of the document.
@@ -34,54 +37,6 @@ export interface ParsedDocument {
   offsets: number[]
   /** Line number (1-based) each block starts on. */
   blockLines: number[]
-}
-
-const md: MarkdownIt = new MarkdownIt({
-  html: false, // never execute author-supplied HTML: this is an editor, not a browser
-  linkify: true,
-  typographer: true,
-  breaks: false,
-  highlight(code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
-      } catch {
-        /* fall through to plain escaping */
-      }
-    }
-    return md.utils.escapeHtml(code)
-  },
-})
-
-md.use(footnote)
-md.use(taskLists, { label: true, labelAfter: true })
-
-// Open links in a new tab without handing the opened page a handle on ours.
-const defaultLinkOpen =
-  md.renderer.rules.link_open ??
-  ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
-
-md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  const token = tokens[idx]
-  token.attrSet('target', '_blank')
-  token.attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen(tokens, idx, options, env, self)
-}
-
-const SANITIZE_CONFIG: DOMPurifyConfig = {
-  ADD_ATTR: ['target', 'rel', 'disabled', 'align'],
-  ADD_TAGS: ['input'],
-  FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'object', 'embed'],
-  FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick'],
-  // Guarantee a plain string rather than TrustedHTML, which the DOM APIs we
-  // feed it into do not accept without a Trusted Types policy.
-  RETURN_TRUSTED_TYPE: false,
-}
-
-/** Renders a chunk of markdown source to sanitized HTML. */
-export function renderMarkdown(source: string): string {
-  if (source.trim() === '') return ''
-  return DOMPurify.sanitize(md.render(source), SANITIZE_CONFIG)
 }
 
 /** Strips markdown inline syntax down to readable plain text. */

@@ -7,7 +7,8 @@ import { playwright } from '@vitest/browser-playwright'
  *
  * - `unit` runs the pure functions (parsing, view mapping, line state, list
  *   arithmetic, edit commands) in node. Milliseconds per file, no browser — this
- *   is the net that catches regressions on every save.
+ *   is the net that catches regressions on every save. Nothing in `src/lib/`
+ *   reaches for a DOM, so the project needs no exclusions.
  * - `browser` runs what genuinely needs a DOM: caret placement, key interception,
  *   IME composition, CSS contracts, and the App shell. Real Chromium, so the
  *   browser's own behaviour is what gets tested.
@@ -20,9 +21,6 @@ export default defineConfig({
           name: 'unit',
           environment: 'node',
           include: ['src/lib/**/*.test.ts'],
-          // Anything that needs a DOM (DOMPurify, for instance) is named
-          // `*.browser.test.ts` and runs in the browser project instead.
-          exclude: ['**/*.browser.test.ts', '**/node_modules/**'],
         },
       },
       {
@@ -42,7 +40,7 @@ export default defineConfig({
           include: [
             'src/components/**/*.test.tsx',
             'src/App.test.tsx',
-            'src/lib/**/*.browser.test.ts',
+            'src/platform/**/*.test.ts',
           ],
           setupFiles: ['./src/test/setup.ts'],
           css: false,
