@@ -119,7 +119,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   )
 
   const pushUndo = useCallback((snapshot: Snapshot) => {
-    if (lastSnapshot.current?.value === snapshot.value) return
+    // Skip only when this exact state was already the last pushed snapshot.
+    // A seeded placeholder value would silently eat the first edit's pre-state
+    // and make that edit impossible to undo.
+    if (lastSnapshot.current !== null && lastSnapshot.current.value === snapshot.value) return
     undoStack.current.push(snapshot)
     if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift()
     redoStack.current = []
@@ -163,7 +166,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     const span = lineEl.querySelectorAll<HTMLElement>('[data-run]')[target.runIndex]
     if (!span) return
 
-    host.focus({ preventScroll: true })
+    // Focus the EDITABLE ROOT, not the block div: only the root carries
+    // `contentEditable`, so keyboard input lands in the editor at all. With the
+    // block focused (a plain div), typing went nowhere — the caret looked right
+    // but `activeElement` stayed BODY.
+    rootRef.current?.focus({ preventScroll: true })
     const node = span.firstChild
     const range = document.createRange()
     if (node && node.nodeType === Node.TEXT_NODE) {
@@ -320,8 +327,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     ref,
     () => ({
       focus: () => {
-        const host = activeIndex === null ? null : rootRef.current?.querySelector<HTMLElement>(`[data-block="${activeIndex}"]`)
-        host?.focus({ preventScroll: true })
+        rootRef.current?.focus({ preventScroll: true })
       },
       goToLine: (line: number) => {
         const offset = offsetForLine(doc, line)
@@ -375,13 +381,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       onCaretLineChange, placeCaret, pushUndo, views,
     ],
   )
-
-  useEffect(() => {
-    if (lastSnapshot.current === null) lastSnapshot.current = { value: doc, caret: 0 }
-  }, [doc])
-
-
-
 
   // --- render ----------------------------------------------------------------
   return (
@@ -442,22 +441,32 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
           >
             {view.lines.map((line, li) => {
               const state = lineStates[block.startLine + li]
+              const renderRun = (run: ViewRun, ri: number) => (
+                <span
+                  key={ri}
+                  data-run={ri}
+                  data-src={run.src}
+                  className={runClass(run, state)}
+                  title={run.mark.link && !run.marker ? run.mark.link : undefined}
+                >
+                  {run.text}
+                </span>
+              )
               return (
                 <div key={li} data-vline={li} className={lineClass(state)}>
                   {line.runs.length === 0 ? (
                     <br />
-                  ) : (
-                    line.runs.map((run, ri) => (
-                      <span
-                        key={ri}
-                        data-run={ri}
-                        data-src={run.src}
-                        className={runClass(run, state)}
-                        title={run.mark.link && !run.marker ? run.mark.link : undefined}
-                      >
-                        {run.text}
+                  ) : line.cellRuns ? (
+                    // A table row is a grid of CELLS, not of runs: one cell per
+                    // grid item, so revealed inline markers inside a cell stay
+                    // inside its column instead of each becoming a column.
+                    line.cellRuns.map((cell, ci) => (
+                      <span key={ci} className="cell" data-cell={ci}>
+                        {cell.length === 0 ? <br /> : cell.map((ri) => renderRun(line.runs[ri], ri))}
                       </span>
                     ))
+                  ) : (
+                    line.runs.map((run, ri) => renderRun(run, ri))
                   )}
                 </div>
               )
@@ -480,6 +489,9 @@ function runClass(
 ): string {
   const cls = ['rn']
   if (run.marker) cls.push('rn-marker')
+  // A revealed block-level marker (heading `#`, list bullet, quote marker,
+  // fence line) takes up space but reads as syntax: dim it.
+  if (run.dim) cls.push('rn-dim')
   if (run.mark.bold) cls.push('rn-bold')
   if (run.mark.italic) cls.push('rn-italic')
   if (run.mark.strike) cls.push('rn-strike')

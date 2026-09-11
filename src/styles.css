@@ -505,6 +505,13 @@ body {
   display: none !important;
 }
 
+/* A revealed block-level marker (heading `#`, list bullet, quote marker, fence
+   line): it occupies its natural width while the caret is inside the block,
+   but rendered dim so it reads as syntax rather than content. */
+.rn-dim {
+  color: var(--text-faint);
+}
+
 .rn-bold {
   font-weight: 700;
 }
@@ -542,8 +549,9 @@ body {
 }
 
 .vl-fence {
-  /* The fence line keeps its box but draws nothing. */
-  color: transparent;
+  /* The fence line keeps its box; its text shows only while the caret is in
+     the block (revealed as a dim run). */
+  color: var(--text-faint);
 }
 
 .vl-heading .rn,
@@ -587,7 +595,9 @@ body {
   color: transparent;
 }
 
-/* Table rows share one grid, so columns line up across every row. */
+/* Table rows share one grid, so columns line up across every row. Each CELL is
+   one grid item; the runs inside it are plain inline spans, so a cell whose
+   inline markers are revealed keeps its single column. */
 .blk[data-kind='table'] .vl-table,
 .blk[data-kind='table'] .vl-table-delim {
   display: grid;
@@ -595,6 +605,10 @@ body {
   grid-auto-columns: minmax(0, 1fr);
   gap: 0 1em;
   align-items: start;
+}
+
+.blk[data-kind='table'] .cell {
+  min-width: 0;
 }
 
 /* The rule row keeps its line box but shows nothing. */

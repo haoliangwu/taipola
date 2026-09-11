@@ -37,6 +37,22 @@ export interface ViewRun {
   mark: Mark
   /** True when this run is a syntax marker rather than content. */
   marker: boolean
+  /**
+   * True for a revealed block-level marker (a heading `#`, list bullet, quote
+   * marker or fence line): it takes up space now, and should render dimmed so
+   * the edit state reads as "source" without shouting.
+   */
+  dim?: boolean
+}
+
+/** Per-line build options derived by `buildBlockView` from the whole block. */
+interface BuildOptions {
+  /** True while the caret is anywhere inside this block. */
+  revealInBlock?: boolean
+  /** True while this line sits between two fence markers (code content). */
+  inCode?: boolean
+  /** True when this content is a table cell (skip block prefixes). */
+  cell?: boolean
 }
 
 export interface ViewLine {
@@ -49,6 +65,12 @@ export interface ViewLine {
    */
   sourceStart: number
   runs: ViewRun[]
+  /**
+   * Table rows only: run-index ranges, one per cell (empty range = empty cell).
+   * The DOM must render each CELL as one grid item — a run-per-item grid splits
+   * a cell whose inline markers are revealed into several columns.
+   */
+  cellRuns?: number[][]
   /** `visibleToSource[i]` = block-local source offset of laid-out cell i. */
   visibleToSource: number[]
   /** `sourceToVisible[local]` = laid-out cell index, or -1 for no width. */
@@ -185,10 +207,10 @@ export function isTableDelimiter(raw: string): boolean {
   return isTableRow(raw) && TABLE_DELIMITER_RE.test(raw.trim())
 }
 
-export function buildLine(raw: string, revealFrom: number | null, sourceStart = 0): ViewLine {
+export function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
   if (isTableDelimiter(raw)) return emptyLine(raw.length, sourceStart)
-  if (isTableRow(raw)) return buildTableLine(raw, revealFrom, sourceStart)
-  return buildInlineLine(raw, revealFrom, sourceStart)
+  if (isTableRow(raw)) return buildTableLine(raw, revealFrom, sourceStart, opts)
+  return buildInlineLine(raw, revealFrom, sourceStart, opts)
 }
 
 /** A line whose characters take up no space at all. */
@@ -196,6 +218,7 @@ function emptyLine(length: number, sourceStart = 0): ViewLine {
   return {
     sourceStart,
     runs: [],
+    cellRuns: [],
     visibleToSource: [],
     sourceToVisible: new Array(length).fill(-1) as number[],
     sourceToMarker: new Array(length).fill(-1) as number[],
@@ -217,54 +240,74 @@ function emptyLine(length: number, sourceStart = 0): ViewLine {
  * cells sidesteps that and lets them line up in shared grid columns, while the
  * per-cell source offsets keep the caret mapping exact.
  */
-function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0): ViewLine {
+function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
   const pieces = raw.split('|')
   const runs: ViewRun[] = []
+  const cellRuns: number[][] = []
   const visibleToSource: number[] = []
   const sourceToVisible = new Array(raw.length).fill(-1) as number[]
   const sourceToMarker = new Array(raw.length).fill(-1) as number[]
   const markers: MarkerCell[] = []
 
   let at = 0
-  for (const piece of pieces) {
+  for (let pi = 0; pi < pieces.length; pi++) {
+    const piece = pieces[pi]
     const pieceStart = at
     at += piece.length + 1 // this piece plus the pipe that followed it
 
-    const trimmed = piece.trim()
-    if (trimmed === '') continue
+    // The leading and trailing pieces are the two edge pipes themselves, not
+    // cells; a middle piece may be an empty cell and must keep its column.
+    const isEdge = pi === 0 || pi === pieces.length - 1
 
-    // Surrounding spaces are padding, not content. Dropping them is what makes
-    // each column's text start at the same x on every row.
-    const lead = piece.length - piece.trimStart().length
-    const inner = buildInlineLine(
-      trimmed,
-      revealFrom === null ? null : revealFrom - pieceStart - lead,
-      sourceStart + pieceStart + lead,
-    )
-    for (const run of inner.runs) {
-      const src = pieceStart + lead + run.src
-      runs.push({ ...run, src })
-      if (run.marker) {
-        const cell = markers.length
-        markers.push({
-          openStart: src,
-          openEnd: src + run.text.length,
-          closeStart: src + run.text.length,
-          closeEnd: src + run.text.length,
-        })
-        for (let k = 0; k < run.text.length; k++) sourceToMarker[src + k] = cell
+    const cellStart = runs.length
+    const trimmed = piece.trim()
+    if (trimmed !== '' && !isEdge) {
+      // Surrounding spaces are padding, not content. Dropping them is what makes
+      // each column's text start at the same x on every row.
+      const lead = piece.length - piece.trimStart().length
+      const inner = buildInlineLine(
+        trimmed,
+        revealFrom === null ? null : revealFrom - pieceStart - lead,
+        sourceStart + pieceStart + lead,
+        { revealInBlock: opts.revealInBlock, cell: true },
+      )
+      for (const run of inner.runs) {
+        // `run.src` already includes `sourceStart + pieceStart + lead` — the
+        // cell's block-relative origin — so it must NOT be shifted again. Adding
+        // `pieceStart + lead` a second time double-counted the cell offset and
+        // broke data-src for every cell after the first.
+        runs.push(run)
+        if (run.marker) {
+          const cell = markers.length
+          markers.push({
+            openStart: run.src,
+            openEnd: run.src + run.text.length,
+            closeStart: run.src + run.text.length,
+            closeEnd: run.src + run.text.length,
+          })
+          // `sourceToMarker` indexes the row's own characters, so the block
+          // origin has to come back out.
+          const rowLocal = run.src - sourceStart
+          for (let k = 0; k < run.text.length; k++) sourceToMarker[rowLocal + k] = cell
+        }
       }
+      for (let k = 0; k < trimmed.length; k++) {
+        const local = inner.sourceToVisible[k]
+        sourceToVisible[pieceStart + lead + k] = local === -1 ? -1 : visibleToSource.length + local
+      }
+      for (const src of inner.visibleToSource) visibleToSource.push(src + pieceStart + lead)
     }
-    for (let k = 0; k < trimmed.length; k++) {
-      const local = inner.sourceToVisible[k]
-      sourceToVisible[pieceStart + lead + k] = local === -1 ? -1 : visibleToSource.length + local
+    if (!isEdge) {
+      const indices: number[] = []
+      for (let i = cellStart; i < runs.length; i++) indices.push(i)
+      cellRuns.push(indices)
     }
-    for (const src of inner.visibleToSource) visibleToSource.push(src + pieceStart + lead)
   }
 
   return {
     sourceStart,
     runs,
+    cellRuns,
     visibleToSource,
     sourceToVisible,
     sourceToMarker,
@@ -276,13 +319,24 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0)
 /**
  * Builds the view of one ordinary line of inline content.
  *
- * `revealFrom` is a block-local source offset; the construct containing it keeps
- * its markers visible so its syntax can be edited in place. Every other closed
- * construct collapses. Block prefixes collapse too, unless the caret is on this
- * very line — which is what makes `# Title` behave like Typora's headings.
+ * `revealFrom` is a line-local source offset; the inline construct containing
+ * it keeps its markers visible so its syntax can be edited in place. Every
+ * other closed construct collapses.
+ *
+ * Block-level markers — a fence line, or a line-leading prefix (heading `#`,
+ * list bullet, task box, quote `>`) — collapse while the caret is outside the
+ * block and are revealed while the caret is anywhere inside it, which is what
+ * makes `# Title` behave like Typora's headings.
  */
-function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0): ViewLine {
-  const tokens = findTokens(raw)
+function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
+  const revealInBlock = opts.revealInBlock === true
+  const inCode = opts.inCode === true
+  const isTableCell = opts.cell === true
+  const isFenceLine = !inCode && !isTableCell && /^\s*(`{3,}|~{3,})/.test(raw)
+
+  // Code content and fence lines are literal: a `**` inside a fence is text,
+  // and a fence opener must not be misread as an inline-code construct.
+  const tokens = inCode || isFenceLine ? [] : findTokens(raw)
   const markers: MarkerCell[] = []
 
   // A marker shows while the caret is inside its construct.
@@ -302,24 +356,35 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     for (let k = token.innerEnd; k < token.end; k++) hidden.add(k)
   }
 
-  // A fence line (```lang) collapses entirely: the box stays so the block keeps
-  // its proportions, but the marker and its info string draw nothing.
-  //
-  // Block prefixes are revealed only while the caret sits ON the prefix itself.
-  // Revealing them merely because the caret is somewhere on the line changes the
-  // mapping basis under the caret's feet — the visible glyphs shift by the prefix
-  // length and the caret appears to jump backwards to the start of the line.
-  if (/^\s*(`{3,}|~{3,})/.test(raw)) {
-    for (let k = 0; k < raw.length; k++) hidden.add(k)
-  } else {
-    // The prefix is revealed only while the caret sits ON it. Revealing it
-    // whenever the caret is merely somewhere on the line changes the mapping
-    // basis under the caret's feet: the visible glyphs shift by the prefix
-    // length, the measured offset shrinks by exactly that much, and the caret
-    // appears to jump back to the start of the line.
-    const prefix = blockPrefixRange(raw)
-    if (prefix) for (let k = prefix.start; k < prefix.end; k++) hidden.add(k)
+  // Block-level marker: a whole fence line, or the line's leading prefix.
+  // Fence lines collapse entirely (the box stays so the block keeps its
+  // proportions); prefixes collapse while the caret is outside the block. Both
+  // are revealed while the caret is inside this block.
+  let blockMarker: { start: number; end: number } | null = null
+  if (isFenceLine) {
+    blockMarker = { start: 0, end: raw.length }
+  } else if (!inCode && !isTableCell) {
+    blockMarker = blockPrefixRange(raw)
   }
+  const markerShown = blockMarker !== null && revealInBlock
+  if (blockMarker !== null && !markerShown) {
+    for (let k = blockMarker.start; k < blockMarker.end; k++) hidden.add(k)
+  }
+
+  // Run segmentation is decided up front: token boundaries plus the block
+  // marker's end. Both scans stop at these, so a collapsed prefix is never
+  // merged into the marker of the construct beside it, and the hidden and
+  // shown states share one segmentation — revealing toggles a CSS class, never
+  // replaces a text node, so a caret anchored in the neighbouring text is
+  // never dislodged.
+  const boundaries = new Set<number>([0])
+  for (const token of tokens) {
+    boundaries.add(token.start)
+    boundaries.add(token.innerStart)
+    boundaries.add(token.innerEnd)
+    boundaries.add(token.end)
+  }
+  if (blockMarker !== null) boundaries.add(blockMarker.end)
 
   const runs: ViewRun[] = []
   const visibleToSource: number[] = []
@@ -334,7 +399,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
       // `innerEnd`, where no token *starts*, so gating on that leaks the closing
       // `**` straight back onto the screen.
       let end = i
-      while (end < raw.length && hidden.has(end)) end++
+      while (end < raw.length && hidden.has(end) && !(end > i && boundaries.has(end))) end++
       const token = tokens.find((t) => t.start === i || t.innerEnd === i)
       const marker: MarkerCell = token
         ? i < token.innerStart
@@ -354,11 +419,8 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     // opening marker sits at its `innerStart`; missing those boundaries merges a
     // collapsed prefix together with a revealed marker into one hidden run, which
     // is why `**` never appeared even though the reveal range was correct.
-    const isBoundary = (at: number): boolean =>
-      tokens.some((t) => t.start === at || t.innerStart === at || t.innerEnd === at)
-
     let end = i
-    while (end < raw.length && !hidden.has(end) && (end === i || !isBoundary(end))) {
+    while (end < raw.length && !hidden.has(end) && (end === i || !boundaries.has(end))) {
       end++
     }
     if (end === i) end = i + 1
@@ -372,11 +434,14 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     // single-line blocks (whose first line starts at the block start) and made
     // every line of a multi-line block — code blocks, lists — claim offset 0,
     // which broke the caret mapping completely.
+    const isMarkerRun =
+      markerShown && blockMarker !== null && i === blockMarker.start && end === blockMarker.end
     runs.push({
       text: raw.slice(i, end),
       src: sourceStart + i,
       mark: markFor(tokens, i, end),
       marker: false,
+      dim: isMarkerRun || undefined,
     })
     i = end
   }
@@ -406,14 +471,34 @@ function markFor(tokens: Token[], start: number, end: number): Mark {
   return mark
 }
 
-/** Builds the view of a whole block. `blockStart` is a document source offset. */
+/**
+ * Builds the view of a whole block. `blockStart` is a document source offset.
+ *
+ * `revealAt` holds document offsets of the caret; the block is "in edit mode"
+ * (`revealInBlock`) when any of them falls inside it. `revealFrom` handed to
+ * each line is LINE-LOCAL — inline tokens are line-local, and comparing a
+ * block-local offset against them silently turned reveal off for every line
+ * after the first of a multi-line block.
+ *
+ * Lines between two fence markers are code content: their `inCode` flag means
+ * no inline parsing and no block prefixes — a `**` inside a fence is literal.
+ */
 export function buildBlockView(raw: string, blockStart: number, revealAt: number[]): BlockView {
   const reveals = revealAt.map((r) => r - blockStart)
+  const revealInBlock = reveals.length > 0
   const lines: ViewLine[] = []
   let base = 0
+  let inFence = false
   for (const line of raw.split('\n')) {
     const local = reveals.filter((r) => r >= base && r <= base + line.length)
-    lines.push(buildLine(line, local.length ? local[0] : null, base))
+    const fenceLine = /^\s*(`{3,}|~{3,})/.test(line)
+    lines.push(
+      buildLine(line, local.length ? local[0] - base : null, base, {
+        revealInBlock,
+        inCode: inFence && !fenceLine,
+      }),
+    )
+    if (fenceLine) inFence = !inFence
     base += line.length + 1
   }
   return { lines }
