@@ -46,7 +46,8 @@
   --doc-line: 1.75;
   --editor-pad-x: 40px;
   --editor-pad-y: 32px;
-  --editor-max-width: 100%;
+  /* Page column: a stable, content-independent measure (~50 CJK chars). */
+  --editor-max-width: 840px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -357,6 +358,9 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* The desk behind the page: the centred `.doc` column reads as a sheet rather
+     than as text floating in an unbounded white field. */
+  background: var(--bg-panel);
 }
 
 /* ==========================================================================
@@ -457,8 +461,15 @@ body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* `width: 100%` is load-bearing, not redundant: the parent is a COLUMN flex
+     container, and a cross-axis `margin: 0 auto` cancels `align-items: stretch`.
+     Without it the box is shrink-to-fit, so a short document collapsed to a
+     sliver while a long one looked fine. The page must not depend on content. */
+  width: 100%;
   max-width: var(--editor-max-width);
   margin: 0 auto;
+  /* The sheet itself, on the desk tinted by `.workspace`. */
+  background: var(--bg);
   padding: var(--editor-pad-y) var(--editor-pad-x);
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);
