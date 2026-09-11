@@ -35,7 +35,8 @@ pnpm test:watch    # 监听
 4. **鼠标选中**：选区跨越 reveal 翻转（块级标记显现/折叠）时视图重渲染不摧毁选区
 5. **撤销 / 数据完整性**：backspace 删除后源码持久化、backspace 后继续输入
 6. **NotFoundError 回归**：各位置反复 Enter、文档底部（块外）点击后 Enter + 打字，均不抛 React 异常且 DOM 与模型一致
-7. **草稿持久化**：编辑后立刻 `pagehide`（刷新前）草稿不回退
+7. **跨块编辑回归**：全选删除、跨块选区删除（不残留、不丢字）、删除后继续输入，DOM 与模型始终同步
+8. **草稿持久化**：编辑后立刻 `pagehide`（刷新前）草稿不回退
 
 ## 现在能做什么
 
@@ -105,8 +106,9 @@ pnpm test:watch    # 监听
 - **run 分段在隐藏/显现两个状态间保持一致**（token 边界 + 块级标记边界预先定死），显现只切换 CSS 类、从不替换文本节点——否则锚在相邻文本里的光标会被挪走。
 - **块视图按官方行跨度补足空行**：解析器会把块尾的空白行从 raw 里剥掉（markdown-it 的列表范围常覆盖末项后的空行），视图必须按 `endLine - startLine` 补齐空行盒，空行上的光标才有落点。
 - **源代码永远是权威；DOM 只是反射。** 光标状态是源码偏移，DOM 选区读回只在真实手势之后才被信任（`placedByUs` 守卫）。
-- `userEditPending`：`beforeinput` 置位、`input` 消费，只有真实用户编辑才从 DOM 重建源码；重渲染引起的 DOM 变动不会反向写回（否则折叠标记会被删掉）。
-- **Enter 永远被接管**（光标在块外时也不例外）：原生 contenteditable Enter 会向 DOM 注入 `<br>`/`<div>`，下一次重渲染就抛 `NotFoundError: removeChild`。`onInput` 里还会清掉已混入的孤儿元素。
+- `userEditPending`：`beforeinput` 置位、`input` 消费，每次 input 都从 DOM **重建整个文档**（不是只重建光标所在块）——跨块编辑（全选删除、拖选删除、粘贴）由浏览器同时改动多个块，只吸收一个块会让其余块的 DOM 与模型永久分叉（屏幕上看内容"消失"）。
+- **DOM 分叉后强制重挂载**：layout effect 校验 `readDocumentSource(root) === doc`，不等则换 key 整体替换 `.doc` 子树（React 的卸载只 removeChild 一次 `.doc` 本身，不会碰到已被浏览器删掉的块节点，因此不会抛 NotFoundError）；全选删除把块元素整个删掉时同理，在 `onInput` 里直接触发整树替换。
+- **Enter 永远被接管**（光标在块外时也不例外）：原生 contenteditable Enter 会向 DOM 注入 `<br>`/`<div>`，下一次重渲染就抛 `NotFoundError: removeChild`。`onInput` 里还会清掉已混入的孤儿元素（其文本会被救回）。
 - `assertSourcePreserved`（dev）：每个块都必须恰好覆盖源码对应区间，一字不丢。改块收集逻辑时保持它安静。
 
 ### 会破坏光标的坑（都踩过）

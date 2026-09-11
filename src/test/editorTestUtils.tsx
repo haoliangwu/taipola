@@ -55,20 +55,25 @@ export function renderEditor(source: string): Rendering {
   }
 
   const view = render(<Harness />)
-  const container = view.container.querySelector('.doc') as HTMLElement
+  // The `.doc` node is REPLACED when the editor force-remounts itself
+  // (DOM/model divergence). A captured reference would point at the stale,
+  // detached node — query live every time.
+  const containerOf = () => view.container.querySelector('.doc') as HTMLElement
 
   return {
-    container,
+    get container(): HTMLElement {
+      return containerOf()
+    },
     getDoc: () => latest,
     getCaret: () => caretFromDom(),
     getActiveBlock: () => {
-      const active = container.querySelector('.blk-active')
+      const active = containerOf().querySelector('.blk-active')
       return active ? (active as HTMLElement).dataset.block ?? null : null
     },
     blockEl: (index) =>
-      container.querySelector(`[data-block="${index}"]`) as HTMLElement | null,
+      containerOf().querySelector(`[data-block="${index}"]`) as HTMLElement | null,
     runEl: (block, vline, run) =>
-      container.querySelector(
+      containerOf().querySelector(
         `[data-block="${block}"] [data-vline="${vline}"] [data-run="${run}"]`,
       ) as HTMLElement | null,
     user: userEvent.setup({ delay: null }),

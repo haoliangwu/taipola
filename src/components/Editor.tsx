@@ -64,6 +64,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const [doc, setDoc] = useState(value)
   const [caret, setCaret] = useState(0)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  /**
+   * Bumped when the DOM has diverged from the model outside React's
+   * knowledge (a cross-block selection edit deleted text in several blocks at
+   * once; React's diff only rewrites the nodes IT sees as changed, so the
+   * others stay missing). Changing the root's key force-remounts the whole
+   * editable subtree from the model, restoring every character.
+   */
+  const [resetKey, setResetKey] = useState(0)
   /** Source offset to re-apply to the DOM after the next render. */
   const pending = useRef<number | null>(null)
   const composing = useRef(false)
@@ -226,6 +234,17 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     // the source exactly (prevents double-counting on the next read).
     stripForeignText(rootRef.current)
     if (pending.current !== null) placeCaret()
+    // DOM vs model integrity check. A cross-block edit (select-all delete,
+    // drag-delete across lines) mutates several blocks' DOM at once; the
+    // model absorbs it via `onInput`, but React's diff only rewrites nodes it
+    // believes changed — text the browser deleted from the OTHER blocks is
+    // never restored, so it vanishes from the screen while the source still
+    // holds it. Force a remount from the model when they diverge.
+    const root = rootRef.current
+    if (root && readDocumentSource(root) !== doc) {
+      pending.current = caret
+      setResetKey((key) => key + 1)
+    }
   })
 
   /** Source offset of the current DOM selection, or null when outside. */
@@ -269,18 +288,18 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
   // --- input -----------------------------------------------------------------
   useEffect(() => {
-    // Listen to `beforeinput` natively, NOT via React's synthetic `onBeforeInput`:
+    // Listen to `beforeinput` on DOCUMENT capture, not on the root element:
     // React only synthesises it from textInput/keypress/paste, which jsdom has
     // none of — the arm/disarm dance below would never run in tests. A native
-    // listener behaves identically in real browsers.
-    const root = rootRef.current
-    if (!root) return
+    // listener behaves identically in real browsers. Document-level capture
+    // also survives the force-remount (the root node is replaced, its element
+    // listeners would die with it).
     const arm = () => {
       placedByUs.current = false
       userEditPending.current = true
     }
-    root.addEventListener('beforeinput', arm)
-    return () => root.removeEventListener('beforeinput', arm)
+    document.addEventListener('beforeinput', arm, true)
+    return () => document.removeEventListener('beforeinput', arm, true)
   }, [])
 
   const onInput = useCallback(() => {
@@ -289,52 +308,52 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     // is not currently showing.
     if (!userEditPending.current) return
     userEditPending.current = false
-    if (activeIndex === null) return
-    const host = rootRef.current?.querySelector<HTMLElement>(`[data-block="${activeIndex}"]`)
-    const block = blocks[activeIndex]
-    if (!host || !block) return
+    const root = rootRef.current
+    if (!root) return
 
-    const nextRaw = readBlockSource(host)
     // The browser sometimes injects ELEMENTS of its own into the editable tree
     // (native contenteditable Enter/paste). They are not part of React's tree,
     // and the next re-render would removeChild a node it does not own — the
     // occasional NotFoundError. Strip them while we are inside the input event,
-    // before React re-renders.
-    sanitizeDom(rootRef.current)
+    // before React re-renders. Their text is salvaged into the parent line box
+    // so pasted content is not lost with the wrapper element.
+    sanitizeDom(root)
 
-    // Text typed while the caret sat in the editable ROOT itself (a click below
-    // the last block) lands directly under the root, belonging to no block.
-    // Absorb it as an append at the end of the document — otherwise the
-    // keystrokes would be deleted by the next re-render and silently lost.
-    const rootText = (() => {
-      let t = ''
-      for (const node of rootRef.current?.childNodes ?? []) {
-        if (node.nodeType === Node.TEXT_NODE && node.textContent) t += node.textContent
-      }
-      return t
-    })()
-    if (rootText !== '') {
-      if (!composing.current) pushUndo({ value: doc, caret })
-      commit(doc + rootText, doc.length + rootText.length)
-      return
+    // Rebuild the WHOLE document. Rebuilding only the active block let
+    // cross-block selection edits (select-all delete, multi-line drag-delete,
+    // paste) desync the model: the browser had already touched several blocks'
+    // DOM, we only absorbed one, and React never restored the others because
+    // it thought they were unchanged — content silently vanished from the
+    // screen while the source still held it.
+    // Text sitting directly under the ROOT (typed below the last block, or
+    // salvaged from a stripped root-level wrapper) belongs to no block; it
+    // appends at the end of the document.
+    let next = readDocumentSource(root)
+    for (const node of root.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent) next += node.textContent
     }
-    if (nextRaw === block.raw) return
-    if (!composing.current) pushUndo({ value: doc, caret })
 
-    const next =
-      doc.slice(0, offsets[activeIndex]) + nextRaw + doc.slice(offsets[activeIndex] + block.raw.length)
-    // The edit landed at the caret we already hold, so the new caret follows the
-    // change in length. Reading it back from the DOM would measure a view that is
-    // still switching between its collapsed and revealed forms.
-    const delta = nextRaw.length - block.raw.length
-    const caretNext = Math.max(offsets[activeIndex], caret + delta)
+    // A select-all delete (or any edit that replaces the whole content) makes
+    // the browser remove the BLOCK ELEMENTS themselves, not just text. React
+    // would then delete fibers whose DOM nodes are gone and throw the
+    // `removeChild` NotFoundError. Switching the root's key replaces the WHOLE
+    // `.doc` subtree instead: unmounting it costs a single removeChild on the
+    // `.doc` node itself (still present), never touching the vanished blocks.
+    const rootBlockCount = root.querySelectorAll('[data-block]').length
+    const structureBroken = rootBlockCount < blocks.length && rootBlockCount <= 1
+    if (structureBroken) setResetKey((key) => key + 1)
+
+    if (next === doc) return
+    if (!composing.current) pushUndo({ value: doc, caret })
+    const delta = next.length - doc.length
+    const caretNext = Math.max(0, Math.min(caret + delta, next.length))
     pending.current = caretNext
     placedByUs.current = true
     setDoc(next)
     onChange(next)
     setCaret(caretNext)
     onCaretLineChange?.(lineOfOffset(next, caretNext))
-  }, [activeIndex, blocks, caret, doc, offsets, onChange, onCaretLineChange, pushUndo])
+  }, [caret, doc, onChange, onCaretLineChange, pushUndo])
 
   const undo = useCallback(
     (redo: boolean) => {
@@ -524,6 +543,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   // --- render ----------------------------------------------------------------
   return (
     <div
+      key={resetKey}
       className="doc"
       ref={rootRef}
       onMouseDownCapture={(event) => {
@@ -564,51 +584,51 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       spellCheck={false}
     >
       {blocks.map((block, index) => {
-        const view = views[index]
-        const firstState = lineStates[block.startLine]
-        return (
-          <div
-            key={`${index}:${block.startLine}`}
-            data-block={index}
-            data-src-start={offsets[index]}
-            className={`blk${activeIndex === index ? ' blk-active' : ''}`}
-            data-kind={firstState?.kind ?? 'text'}
-          >
-            {view.lines.map((line, li) => {
-              const state = lineStates[block.startLine + li]
-              const renderRun = (run: ViewRun, ri: number) => (
-                <span
-                  key={ri}
-                  data-run={ri}
-                  data-src={run.src}
-                  className={runClass(run, state)}
-                  title={run.mark.link && !run.marker ? run.mark.link : undefined}
-                >
-                  {run.text}
-                </span>
-              )
-              return (
-                <div key={li} data-vline={li} data-src={line.sourceStart} className={lineClass(state)}>
-                  {line.runs.length === 0 ? (
-                    <br />
-                  ) : line.cellRuns ? (
-                    // A table row is a grid of CELLS, not of runs: one cell per
-                    // grid item, so revealed inline markers inside a cell stay
-                    // inside its column instead of each becoming a column.
-                    line.cellRuns.map((cell, ci) => (
-                      <span key={ci} className="cell" data-cell={ci}>
-                        {cell.length === 0 ? <br /> : cell.map((ri) => renderRun(line.runs[ri], ri))}
-                      </span>
-                    ))
-                  ) : (
-                    line.runs.map((run, ri) => renderRun(run, ri))
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )
-      })}
+          const view = views[index]
+          const firstState = lineStates[block.startLine]
+          return (
+            <div
+              key={`${index}:${block.startLine}`}
+              data-block={index}
+              data-src-start={offsets[index]}
+              className={`blk${activeIndex === index ? ' blk-active' : ''}`}
+              data-kind={firstState?.kind ?? 'text'}
+            >
+              {view.lines.map((line, li) => {
+                const state = lineStates[block.startLine + li]
+                const renderRun = (run: ViewRun, ri: number) => (
+                  <span
+                    key={ri}
+                    data-run={ri}
+                    data-src={run.src}
+                    className={runClass(run, state)}
+                    title={run.mark.link && !run.marker ? run.mark.link : undefined}
+                  >
+                    {run.text}
+                  </span>
+                )
+                return (
+                  <div key={li} data-vline={li} data-src={line.sourceStart} className={lineClass(state)}>
+                    {line.runs.length === 0 ? (
+                      <br />
+                    ) : line.cellRuns ? (
+                      // A table row is a grid of CELLS, not of runs: one cell per
+                      // grid item, so revealed inline markers inside a cell stay
+                      // inside its column instead of each becoming a column.
+                      line.cellRuns.map((cell, ci) => (
+                        <span key={ci} className="cell" data-cell={ci}>
+                          {cell.length === 0 ? <br /> : cell.map((ri) => renderRun(line.runs[ri], ri))}
+                        </span>
+                      ))
+                    ) : (
+                      line.runs.map((run, ri) => renderRun(run, ri))
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })}
     </div>
   )
 })
@@ -898,6 +918,23 @@ function readBlockSource(host: HTMLElement): string {
 }
 
 /**
+ * Rebuilds the WHOLE document source from the rendered DOM.
+ *
+ * Blocks tile the document without gaps: every block contributes its lines
+ * joined by newlines, and the blocks themselves are joined by one more
+ * newline — the exact same reconstruction `assertDomMatchesSource` checks in
+ * tests. This is what keeps a cross-block edit (select-all delete, paste,
+ * drag-delete) from losing the blocks the model did not re-absorb.
+ */
+function readDocumentSource(root: HTMLElement): string {
+  const parts: string[] = []
+  root.querySelectorAll<HTMLElement>('[data-block]').forEach((host) => {
+    parts.push(readBlockSource(host))
+  })
+  return parts.join('\n')
+}
+
+/**
  * The characters a line box currently holds, in DOM order.
  *
  * Span text is the common case. A line box can also hold DIRECT text nodes: the
@@ -957,12 +994,20 @@ function stripForeignText(root: HTMLElement | null): void {
  * React later expects to remove throws `NotFoundError: removeChild`. Everything
  * the editor renders is a `[data-block]` holding `[data-vline]` lines holding
  * `[data-run]`/`[data-cell]` spans plus the lone `br` of an empty line — anything
- * else inside those boundaries is foreign and can go.
+ * else inside those boundaries is foreign.
+ *
+ * A foreign element's TEXT is salvaged into its parent line box (a pasted
+ * `<div>` loses its wrapper, not its characters): `readDocumentSource` picks
+ * direct text nodes back up, so pasted content lands in the model instead of
+ * evaporating with the stripped element.
  */
 function sanitizeDom(root: HTMLElement | null): void {
   if (!root) return
   for (const child of Array.from(root.children)) {
-    if (!(child instanceof HTMLElement) || !child.hasAttribute('data-block')) child.remove()
+    if (child instanceof HTMLElement && child.hasAttribute('data-block')) continue
+    const text = child.textContent ?? ''
+    if (text) child.replaceWith(document.createTextNode(text))
+    else child.remove()
   }
   root.querySelectorAll<HTMLElement>('[data-vline]').forEach((line) => {
     for (const node of Array.from(line.childNodes)) {
@@ -972,7 +1017,9 @@ function sanitizeDom(root: HTMLElement | null): void {
       // The lone `<br/>` of an empty line is React's own; keep it, remove any
       // other element that wandered in.
       if (el.tagName === 'BR' && line.children.length === 1) continue
-      el.remove()
+      const text = el.textContent ?? ''
+      if (text) el.replaceWith(document.createTextNode(text))
+      else el.remove()
     }
   })
 }

@@ -172,6 +172,64 @@ describe('撤销 / 数据完整性（回归）', () => {
   })
 })
 
+describe('跨块编辑（回归：DOM 与模型必须同步）', () => {
+  it('全选删除：内容全部消失且模型一致', async () => {
+    const r = renderEditor('# 标题\n\n- 甲\n- 乙\n')
+    const docEl = r.container
+    docEl.focus({ preventScroll: true })
+    const sel = window.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(docEl)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    await r.user.keyboard('{Delete}')
+    await flush()
+    expect(r.getDoc().trim()).toBe('')
+    await assertDomMatchesSource(r)
+  })
+
+  it('跨块选区删除一段：前后拼接正确，不残留也不丢字', async () => {
+    const r = renderEditor('# 头条\n\n正文甲\n正文乙\n')
+    const titleText = r.runEl(0, 0, 1)!.firstChild!
+    const paraText = r.runEl(2, 0, 0)!.firstChild!
+    r.container.focus({ preventScroll: true })
+    const sel = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(titleText, 1) // 「条」之后
+    range.setEnd(paraText, 0) // 「正文甲」之前（跨块选区）
+    sel.removeAllRanges()
+    sel.addRange(range)
+    await r.user.keyboard('{Delete}')
+    await flush()
+    // 浏览器删除跨块选区后保留段落边界（标题行与正文之间仍有一行换行）；
+    // 关键断言是模型与 DOM 完全同步，不残留也不丢字。
+    expect(r.getDoc()).toBe('# 头\n正文甲\n正文乙\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('跨块选区删除后继续打字，后续编辑正常', async () => {
+    const r = renderEditor('# 标题\n\n正文甲\n正文乙\n')
+    const titleText = r.runEl(0, 0, 1)!.firstChild!
+    const paraText = r.runEl(2, 0, 0)!.firstChild!
+    r.container.focus({ preventScroll: true })
+    const sel = window.getSelection()!
+    const range = document.createRange()
+    range.setStart(titleText, 1)
+    range.setEnd(paraText, 0)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    await r.user.keyboard('{Delete}')
+    await flush()
+    // 合成点击（untrusted）的编辑内部光标与 DOM selection 可能不同步，
+    // 具体插入点由浏览器决定——断言只守"后续输入不炸、不丢字、DOM 一致"。
+    await typeText(r, 'X')
+    await flush()
+    expect(r.getDoc()).toContain('X')
+    expect(r.getDoc()).toContain('正文乙')
+    await assertDomMatchesSource(r)
+  })
+})
+
 describe('NotFoundError 回归（换行时不应该有 React removeChild 异常）', () => {
   let errSpy: ReturnType<typeof vi.spyOn>
 
