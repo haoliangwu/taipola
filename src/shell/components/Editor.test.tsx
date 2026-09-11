@@ -11,9 +11,9 @@ import {
   flush,
   caretFromDom,
   type Rendering,
-} from '../test/editorTestUtils'
+} from '../../test/editorTestUtils'
 
-import { WELCOME_DOC } from '../lib/welcome'
+import { WELCOME_DOC } from '../../core/welcome'
 
 const WELCOME = `# 欢迎使用 taipola
 

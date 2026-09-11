@@ -32,9 +32,10 @@ Single-context repo:
 │   │   └── 0001-editor-core-native.md
 │   └── agents/             ← configuration for these skills
 └── src/
+    ├── core/               ← in-process pure logic: markdown parsing, view mapping, inline state
     ├── editor/             ← native editor kernel (DOM + events + state)
-    ├── lib/                ← pure functions: markdown parsing, view mapping, inline state
-    └── components/         ← React shell
+    ├── platform/           ← browser-API adapters (file access, draft storage, HTML export)
+    └── shell/              ← React shell
 ```
 
 ## Use the glossary's vocabulary

@@ -25,11 +25,13 @@ pnpm verify        # tsc -b + 全部测试
 
 **两层是刻意的**：
 
-- `unit`（`src/lib/**/*.test.ts`）覆盖纯函数：解析（`markdown.ts`）、源码→视图映射（`view.ts`，
+- `unit`（`src/core/**/*.test.ts`）覆盖纯函数：解析（`markdown.ts`）、源码→视图映射（`view.ts`，
   逐语法断言 run 切分与无损往返）、行状态（`inline.ts`）、列表编号与缩进（`lists.ts`）、
-  格式化命令（`editCommands.ts`）。改代码时随手跑，几毫秒。
-- `browser`（`src/components/**`、`src/App.test.tsx`，以及需要 DOM 的 `*.browser.test.ts`）
-  只留必须真浏览器的：光标落点与选区、按键拦截、IME 合成、CSS 契约、App 外壳。
+  格式化命令（`editCommands.ts`）。改代码时随手跑，几毫秒。`src/core/` 里没有任何浏览器 API，
+  所以这一层不需要任何例外。
+- `browser`（`src/shell/**`、`src/platform/**`）只留必须真浏览器的：光标落点与选区、按键
+  拦截、IME 合成、CSS 契约、App 外壳，以及碰 `window`/DOM 的适配器（文件访问、草稿、
+  导出 HTML）。
 
 首次运行会下载 Chromium 到本项目 `.pw-browsers/`（沙箱环境装不进 `~/Library/Caches/ms-playwright` 时用 `PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers`）。
 
@@ -40,7 +42,7 @@ pnpm verify        # tsc -b + 全部测试
 - `caretFromDom`：DOM 选区 → 文档源码偏移（含空行锚定）
 - `assertDomMatchesSource`：DOM 各行拼接后必须与文档源码逐字一致（`\n+` 尾部除外）
 
-覆盖的回归场景（`src/components/Editor.test.tsx`、`src/App.test.tsx`）：
+覆盖的回归场景（`src/shell/components/Editor.test.tsx`、`src/shell/App.test.tsx`）：
 
 1. **标题按 Enter**：光标中间拆分、行末新增空行（行末不再是 no-op）、Shift+Enter 软换行
 2. **列表**：末项 Enter 续行、空 bullet 再次 Enter 退出列表且**保留空行**、退出后光标停在空行上
@@ -73,7 +75,7 @@ pnpm verify        # tsc -b + 全部测试
 - **系统偏好**：`@media (prefers-color-scheme: dark) :root:not([data-theme='light'])`
 - **显式选择**：`:root[data-theme='dark']`，写在最后，因此总是优先于系统偏好
 
-`useTheme()`（`src/lib/theme.ts`）负责把选择写到 `<html data-theme>` 并存进 localStorage。`system` 时移除该属性，交还给媒体查询。
+`useTheme()`（`src/shell/useTheme.ts`）负责把选择写到 `<html data-theme>` 并存进 localStorage。`system` 时移除该属性，交还给媒体查询。
 
 配色全部走 CSS 变量，所以**切换主题不影响行高与布局**。代码高亮的 token 颜色在深色下单独重新着色——highlight.js 只提供浅色主题，深色下若不覆盖会对比度不足。
 
@@ -114,7 +116,7 @@ __welcome__()
 
 - `src/editor/dom.ts`：把视图模型命令式写成 DOM（按索引原地更新；文本相同就不替换文本节点，避免毁掉浏览器选区与 IME），以及源码偏移 ↔ DOM 位置的双向映射、DOM → 源码的重建。
 - `src/editor/kernel.ts`：状态（源码、光标、撤销栈）、原生事件（`keydown` / `beforeinput` / `input` / `composition` / 鼠标 / `selectionchange`），以及"改模型 → 重写 DOM → **同一同步帧内**放回光标"的提交路径。
-- `src/components/Editor.tsx`：薄壳。只做 prop 镜像与 `EditorHandle` 转发，不参与编辑。
+- `src/shell/components/Editor.tsx`：薄壳。只做 prop 镜像与 `EditorHandle` 转发，不参与编辑。
 
 所以 DOM 只有一个写者。用户手势（`beforeinput` / `keydown` / `mousedown` / `mouseup`）是 DOM 反过来改模型的唯一途径；我们自己放的光标触发的 `selectionchange` 会被忽略。
 

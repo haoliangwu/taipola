@@ -15,9 +15,9 @@
  * line box, the browser resolves a caret anchored there back to the end of the
  * previous text node and the next keystroke lands a line too high.
  */
-import type { Block } from '../lib/markdown'
-import type { BlockView, ViewRun } from '../lib/view'
-import type { LineState } from '../lib/inline'
+import type { Block } from '../core/markdown'
+import type { BlockView, ViewRun } from '../core/view'
+import type { LineState } from '../core/inline'
 
 /* -------------------------------------------------------------------------- */
 /* building                                                                   */

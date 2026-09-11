@@ -8,8 +8,8 @@
  * edits back through `onChange`.
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { EditorKernel } from '../editor/kernel'
-import type { EditBuffers } from '../lib/editCommands'
+import { EditorKernel } from '../../editor/kernel'
+import type { EditBuffers } from '../../core/editCommands'
 
 export interface EditorHandle {
   /** Moves the caret to the given 1-based source line and scrolls it into view. */

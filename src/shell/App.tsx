@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
 import { Outline } from './components/Outline'
-import { computeStats, extractHeadings } from './lib/markdown'
-import { WELCOME_DOC } from './lib/welcome'
+import { computeStats, extractHeadings } from '../core/markdown'
+import { WELCOME_DOC } from '../core/welcome'
 import {
   UserCancelled,
   downloadAsFile,
@@ -13,9 +13,9 @@ import {
   saveFile,
   supportsFileSystemAccess,
   type DocumentFile,
-} from './lib/files'
-import { renderDocumentHtml } from './platform/html'
-import { THEME_LABEL, useTheme } from './lib/theme'
+} from '../platform/documents'
+import { renderDocumentHtml } from '../platform/html'
+import { THEME_LABEL, useTheme } from './useTheme'
 import {
   TABLE_SNIPPET,
   deleteLine,
@@ -24,7 +24,7 @@ import {
   toggleHeading,
   toggleInline,
   toggleInlineCode,
-} from './lib/editCommands'
+} from '../core/editCommands'
 
 const DRAFT_DEBOUNCE_MS = 500
 const OUTLINE_DEBOUNCE_MS = 200

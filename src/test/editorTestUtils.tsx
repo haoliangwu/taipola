@@ -2,7 +2,7 @@ import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi, expect } from 'vitest'
 import { useState, useRef } from 'react'
-import { Editor, type EditorHandle } from '../components/Editor'
+import { Editor, type EditorHandle } from '../shell/components/Editor'
 import { readDocumentSource, normalizeTables } from '../editor/dom'
 
 /**

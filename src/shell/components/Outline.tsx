@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { Heading } from '../lib/markdown'
+import type { Heading } from '../../core/markdown'
 
 interface OutlineProps {
   headings: Heading[]

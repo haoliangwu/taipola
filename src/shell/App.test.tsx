@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import { loadDraft } from './lib/files'
+import { loadDraft } from '../platform/documents'
 
 /**
  * App-level draft-persistence regression.

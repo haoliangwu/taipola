@@ -18,13 +18,13 @@
  *   placement are ignored, so a browser-clamped caret can never feed back.
  *
  * Caret state is a **source offset** into the Markdown document; the screen
- * position is derived through the view (`lib/view.ts`) on every render.
+ * position is derived through the view (`core/view.ts`) on every render.
  */
-import { parseDocument, type Block } from '../lib/markdown'
-import { computeLineStates, type LineState } from '../lib/inline'
-import { buildBlockView, type BlockView } from '../lib/view'
-import type { EditBuffers } from '../lib/editCommands'
-import { indentListItem, renumberLists } from '../lib/lists'
+import { parseDocument, type Block } from '../core/markdown'
+import { computeLineStates, type LineState } from '../core/inline'
+import { buildBlockView, type BlockView } from '../core/view'
+import type { EditBuffers } from '../core/editCommands'
+import { indentListItem, renumberLists } from '../core/lists'
 import {
   applyCaret,
   domToLocal,

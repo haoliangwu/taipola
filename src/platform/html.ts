@@ -8,7 +8,7 @@
  */
 import DOMPurify from 'dompurify'
 import type { Config as DOMPurifyConfig } from 'dompurify'
-import { md } from '../lib/markdownIt'
+import { md } from '../core/markdownIt'
 
 const SANITIZE_CONFIG: DOMPurifyConfig = {
   ADD_ATTR: ['target', 'rel', 'disabled', 'align'],
