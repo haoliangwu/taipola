@@ -421,6 +421,40 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect((delim as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1)
   })
 
+  it('图片在渲染态是真的 <img>，源码一字不丢', async () => {
+    const url = 'https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1'
+    const r = renderEditor(`看图：\n\n![示例图片](${url})\n`)
+    await flush()
+    const img = r.container.querySelector('img')
+    expect(img).not.toBeNull()
+    expect(img?.getAttribute('src')).toBe(url)
+    // 源码随图一起留在 DOM 里（隐藏副本），否则从 DOM 重建会丢掉这一行。
+    await assertDomMatchesSource(r)
+    expect(r.getDoc()).toContain(`![示例图片](${url})`)
+  })
+
+  it('光标进入图片所在行时，图片让位给源码（可编辑）', async () => {
+    // 首行放一段文字：初始光标在偏移 0，正好落在第一行，图片行保持渲染态。
+    const r = renderEditor('甲\n\n![甲](https://example.com/a.png)\n')
+    await flush()
+    expect(r.container.querySelector('img')).not.toBeNull()
+    const line = [...r.container.querySelectorAll('.vl')].find(
+      (el) => el.querySelector('img') !== null,
+    ) as HTMLElement
+    // 把光标放进图片构造内部：图片应当折叠回源码。
+    const range = document.createRange()
+    range.setStart(line, 0)
+    range.collapse(true)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+    await flush()
+    expect(r.container.querySelector('img')).toBeNull()
+    expect(line.textContent).toContain('![甲](https://example.com/a.png)')
+    await assertDomMatchesSource(r)
+  })
+
   it('六级标题各有各的字号（浏览器默认比例）', async () => {
     const r = renderEditor('# 一\n## 二\n### 三\n#### 四\n##### 五\n###### 六\n')
     await flush()

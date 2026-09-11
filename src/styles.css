@@ -541,6 +541,19 @@ body {
   color: var(--text);
 }
 
+/* A rendered image. Its source text is kept in a hidden span so the document can
+   be rebuilt from the DOM; the picture replaces it on screen. */
+.rn-image .rn-src {
+  display: none;
+}
+
+.rn-image img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: bottom;
+  border-radius: 4px;
+}
+
 .vl-code,
 .vl-fence {
   background: var(--code-bg);

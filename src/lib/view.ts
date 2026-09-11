@@ -26,6 +26,12 @@ interface Mark {
   strike?: boolean
   code?: boolean
   link?: string
+  /**
+   * A collapsed image: the run is rendered as an `<img>` instead of its source
+   * text. The source text stays in the DOM (hidden) so a document absorbed from
+   * the DOM keeps the picture.
+   */
+  img?: { src: string; alt: string }
 }
 
 /** A run of characters sharing one styling and one visibility. */
@@ -87,12 +93,14 @@ export interface BlockView {
 }
 
 interface Token {
-  kind: 'bold' | 'italic' | 'strike' | 'code' | 'link'
+  kind: 'bold' | 'italic' | 'strike' | 'code' | 'link' | 'image'
   start: number
   end: number
   innerStart: number
   innerEnd: number
   url?: string
+  /** Image alt text, for a `kind: 'image'` token. */
+  alt?: string
 }
 
 const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
@@ -117,7 +125,15 @@ function findTokens(text: string): Token[] {
 
     const image = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest)
     if (image) {
-      tokens.push({ kind: 'link', start: i, end: i + image[0].length, innerStart: i + 2, innerEnd: i + 2 + image[1].length, url: image[2] })
+      tokens.push({
+        kind: 'image',
+        start: i,
+        end: i + image[0].length,
+        innerStart: i + 2,
+        innerEnd: i + 2 + image[1].length,
+        url: image[2],
+        alt: image[1],
+      })
       i += image[0].length
       continue
     }
@@ -349,8 +365,16 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   }
 
   const hidden = new Set<number>()
+  /** Collapsed images: their whole range becomes one run that renders as a picture. */
+  const renderedImages = new Map<number, Token>()
   for (const token of tokens) {
     if (visibleMarker.has(token.start)) continue
+    if (token.kind === 'image') {
+      // Nothing about it is hidden as syntax — the run replaced by an <img>
+      // covers the entire construct, markers included.
+      renderedImages.set(token.start, token)
+      continue
+    }
     for (let k = token.start; k < token.innerStart; k++) hidden.add(k)
     for (let k = token.innerEnd; k < token.end; k++) hidden.add(k)
   }
@@ -398,6 +422,25 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
 
   let i = 0
   while (i < raw.length) {
+    const picture = renderedImages.get(i)
+    if (picture) {
+      // One run for the whole `![alt](url)`: the DOM renders an <img>, and the
+      // source text travels along inside it (hidden) so the document can be
+      // rebuilt from the DOM without losing the picture.
+      const text = raw.slice(picture.start, picture.end)
+      for (let k = picture.start; k < picture.end; k++) {
+        sourceToVisible[k] = visibleToSource.length
+        visibleToSource.push(k)
+      }
+      runs.push({
+        text,
+        src: sourceStart + picture.start,
+        mark: { img: { src: picture.url ?? '', alt: picture.alt ?? '' } },
+        marker: false,
+      })
+      i = picture.end
+      continue
+    }
     if (hidden.has(i)) {
       // A hidden run is simply a run of hidden characters. It must NOT be gated
       // on finding a token at this index: a closing marker sits at a token's

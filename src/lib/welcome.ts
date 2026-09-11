@@ -96,7 +96,7 @@ echo "hello, taipola"
 
 ## 图片与链接
 
-![示例图片](https://picsum.photos/seed/taipola/320/120)
+![示例图片](https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1)
 
 自动链接：https://example.com 在路上碰到 https://example.net 也会被识别。
 

@@ -54,7 +54,12 @@ function runElement(
   index: number,
   state: LineState | undefined,
 ): HTMLElement {
+  if (run.mark.img) return imageElement(existing, run, index, state)
+
   const span = existing && existing.hasAttribute('data-run') ? existing : document.createElement('span')
+  // An element rebuilt as a plain text run (the caret moved into the image) must
+  // shed the picture markup, or the stale <img> would linger in the line.
+  if (span.querySelector(':scope > img')) span.replaceChildren()
   setAttr(span, 'data-run', String(index))
   setAttr(span, 'data-src', String(run.src))
   const className = runClass(run, state)
@@ -65,6 +70,49 @@ function runElement(
   // replaces the text node, which would throw away the browser's selection (and
   // an in-flight IME composition) for no reason.
   if (span.textContent !== run.text) span.textContent = run.text
+  return span
+}
+
+/**
+ * A rendered image.
+ *
+ * The picture is an `<img>`; the `![alt](url)` SOURCE rides along in a hidden
+ * span. Without that copy, absorbing the document from the DOM would delete the
+ * image line outright — the same failure mode the table's `| --- |` row had.
+ */
+function imageElement(
+  existing: HTMLElement | null,
+  run: ViewRun,
+  index: number,
+  state: LineState | undefined,
+): HTMLElement {
+  const img = run.mark.img as { src: string; alt: string }
+  const usable =
+    existing &&
+    existing.hasAttribute('data-run') &&
+    existing.querySelector(':scope > img') !== null
+  const span = usable ? (existing as HTMLElement) : document.createElement('span')
+  setAttr(span, 'data-run', String(index))
+  setAttr(span, 'data-src', String(run.src))
+  const className = `${runClass(run, state)} rn-image`
+  if (span.className !== className) span.className = className
+
+  const source = span.querySelector<HTMLElement>(':scope > .rn-src')
+  const sourceEl = source ?? document.createElement('span')
+  if (!source) {
+    sourceEl.className = 'rn-src'
+    sourceEl.setAttribute('aria-hidden', 'true')
+    span.insertBefore(sourceEl, span.firstChild)
+  }
+  if (sourceEl.textContent !== run.text) sourceEl.textContent = run.text
+
+  let picture = span.querySelector<HTMLImageElement>(':scope > img')
+  if (!picture) {
+    picture = document.createElement('img')
+    span.appendChild(picture)
+  }
+  if (picture.getAttribute('src') !== img.src) picture.setAttribute('src', img.src)
+  if (picture.getAttribute('alt') !== img.alt) picture.setAttribute('alt', img.alt)
   return span
 }
 
@@ -248,7 +296,8 @@ export function markupSignature(
         const flags =
           `${run.marker ? 'm' : ''}${run.dim ? 'd' : ''}${run.mark.bold ? 'b' : ''}` +
           `${run.mark.italic ? 'i' : ''}${run.mark.strike ? 's' : ''}${run.mark.code ? 'c' : ''}` +
-          `${run.mark.link !== undefined ? `l${run.mark.link}` : ''}`
+          `${run.mark.link !== undefined ? `l${run.mark.link}` : ''}` +
+          `${run.mark.img ? `g${run.mark.img.src}` : ''}`
         parts.push(`${run.src}${flags}=${run.text}`)
       }
       if (line.cellRuns) parts.push(`c${line.cellRuns.map((c) => c.join('.')).join(';')}`)
