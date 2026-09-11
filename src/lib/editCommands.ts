@@ -8,9 +8,11 @@ export interface EditBuffers {
  * Source-level editing commands.
  *
  * Every command is a pure function of (text, selectionStart, selectionEnd) and
- * mutates the buffers in place. The editor applies the result through
- * `setRangeText`, so the browser's native undo stack stays intact — Cmd+Z keeps
- * working across formatting commands, exactly as a user expects.
+ * mutates the buffers in place. Callers apply the result through the editor's
+ * own commit path (a model update plus React state). The browser's native undo
+ * stack is deliberately NOT used: contenteditable's native undo is unreliable
+ * across block mount/unmount, so Cmd+Z is served by the snapshot stack in
+ * `Editor.tsx` (`undoStack`/`redoStack`).
  */
 
 export function toggleInline(buffer: EditBuffers, marker: string): void {
