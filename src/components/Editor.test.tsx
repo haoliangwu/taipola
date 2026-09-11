@@ -384,6 +384,38 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('文档末尾带空行时，回车后打字落在新行上（不并回上一行）', async () => {
+    // 复现自真实浏览器：草稿 '标题行\n\n' 的末尾是两个空行（同一个空块的两行），
+    // 回车后光标必须锚在"新建的那一行"，而不是空块的第一行。
+    const r = renderEditor('标题行\n\n')
+    await clickInRun(r, 0, 0, 0, 1.0)
+    await flush()
+    await r.user.keyboard('测试')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('标题行测试\n\n\n')
+    await r.user.keyboard('第二行')
+    await flush()
+    expect(r.getDoc()).toBe('标题行测试\n第二行\n\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('空行渲染一个 <br> 作为可编辑落点（真实浏览器的插入点依赖它）', async () => {
+    // 合成（untrusted）输入不会走浏览器自己的插入点解析，所以"把光标放在空行上
+    // 再打字"在测试里能过、在真实浏览器里会把字插到上一行末尾。这条断言把原因
+    // 钉住：空行必须带一个 <br> 落点。
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    const emptyLines = [...r.container.querySelectorAll('.vl')].filter(
+      (el) => (el.textContent ?? '') === '',
+    )
+    expect(emptyLines.length).toBeGreaterThan(0)
+    for (const el of emptyLines) expect(el.querySelector('[data-br]')).not.toBeNull()
+    // <br> 不参与源码重建
+    await assertDomMatchesSource(r)
+  })
+
   it('标题行末回车后按退格：只并回一行，不吃掉标题字符', async () => {
     const r = renderEditor('# 标题\n\n正文\n')
     await clickInRun(r, 0, 0, 1, 1.0)

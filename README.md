@@ -11,7 +11,9 @@ pnpm test     # vitest browser mode（真实 Chromium）
 
 ## 测试
 
-测试跑在 **vitest browser mode**（Playwright + 真实 Chromium），不是 jsdom：编辑器输入走浏览器原生管线（`keydown → beforeinput → DOM 变更 → input`），点击/键盘由 userEvent 与真实坐标驱动，因此 jsdom 无法模拟的 `beforeinput`、原生选区、拖选、IME 行为都能真实覆盖。
+测试跑在 **vitest browser mode**（Playwright + 真实 Chromium），不是 jsdom：编辑器事件走浏览器原生管线（`keydown → beforeinput → input`），点击/键盘由 userEvent 与真实坐标驱动，`beforeinput`、原生选区、拖选都能覆盖。
+
+**一个已知的覆盖盲区**：userEvent 派发的是合成（untrusted）事件，浏览器不会进入自己的默认行为路径，其中包括"把光标落在空行上再打字时插到哪里"这类**插入点解析**。实测踩到过：合成输入在空行上打字正常，真实浏览器却把字插到上一行末尾（原因是空行缺 `<br>` 落点）。所以涉及浏览器默认行为的关键路径，除了测试还要用真实输入（CDP/人手）复核一次。
 
 ```bash
 pnpm test          # 跑一遍
@@ -117,6 +119,7 @@ pnpm test:watch    # 监听
 - **块视图按官方行跨度补足空行**：解析器会把块尾的空白行从 raw 里剥掉（markdown-it 的列表范围常覆盖末项后的空行），视图必须按 `endLine - startLine` 补齐空行盒，空行上的光标才有落点。
 - **源代码永远是权威；DOM 只是反射。** 光标状态是源码偏移；内核放好光标后置位 `placedByUs`，只有用户手势会清除它——否则浏览器夹紧后的读回值会污染模型，光标会按每个显现标记的长度往回走。
 - `userEditPending`：`beforeinput` 置位、`input` 消费。每次 input 都从 DOM **重建整个文档**（不是只重建光标所在块）——跨块编辑（全选删除、拖选删除、粘贴）由浏览器同时改动多个块，只吸收一个块会丢内容。吸收完立即按模型重写 DOM，并放回光标。
+- **空行必须带一个 `<br data-br>` 落点。** 行盒里没有文本节点时，浏览器会把锚在其中的光标解析回上一个文本节点的末尾——用户看到的是"在空行打字，字跑到上一行"。`<br>` 不参与源码重建（`textOfLine` 只读 run/单元格文本）。
 - **没有协调器，就没有"节点不见了"这一类问题。** 旧实现靠 layout effect 校验 DOM 与模型、不符就换 key 整树重挂载（否则 React 会 removeChild 一个已被浏览器删掉的节点，抛 `NotFoundError`）。内核直接按模型重写 DOM：全选删除把块元素整个删掉，只表现为"读回来的源码更短"，随后被模型重建覆盖。
 - **Enter 永远被接管**（光标在块外时也不例外）：块外的回车在文档末尾追加换行，块内的回车按列表/引用/普通行的语义改写源码。原生 contenteditable Enter 会往 DOM 注入 `<br>`/`<div>`，那属于"事后还得吸收"的垃圾；`input` 路径里仍会清掉已混入的孤儿元素（其文本会被救回）。
 - `assertSourcePreserved`（dev）：每个块都必须恰好覆盖源码对应区间，一字不丢。改块收集逻辑时保持它安静。

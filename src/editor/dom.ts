@@ -11,8 +11,9 @@
  *   `[data-run]`    one per non-empty run of view characters, carries `data-src`
  *   `[data-cell]`   one per table cell, holding that row's run spans
  *
- * Empty lines render NO child element: the line box's `min-height` keeps it one
- * line tall, and there is no `<br>` for the browser to delete behind our back.
+ * Empty lines render a single `<br data-br>`: without a text position inside the
+ * line box, the browser resolves a caret anchored there back to the end of the
+ * previous text node and the next keystroke lands a line too high.
  */
 import type { Block } from '../lib/markdown'
 import type { BlockView, ViewRun } from '../lib/view'
@@ -66,6 +67,13 @@ function runElement(
   return span
 }
 
+/** The filler that gives an empty line a real editing position. */
+function brElement(): HTMLElement {
+  const br = document.createElement('br')
+  br.setAttribute('data-br', '')
+  return br
+}
+
 function lineElement(
   existing: HTMLElement | null,
   line: BlockView['lines'][number],
@@ -84,7 +92,16 @@ function lineElement(
   }
 
   if (line.runs.length === 0) {
-    clearChildren(el)
+    // An empty line gets a real `<br>` so the browser has a text position INSIDE
+    // it. Without one, a caret anchored on the empty line box is resolved back to
+    // the end of the previous text node when the user types: the characters then
+    // land at the end of the line above (observed as `…内容ZZZQY`).
+    // The old implementation rendered no child and relied on `min-height`, only
+    // because React's reconciliation fought over a `<br>` it had not created —
+    // the kernel owns this DOM, so the workaround is obsolete.
+    syncChildren(el, 1, (_index, current) =>
+      current && current.hasAttribute('data-br') ? current : brElement(),
+    )
     return el
   }
   if (line.cellRuns) {
@@ -127,10 +144,6 @@ function blockElement(
 /** Writes an attribute only when its value changed (attribute writes recalc style). */
 function setAttr(el: HTMLElement, name: string, value: string): void {
   if (el.getAttribute(name) !== value) el.setAttribute(name, value)
-}
-
-function clearChildren(el: Element): void {
-  while (el.firstChild) el.removeChild(el.firstChild)
 }
 
 /**
@@ -233,58 +246,61 @@ export function anchorForSource(
 ): { lineIndex: number; runIndex: number; offsetInRun: number } | null {
   const local = source - blockStart
 
-  for (let li = 0; li < view.lines.length; li++) {
-    const line = view.lines[li]
-    // `lineEnd` is the offset just past this line's last character. A target
-    // EQUAL to it is still inside this line: the character before the caret is
-    // this line's last character, not a newline. Only a target strictly PAST it
-    // belongs to the next line. (Using `>=` sent the caret one line down whenever
-    // it sat at the end of a line whose next line exists — a fresh `- ` bullet
-    // put the caret at the start of the following list item, and the next Enter
-    // then wrote a second bullet into that item: `- - 第二项`.)
-    const lineEnd = line.sourceStart + line.sourceToVisible.length
-    const isLast = li === view.lines.length - 1
-    if (local > lineEnd && !isLast) continue
+  // Which line holds the caret: the LAST line whose start is at or before it.
+  //
+  // The tie at an exact boundary is decided by the source layout itself, which
+  // is why this is not a comparison against a line's end:
+  //   - blank block, lines at src 0/1/2 — a caret at local 1 is the START of the
+  //     second blank line, because that line starts at 1.
+  //   - list block, the `- ` line at src 6 with length 2 — a caret at local 8 is
+  //     the END of `- `, because no line starts at 8; the next one starts at 9.
+  // Getting this backwards is visible: the caret lands one line off, so the next
+  // keystroke inserts in the wrong place (typing came out reversed, `二行第`, or
+  // a second Enter wrote `- - 第二项` into the following list item).
+  let lineIndex = 0
+  for (let i = 1; i < view.lines.length; i++) {
+    if (view.lines[i].sourceStart <= local) lineIndex = i
+    else break
+  }
+  const line = view.lines[lineIndex]
+  const lineEnd = line.sourceStart + line.sourceToVisible.length
+  const target = Math.max(line.sourceStart, Math.min(local, lineEnd))
 
-    const target = Math.max(line.sourceStart, Math.min(local, lineEnd))
+  let cursor = 0
+  for (const run of line.runs) {
+    const runEnd = run.src + run.text.length
 
-    let cursor = 0
-    for (const run of line.runs) {
-      const runEnd = run.src + run.text.length
-
-      if (run.marker) {
-        // Hidden marker: contributes no visible cells. If the target sits inside
-        // it, anchor on the cell just before it — i.e. keep the cursor where it
-        // already is rather than jumping to the marker's start.
-        if (target >= run.src && target <= runEnd) {
-          return runIndexAtCursor(line, cursor, li)
-        }
-        continue
-      }
-
+    if (run.marker) {
+      // Hidden marker: contributes no visible cells. If the target sits inside
+      // it, anchor on the cell just before it — i.e. keep the cursor where it
+      // already is rather than jumping to the marker's start.
       if (target >= run.src && target <= runEnd) {
-        // A target at a marker's very END belongs to the content that follows:
-        // the revealed `# ` of a heading ends at offset 2, and a caret at
-        // source offset 2 must anchor at the start of `标题`, not inside the
-        // `# ` run — otherwise the next keystroke is inserted into the marker
-        // and the marker text mutates into `# X`.
-        if (target === runEnd && run.dim) {
-          const next = line.runs.slice(line.runs.indexOf(run) + 1).find((c) => !c.marker)
-          if (next) {
-            return { lineIndex: li, runIndex: line.runs.indexOf(next), offsetInRun: 0 }
-          }
-        }
-        const within = target - run.src
-        const runIndex = line.runs.indexOf(run)
-        return { lineIndex: li, runIndex, offsetInRun: Math.max(0, Math.min(within, run.text.length)) }
+        return runIndexAtCursor(line, cursor, lineIndex)
       }
-      cursor += run.text.length
+      continue
     }
 
-    // Past the end of the line's visible text.
-    return runIndexAtCursor(line, cursor, li)
+    if (target >= run.src && target <= runEnd) {
+      // A target at a marker's very END belongs to the content that follows: the
+      // revealed `# ` of a heading ends at offset 2, and a caret at source offset
+      // 2 must anchor at the start of `标题`, not inside the `# ` run — otherwise
+      // the next keystroke is inserted into the marker and the marker text
+      // mutates into `# X`.
+      if (target === runEnd && run.dim) {
+        const next = line.runs.slice(line.runs.indexOf(run) + 1).find((c) => !c.marker)
+        if (next) {
+          return { lineIndex, runIndex: line.runs.indexOf(next), offsetInRun: 0 }
+        }
+      }
+      const within = target - run.src
+      const runIndex = line.runs.indexOf(run)
+      return { lineIndex, runIndex, offsetInRun: Math.max(0, Math.min(within, run.text.length)) }
+    }
+    cursor += run.text.length
   }
-  return null
+
+  // Past the end of the line's visible text.
+  return runIndexAtCursor(line, cursor, lineIndex)
 }
 
 /** The run holding visible cell `cursor`, with the caret at its end. */
@@ -397,6 +413,24 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
       }
       // Only laid-out characters inside this run count towards the offset.
       return src + Math.min(within, el.textContent?.length ?? 0)
+    }
+  }
+
+  // The caret sits in a DIRECT text node of the line box. That is what typing
+  // into an empty line produces: the line renders no run span of its own, so the
+  // browser inserts the characters straight into the box. Counting them is
+  // mandatory — returning the line's start instead put the model caret back
+  // before the character just typed, so the next keystroke landed in front of it
+  // and input came out reversed (`二行第`).
+  if (node.nodeType === Node.TEXT_NODE) {
+    let seen = 0
+    for (const child of Array.from(lineEl.childNodes)) {
+      if (child === node) return base + seen + offset
+      if (child.nodeType === Node.TEXT_NODE) {
+        seen += child.textContent?.length ?? 0
+      } else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
+        seen += child.textContent?.length ?? 0
+      }
     }
   }
 
@@ -653,7 +687,7 @@ export function sanitizeDom(root: HTMLElement | null): void {
     for (const node of Array.from(line.childNodes)) {
       if (node.nodeType !== Node.ELEMENT_NODE) continue
       const el = node as HTMLElement
-      if (el.hasAttribute('data-run') || el.hasAttribute('data-cell')) continue
+      if (el.hasAttribute('data-run') || el.hasAttribute('data-cell') || el.hasAttribute('data-br')) continue
       const text = el.textContent ?? ''
       if (text) el.replaceWith(document.createTextNode(text))
       else el.remove()
