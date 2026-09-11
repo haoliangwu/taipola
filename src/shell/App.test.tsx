@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import { loadDraft } from '../platform/documents'
+import { documents } from '../platform/documents'
 
 /**
  * App-level draft-persistence regression.
@@ -43,7 +43,7 @@ describe('草稿持久化', () => {
     // the 500ms debounce timer would ever fire.
     await new Promise((resolve) => setTimeout(resolve, 50))
     window.dispatchEvent(new Event('pagehide'))
-    const draft = loadDraft()
+    const draft = documents.draft.load()
     // The real caret sat at the line end, so 4 Backspaces removed 4 characters.
     expect(draft?.content).toBe('# 它FINA==现在\n\n正文\n')
     view.unmount()

@@ -3,18 +3,7 @@ import { Editor, type EditorHandle } from './components/Editor'
 import { Outline } from './components/Outline'
 import { computeStats, extractHeadings } from '../core/markdown'
 import { WELCOME_DOC } from '../core/welcome'
-import {
-  UserCancelled,
-  downloadAsFile,
-  downloadHtml,
-  loadDraft,
-  openFile,
-  saveDraft,
-  saveFile,
-  supportsFileSystemAccess,
-  type DocumentFile,
-} from '../platform/documents'
-import { renderDocumentHtml } from '../platform/html'
+import { documents, type OpenDocument } from '../platform/documents'
 import { THEME_LABEL, useTheme } from './useTheme'
 import {
   TABLE_SNIPPET,
@@ -33,13 +22,16 @@ export default function App() {
   const editorRef = useRef<EditorHandle>(null)
 
   const initial = useMemo(() => {
-    const draft = loadDraft()
+    const draft = documents.draft.load()
     if (draft) return { value: draft.content, name: draft.name }
     return { value: WELCOME_DOC, name: 'untitled.md' }
   }, [])
 
   const [value, setValue] = useState(initial.value)
-  const [file, setFile] = useState<DocumentFile | null>(null)
+  // Where the document lives, as far as the shell can tell: it holds this and
+  // hands it back to `documents.save`. Whether it is backed by a writable file
+  // handle is the adapter's business (platform/documents.ts).
+  const [doc, setDoc] = useState<OpenDocument | null>(null)
   const [fileName, setFileName] = useState(initial.name)
   const [savedValue, setSavedValue] = useState(initial.value)
   const [caretLine, setCaretLine] = useState(1)
@@ -64,15 +56,13 @@ export default function App() {
 
   // --- draft persistence -----------------------------------------------------
   useEffect(() => {
-    const timer = window.setTimeout(
-      () => saveDraft({ content: value, name: fileName, savedAt: Date.now() }),
-      DRAFT_DEBOUNCE_MS,
-    )
+    const draft = { content: value, name: fileName, savedAt: Date.now() }
+    const timer = window.setTimeout(() => documents.draft.save(draft), DRAFT_DEBOUNCE_MS)
     // The debounce timer dies the moment the page unloads: an edit made just
     // before refreshing could still be sitting in the timer, and reloading then
     // restores the STALE draft — observed as deleted text "coming back" after
     // a refresh. Flush synchronously on unload (localStorage writes are sync).
-    const flush = () => saveDraft({ content: value, name: fileName, savedAt: Date.now() })
+    const flush = () => documents.draft.save(draft)
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush()
     }
@@ -96,40 +86,42 @@ export default function App() {
 
   // --- file actions ----------------------------------------------------------
   const handleOpen = useCallback(async () => {
-    try {
-      const result = await openFile()
-      if (!result) return
-      editorRef.current?.setDocument(result.content)
-      setSavedValue(result.content)
-      setFile(result.file)
-      setFileName(result.file.name)
-      setHeadings(extractHeadings(result.content))
-      notify(`已打开 ${result.file.name}`)
-    } catch (error) {
-      notify(error instanceof UserCancelled ? '已取消' : `打开失败：${String(error)}`)
+    const result = await documents.open()
+    if (result.status === 'cancelled') return
+    if (result.status === 'failed') {
+      notify(`打开失败：${String(result.error)}`)
+      return
     }
+    const { document, content } = result
+    editorRef.current?.setDocument(content)
+    setSavedValue(content)
+    setDoc(document)
+    setFileName(document.name)
+    setHeadings(extractHeadings(content))
+    notify(`已打开 ${document.name}`)
   }, [notify])
 
   const handleSave = useCallback(
     async (forcePicker = false) => {
-      try {
-        const saved = await saveFile(value, file, forcePicker)
-        if (saved === null && !supportsFileSystemAccess()) {
-          notify('已下载文件')
-          setSavedValue(value)
-          return
-        }
-        if (saved) {
-          setFile(saved)
-          setFileName(saved.name)
-        }
-        setSavedValue(value)
-        notify('已保存')
-      } catch (error) {
-        notify(error instanceof UserCancelled ? '已取消' : `保存失败：${String(error)}`)
+      const result = await documents.save(doc, value, { forcePicker })
+      if (result.status === 'cancelled') {
+        // The user declined — dismissing the picker, or refusing the write
+        // permission. Nothing was written, so the document stays dirty.
+        notify('已取消')
+        return
       }
+      if (result.status === 'failed') {
+        notify(`保存失败：${String(result.error)}`)
+        return
+      }
+      if (result.status === 'saved') {
+        setDoc(result.document)
+        setFileName(result.document.name)
+      }
+      setSavedValue(value)
+      notify(result.status === 'downloaded' ? '已下载文件' : '已保存')
     },
-    [file, notify, value],
+    [doc, notify, value],
   )
 
   const handleNew = useCallback(() => {
@@ -137,7 +129,7 @@ export default function App() {
     const blank = '# 未命名\n\n'
     editorRef.current?.setDocument(blank)
     setSavedValue(blank)
-    setFile(null)
+    setDoc(null)
     setFileName('untitled.md')
     setHeadings(extractHeadings(blank))
     editorRef.current?.focus()
@@ -292,16 +284,14 @@ export default function App() {
           <button
             type="button"
             className="text-button"
-            onClick={() =>
-              downloadHtml(renderDocumentHtml(value), fileName, fileName.replace(/\.\w+$/, ''))
-            }
+            onClick={() => documents.exportHtml(value, doc)}
           >
             导出 HTML
           </button>
           <button
             type="button"
             className="text-button"
-            onClick={() => downloadAsFile(value, fileName)}
+            onClick={() => documents.exportMarkdown(value, doc)}
           >
             导出 MD
           </button>
@@ -331,7 +321,7 @@ export default function App() {
           {dirty ? '未保存' : '已同步'}
         </span>
         <span className="status-hint">
-          {supportsFileSystemAccess() ? '支持写回原文件' : '浏览器不支持写回，保存即下载'}
+          {documents.supportsWriteBack() ? '支持写回原文件' : '浏览器不支持写回，保存即下载'}
         </span>
       </footer>
 

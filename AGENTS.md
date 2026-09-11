@@ -29,7 +29,8 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   (source → view mapping), `inline.ts` (per-line state), `lists.ts` (numbering, indent),
   `editCommands.ts` (formatting commands), `welcome.ts` (the welcome document), `markdownIt.ts`
   (the shared markdown-it instance)
-- `src/platform/` — browser-API adapters: `documents.ts` (open/save/draft), `html.ts` (export)
+- `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
+  interface), `draft.ts` (localStorage), `html.ts` (markdown → sanitized HTML)
 - `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Outline.tsx`, `useTheme.ts`
 - `src/editor/` — the native kernel: `render.ts` (imperative rendering, DOM → source),
   `position.ts` (source offset ↔ DOM position), `kernel.ts` (state, events, same-frame caret)
