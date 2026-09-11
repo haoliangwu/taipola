@@ -358,9 +358,6 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  /* The desk behind the page: the centred `.doc` column reads as a sheet rather
-     than as text floating in an unbounded white field. */
-  background: var(--bg-panel);
 }
 
 /* ==========================================================================
@@ -468,8 +465,6 @@ body {
   width: 100%;
   max-width: var(--editor-max-width);
   margin: 0 auto;
-  /* The sheet itself, on the desk tinted by `.workspace`. */
-  background: var(--bg);
   padding: var(--editor-pad-y) var(--editor-pad-x);
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);

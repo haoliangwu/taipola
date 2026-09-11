@@ -170,6 +170,22 @@ export default function App() {
     [applyEdit],
   )
 
+  // Development helper: put the welcome document back after it has been
+  // overwritten by whatever you were poking at. From the browser console:
+  //   __welcome__()
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const scope = window as typeof window & { __welcome__?: () => string }
+    scope.__welcome__ = () => {
+      editorRef.current?.setDocument(WELCOME_DOC)
+      notify('已恢复欢迎文档')
+      return WELCOME_DOC
+    }
+    return () => {
+      delete scope.__welcome__
+    }
+  }, [notify])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey

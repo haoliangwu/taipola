@@ -66,9 +66,19 @@ pnpm test:watch    # 监听
 
 配色全部走 CSS 变量，所以**切换主题不影响行高与布局**。代码高亮的 token 颜色在深色下单独重新着色——highlight.js 只提供浅色主题，深色下若不覆盖会对比度不足。
 
-### 页面（纸张）
+### 开发辅助：恢复欢迎文档
 
-编辑区是一条**定宽居中**的文档列：`.doc` 的宽度由 `--editor-max-width`（默认 840px，约 50 个汉字）决定，`.workspace` 用 `--bg-panel` 作为"桌面"、`.doc` 用 `--bg` 作为"纸张"，于是短文档也不会缩成一条窄条。
+开发时把欢迎文档改坏了，不用清 localStorage——浏览器控制台里调用一次：
+
+```js
+__welcome__()
+```
+
+它把 `WELCOME_DOC` 写回编辑器并弹一个提示（只在 dev 构建里挂到 `window` 上，`import.meta.env.DEV` 为假时不存在）。
+
+### 页面宽度
+
+编辑区是一条**定宽居中**的文档列：`.doc` 的宽度由 `--editor-max-width`（默认 840px，约 50 个汉字）决定，短文档也不会缩成一条窄条。
 
 `width: 100%` 那一行是必需的、不是冗余：`.workspace` 是 column flex 容器，而交叉轴上的 `margin: 0 auto` 会让 `align-items: stretch` 失效，盒子退化为按内容收缩——长文档时被 `max-width` 兜住看不出问题，短文档时立刻现形。
 
