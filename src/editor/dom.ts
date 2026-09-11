@@ -236,13 +236,15 @@ export function anchorForSource(
   for (let li = 0; li < view.lines.length; li++) {
     const line = view.lines[li]
     // `lineEnd` is the offset just past this line's last character. A target
-    // EQUAL to it belongs to the NEXT line — that is where the newline sits — so
-    // the comparison must be `>=`. With `>` the caret fell into the previous
-    // line, which for a code block meant the collapsed fence line (visible
-    // length 0) swallowed every click on the first code line below it.
+    // EQUAL to it is still inside this line: the character before the caret is
+    // this line's last character, not a newline. Only a target strictly PAST it
+    // belongs to the next line. (Using `>=` sent the caret one line down whenever
+    // it sat at the end of a line whose next line exists — a fresh `- ` bullet
+    // put the caret at the start of the following list item, and the next Enter
+    // then wrote a second bullet into that item: `- - 第二项`.)
     const lineEnd = line.sourceStart + line.sourceToVisible.length
     const isLast = li === view.lines.length - 1
-    if (local >= lineEnd && !isLast) continue
+    if (local > lineEnd && !isLast) continue
 
     const target = Math.max(line.sourceStart, Math.min(local, lineEnd))
 

@@ -446,22 +446,33 @@ export class EditorKernel {
       // the existing '\n') produces the SAME string and made Enter a silent no-op
       // at the end of any line.
       if (live >= lineEnd) {
+        // Insert AFTER the line's own newline so the fresh line opens below it,
+        // but put the caret at the START of that new line (`live + 1`). Using
+        // the insertion point (`at + 1`) overshot by one line whenever the
+        // current line was empty: the caret landed on the start of the NEXT
+        // line's text, so typing glued onto the following paragraph.
         const at = lineEndRaw === -1 ? this.doc.length : lineEndRaw + 1
-        this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), at + 1)
+        this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), live + 1)
         return
       }
       this.commit(this.doc.slice(0, live) + '\n' + this.doc.slice(live), live + 1)
       return
     }
 
-    if (event.key === 'Backspace' && live !== null && live > 0) {
-      const index = this.blockAt(live)
-      if (index > 0 && live === this.offsets[index]) {
-        const prevEnd = this.offsets[index - 1] + this.blocks[index - 1].raw.length
-        const separator = this.doc[prevEnd] === '\n' ? 1 : 0
+    // Backspace at the START of a source line: join it with the previous line by
+    // deleting exactly that newline. Letting the browser do it is what ate a
+    // character out of the previous block's text node instead — the browser sees
+    // our line boxes, not source lines, so from an empty line box it deleted the
+    // last character of the nearest text it could find and then dropped a line.
+    // (This also covers the old "caret at a block start" case, which is just a
+    // line start at a block boundary.)
+    if (event.key === 'Backspace' && live !== null && live > 0 && this.doc[live - 1] === '\n') {
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        this.commit(this.doc.slice(0, prevEnd) + this.doc.slice(prevEnd + separator), prevEnd)
+        this.commit(this.doc.slice(0, live - 1) + this.doc.slice(live), live - 1)
+        return
       }
     }
   }

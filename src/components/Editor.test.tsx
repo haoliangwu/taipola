@@ -349,3 +349,51 @@ describe('NotFoundError 回归（换行时不应该有 React removeChild 异常�
     expect(errSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
+  it('段落行末连按两次回车后光标停在新空行上（打字不粘进下一段）', async () => {
+    const r = renderEditor('第一段文字\n\n第二段\n')
+    await clickInRun(r, 0, 0, 0, 1.0)
+    await flush()
+    await pressEnter(r)
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
+    // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
+    await r.user.keyboard('X')
+    await flush()
+    // 每次回车都在光标所在行"下方"开新行，光标跟着新行走：X 独占一行，
+    // 上下各留一个空行（上行来自第一次回车，下行是第二段前原有的空行）。
+    // 关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
+    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n第二段\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('列表项回车后光标落在新 bullet 上；再次回车退出列表且不改动下一项', async () => {
+    const r = renderEditor('- 第一项\n- 第二项\n')
+    await clickInRun(r, 0, 0, 1, 1.0)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- 第一项\n- \n- 第二项\n')
+    // 新 bullet 行是 `- `（源码偏移 6..8），光标应当停在它的行尾。
+    expect(caretFromDom()).toBe(8)
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- 第一项\n\n- 第二项\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('标题行末回车后按退格：只并回一行，不吃掉标题字符', async () => {
+    const r = renderEditor('# 标题\n\n正文\n')
+    await clickInRun(r, 0, 0, 1, 1.0)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('# 标题\n\n\n正文\n')
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('# 标题\n\n正文\n')
+    await assertDomMatchesSource(r)
+  })
+})
