@@ -85,7 +85,10 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         const start = offsets[block.index]
         const end = start + block.raw.length
         const revealed = caret >= start && caret <= end ? [caret] : []
-        return buildBlockView(block.raw, start, revealed)
+        // A blank block's span covers possibly several source lines (raw is
+        // empty); render one line box per blank line so the view mirrors the
+        // document exactly.
+        return buildBlockView(block.raw, start, revealed, block.endLine - block.startLine)
       }),
     [blocks, caret, offsets],
   )
@@ -152,40 +155,76 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
   const placeCaret = useCallback(() => {
     const want = pending.current
-    if (want === null || activeIndex === null) return
-    const host = rootRef.current?.querySelector<HTMLElement>(`[data-block="${activeIndex}"]`)
-    const view = views[activeIndex]
-    const block = blocks[activeIndex]
+    if (want === null) return
+
+    // Find the host block BY DOCUMENT OFFSET against the CURRENT (post-render)
+    // blocks. Deriving it from the caret's line number through `lineToBlock`
+    // mis-assigns whenever the edit changed the line layout: `commit` computed
+    // the line number in the NEW document while `lineToBlock` still walked the
+    // OLD block list, so a list-continuation Enter (which inserts a line above
+    // the caret) landed the caret in the trailing blank block — and every
+    // subsequent Enter operated on an empty line at the end of the document.
+    let index = -1
+    for (let i = 0; i < blocks.length; i++) {
+      const end = i + 1 < offsets.length ? offsets[i + 1] : doc.length
+      if (want >= offsets[i] && want < end) {
+        index = i
+        break
+      }
+    }
+    // `want === doc.length` sits past every block's span; clamp to the last one.
+    if (index === -1) index = blocks.length - 1
+    if (index < 0) return
+
+    const host = rootRef.current?.querySelector<HTMLElement>(`[data-block="${index}"]`)
+    const view = views[index]
+    const block = blocks[index]
     if (!host || !view || !block) return
+    if (activeIndex !== index) {
+      setActiveIndex(index)
+      onCaretLineChange?.(lineOfOffset(doc, want))
+    }
     pending.current = null
 
-    const target = anchorForSource(view, offsets[activeIndex], want)
+    const target = anchorForSource(view, offsets[index], want)
     if (!target) return
     const lineEl = host.querySelector<HTMLElement>(`[data-vline="${target.lineIndex}"]`)
     if (!lineEl) return
     const span = lineEl.querySelectorAll<HTMLElement>('[data-run]')[target.runIndex]
-    if (!span) return
 
     // Focus the EDITABLE ROOT, not the block div: only the root carries
     // `contentEditable`, so keyboard input lands in the editor at all. With the
     // block focused (a plain div), typing went nowhere — the caret looked right
     // but `activeElement` stayed BODY.
     rootRef.current?.focus({ preventScroll: true })
-    const node = span.firstChild
     const range = document.createRange()
-    if (node && node.nodeType === Node.TEXT_NODE) {
-      range.setStart(node, Math.max(0, Math.min(target.offsetInRun, node.textContent?.length ?? 0)))
+    if (span) {
+      const node = span.firstChild
+      if (node && node.nodeType === Node.TEXT_NODE) {
+        range.setStart(node, Math.max(0, Math.min(target.offsetInRun, node.textContent?.length ?? 0)))
+      } else {
+        range.selectNodeContents(span)
+      }
     } else {
-      range.selectNodeContents(span)
+      // An EMPTY line (a blank block, or the blank line left by exiting an empty
+      // list item) has no run spans — it renders only a `<br>`. Aborting here
+      // left the DOM selection clamped on the previous line by the browser, and
+      // the read-back dragged the document caret back with it: the "blank line
+      // disappears" bug. Anchor on the line element itself instead.
+      range.setStart(lineEl, 0)
     }
     range.collapse(true)
     const sel = window.getSelection()
     sel?.removeAllRanges()
     sel?.addRange(range)
     placedByUs.current = true
-  }, [activeIndex, blocks, offsets, views])
+  }, [activeIndex, blocks, doc, offsets, onCaretLineChange, views])
 
   useLayoutEffect(() => {
+    // The re-render just committed; any direct text node left in a line box is
+    // browser residue the model already absorbed — drop it so the DOM mirrors
+    // the source exactly (prevents double-counting on the next read).
+    stripForeignText(rootRef.current)
     if (pending.current !== null) placeCaret()
   })
 
@@ -229,6 +268,21 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   }, [doc, onCaretLineChange, readCaret])
 
   // --- input -----------------------------------------------------------------
+  useEffect(() => {
+    // Listen to `beforeinput` natively, NOT via React's synthetic `onBeforeInput`:
+    // React only synthesises it from textInput/keypress/paste, which jsdom has
+    // none of — the arm/disarm dance below would never run in tests. A native
+    // listener behaves identically in real browsers.
+    const root = rootRef.current
+    if (!root) return
+    const arm = () => {
+      placedByUs.current = false
+      userEditPending.current = true
+    }
+    root.addEventListener('beforeinput', arm)
+    return () => root.removeEventListener('beforeinput', arm)
+  }, [])
+
   const onInput = useCallback(() => {
     // Ignore DOM mutations we caused ourselves (re-render, programmatic caret).
     // Rebuilding the source from such a DOM would delete the collapsed markers it
@@ -241,6 +295,29 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     if (!host || !block) return
 
     const nextRaw = readBlockSource(host)
+    // The browser sometimes injects ELEMENTS of its own into the editable tree
+    // (native contenteditable Enter/paste). They are not part of React's tree,
+    // and the next re-render would removeChild a node it does not own — the
+    // occasional NotFoundError. Strip them while we are inside the input event,
+    // before React re-renders.
+    sanitizeDom(rootRef.current)
+
+    // Text typed while the caret sat in the editable ROOT itself (a click below
+    // the last block) lands directly under the root, belonging to no block.
+    // Absorb it as an append at the end of the document — otherwise the
+    // keystrokes would be deleted by the next re-render and silently lost.
+    const rootText = (() => {
+      let t = ''
+      for (const node of rootRef.current?.childNodes ?? []) {
+        if (node.nodeType === Node.TEXT_NODE && node.textContent) t += node.textContent
+      }
+      return t
+    })()
+    if (rootText !== '') {
+      if (!composing.current) pushUndo({ value: doc, caret })
+      commit(doc + rootText, doc.length + rootText.length)
+      return
+    }
     if (nextRaw === block.raw) return
     if (!composing.current) pushUndo({ value: doc, caret })
 
@@ -286,40 +363,102 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         undo(event.shiftKey)
         return
       }
-      if (mod || composing.current || activeIndex === null) return
-      const block = blocks[activeIndex]
-      if (!block) return
+      if (mod || composing.current) return
 
-      if (event.key === 'Enter' && !event.shiftKey) {
+      // The React `caret`/`activeIndex` states are *snapshots* — they commit
+      // after the current event loop turn. A click that landed a moment ago (or
+      // a selection moved by the browser) may not have committed yet, so keyed
+      // edits must derive the block AND the caret from the DOM directly, exactly
+      // like `onInput` does. Using the stale state made Enter act on the
+      // previous caret: clicking a heading's end then pressing Enter "did
+      // nothing" (the newline landed at the old position).
+      const live = readCaret()
+      const liveBlock = (() => {
+        if (live === null) return null
+        const sel = window.getSelection()
+        const node = sel?.rangeCount ? sel.getRangeAt(0).startContainer : null
+        const host = (node instanceof Element ? node : node?.parentElement)?.closest?.<HTMLElement>('[data-block]')
+        return host ? Number(host.dataset.block) : null
+      })()
+      const block = liveBlock === null ? null : blocks[liveBlock]
+
+      if (event.key === 'Enter') {
+        // Enter is ALWAYS intercepted here, also when the DOM caret sits outside
+        // every block (a click below the last line): the browser's native
+        // contenteditable Enter would inject a <br>/<div> into the DOM behind
+        // React's back, and the next re-render then throws the occasional
+        // `NotFoundError: removeChild`. Outside the blocks, Enter simply appends
+        // a newline at the end of the document.
         event.preventDefault()
-        const lineStart = doc.lastIndexOf('\n', Math.max(0, caret - 1)) + 1
-        const lineEndRaw = doc.indexOf('\n', caret)
+        const at = live ?? doc.length
+        if (event.shiftKey) {
+          pushUndo({ value: doc, caret })
+          commit(doc.slice(0, at) + '\n' + doc.slice(at), at + 1)
+          return
+        }
+        if (!block) {
+          pushUndo({ value: doc, caret })
+          commit(doc + '\n', doc.length + 1)
+          return
+        }
+        const liveCaret = at
+        const lineStart = doc.lastIndexOf('\n', Math.max(0, liveCaret - 1)) + 1
+        const lineEndRaw = doc.indexOf('\n', liveCaret)
         const lineEnd = lineEndRaw === -1 ? doc.length : lineEndRaw
         const currentLine = doc.slice(lineStart, lineEnd)
         const prefix = /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s*)/.exec(currentLine)?.[0] ?? ''
         const body = currentLine.slice(prefix.length)
         pushUndo({ value: doc, caret })
-        if (prefix !== '' && body.trim() === '' && caret >= lineEnd) {
-          commit(doc.slice(0, lineStart) + doc.slice(lineEnd), lineStart)
+        // An EMPTY item (`- ` alone on the line, caret anywhere on it) exits
+        // the list: the bullet is removed but the line stays as a blank line.
+        // Caret-relative checks (caret >= lineEnd) fail when the item is the
+        // last line of the document (no trailing newline: lineEnd becomes
+        // doc.length, larger than caret).
+        if (prefix !== '' && currentLine === prefix && body.trim() === '') {
+          // Remove just the bullet text; the line's own newline (if any)
+          // remains, leaving an empty line.
+          const withoutBullet = doc.slice(0, lineStart) + doc.slice(lineStart + prefix.length)
+          commit(withoutBullet, lineStart)
           return
         }
-        const nextPrefix = /^\s*\d+[.)]/.test(prefix)
-          ? prefix.replace(/(\d+)([.)])/, (_m, n: string, d: string) => `${Number(n) + 1}${d}`)
-          : prefix
-        const insert = `\n${nextPrefix}`
-        commit(doc.slice(0, caret) + insert + doc.slice(caret), caret + insert.length)
+        if (prefix !== '') {
+          const nextPrefix = /^\s*\d+[.)]/.test(prefix)
+            ? prefix.replace(/(\d+)([.)])/, (_m, n: string, d: string) => `${Number(n) + 1}${d}`)
+            : prefix
+          const insert = `\n${nextPrefix}`
+          commit(doc.slice(0, liveCaret) + insert + doc.slice(liveCaret), liveCaret + insert.length)
+          return
+        }
+        // A plain line, caret at its very END: Typora splits AFTER the line's
+        // newline, so a fresh empty line opens below. Inserting at `lineEnd`
+        // itself (just before the existing '\n') produces the SAME string and
+        // made Enter a silent no-op at the end of any line.
+        if (liveCaret >= lineEnd) {
+          const at = lineEndRaw === -1 ? doc.length : lineEndRaw + 1
+          commit(doc.slice(0, at) + '\n' + doc.slice(at), at + 1)
+          return
+        }
+        commit(doc.slice(0, liveCaret) + '\n' + doc.slice(liveCaret), liveCaret + 1)
         return
       }
 
-      if (event.key === 'Backspace' && caret === offsets[activeIndex] && activeIndex > 0) {
-        const prevEnd = offsets[activeIndex - 1] + blocks[activeIndex - 1].raw.length
+      // Shift+Enter (soft break) is handled inside the Enter branch above.
+
+      if (
+        event.key === 'Backspace' &&
+        live !== null &&
+        liveBlock !== null &&
+        live === offsets[liveBlock] &&
+        liveBlock > 0
+      ) {
+        const prevEnd = offsets[liveBlock - 1] + blocks[liveBlock - 1].raw.length
         const separator = doc[prevEnd] === '\n' ? 1 : 0
         event.preventDefault()
         pushUndo({ value: doc, caret })
         commit(doc.slice(0, prevEnd) + doc.slice(prevEnd + separator), prevEnd)
       }
     },
-    [activeIndex, blocks, caret, commit, doc, offsets, pushUndo, undo],
+    [blocks, caret, commit, doc, offsets, pushUndo, readCaret, undo],
   )
 
   // --- imperative API --------------------------------------------------------
@@ -388,30 +527,26 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       className="doc"
       ref={rootRef}
       onMouseDownCapture={(event) => {
-        // A click decides the caret itself. Letting the browser place it instead
-        // loses the click's position entirely, because the block re-renders from
-        // source the moment it becomes active.
+        // A click decides the caret itself — but we must NOT preventDefault:
+        // killing the mousedown default also kills the browser's native text
+        // selection, so heading/paragraph text could never be sweep-selected
+        // with the mouse. Let the browser start its selection, and place the
+        // caret from our own hit-testing on top (the selection stays intact,
+        // so dragging still works).
         placedByUs.current = false
         if (readOnly) return
         const hit = sourceOffsetAtPoint(event.clientX, event.clientY, event.target as Element | null)
         if (hit === null) return
-        event.preventDefault()
         // The hit test works in block-local coordinates (that is what `data-src`
         // and the view both use); the caret model works in document coordinates.
         // Convert once, here, and nowhere else.
         const target = offsets[hit.block] + hit.local
-        pending.current = target
-        placedByUs.current = true
         setActiveIndex(hit.block)
         setCaret(target)
         onCaretLineChange?.(lineOfOffset(doc, target))
       }}
       onKeyDownCapture={() => {
         placedByUs.current = false
-      }}
-      onBeforeInput={() => {
-        placedByUs.current = false
-        userEditPending.current = true
       }}
       onInput={onInput}
       onKeyDown={onKeyDown}
@@ -453,7 +588,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
                 </span>
               )
               return (
-                <div key={li} data-vline={li} className={lineClass(state)}>
+                <div key={li} data-vline={li} data-src={line.sourceStart} className={lineClass(state)}>
                   {line.runs.length === 0 ? (
                     <br />
                   ) : line.cellRuns ? (
@@ -549,6 +684,17 @@ function anchorForSource(
       }
 
       if (target >= run.src && target <= runEnd) {
+        // A target at a marker's very END belongs to the content that follows:
+        // the revealed `# ` of a heading ends at offset 2, and a caret at
+        // source offset 2 must anchor at the start of `标题`, not inside the
+        // `# ` run — otherwise the next keystroke is inserted into the marker
+        // and the marker text mutates into `# X`.
+        if (target === runEnd && run.dim) {
+          const next = line.runs.slice(line.runs.indexOf(run) + 1).find((c) => !c.marker)
+          if (next) {
+            return { lineIndex: li, runIndex: line.runs.indexOf(next), offsetInRun: 0 }
+          }
+        }
         const within = target - run.src
         const runIndex = line.runs.indexOf(run)
         return { lineIndex: li, runIndex, offsetInRun: Math.max(0, Math.min(within, run.text.length)) }
@@ -716,7 +862,10 @@ function sourceOffsetAtPoint(
   if (last) {
     return { block, local: Number(last.dataset.src) + (last.textContent?.length ?? 0) }
   }
-  return { block, local: 0 }
+  // An empty line has no laid-out runs (only a `<br>`); the caret belongs at
+  // the START of this line, not at the start of the whole block.
+  const src = lineEl.dataset.src
+  return { block, local: src === undefined ? 0 : Number(src) }
 }
 
 /** Character index within an element's text nearest to a viewport x. */
@@ -743,13 +892,89 @@ function glyphOffsetAtX(el: HTMLElement, clientX: number): number {
 function readBlockSource(host: HTMLElement): string {
   const out: string[] = []
   host.querySelectorAll<HTMLElement>('[data-vline]').forEach((lineEl) => {
-    let text = ''
-    lineEl.querySelectorAll<HTMLElement>('[data-run]').forEach((span) => {
-      text += span.textContent ?? ''
-    })
-    out.push(text)
+    out.push(textOfLine(lineEl))
   })
   return out.join('\n')
+}
+
+/**
+ * The characters a line box currently holds, in DOM order.
+ *
+ * Span text is the common case. A line box can also hold DIRECT text nodes: the
+ * browser inserts typing into an empty line (which renders only a `<br>`)
+ * straight into the box, before any run span exists. Skipping them silently
+ * ate every keystroke typed into an empty line, so both sources are read,
+ * plus the runs nested inside table cells.
+ */
+function textOfLine(lineEl: HTMLElement): string {
+  let text = ''
+  for (const node of lineEl.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? ''
+    } else if (node instanceof HTMLElement) {
+      if (node.hasAttribute('data-run')) text += node.textContent ?? ''
+      else if (node.hasAttribute('data-cell')) {
+        node.querySelectorAll<HTMLElement>('[data-run]').forEach((run) => {
+          text += run.textContent ?? ''
+        })
+      }
+      // `<br>` and other foreign elements contribute no characters.
+    }
+  }
+  return text
+}
+
+/**
+ * Removes text nodes sitting directly in a line box.
+ *
+ * All real characters live inside `[data-run]` spans; a direct text node can
+ * only be residue of a browser edit that the model has already absorbed
+ * (typing into an empty line re-rendered into a run span). Stripping it after
+ * every render keeps the DOM an exact mirror of the model, so the next
+ * `readBlockSource` never double-counts.
+ */
+function stripForeignText(root: HTMLElement | null): void {
+  if (!root) return
+  // Direct text nodes of the ROOT: characters typed while the caret sat below
+  // the last block. The model absorbed them (appended) in `onInput`; the
+  // re-render placed them into proper runs, so the residue goes away.
+  for (const node of Array.from(root.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE && node.textContent !== '') node.remove()
+  }
+  root.querySelectorAll<HTMLElement>('[data-vline]').forEach((line) => {
+    for (const node of Array.from(line.childNodes)) {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent !== '') node.remove()
+    }
+  })
+}
+
+/**
+ * Removes DOM nodes the browser inserted behind React's back.
+ *
+ * The editable root and its line boxes may accumulate stray elements (a `br` or
+ * `div` from a native contenteditable Enter, rich-text fragments from a paste).
+ * React's reconciliation only manages the nodes it created; a stray node that
+ * React later expects to remove throws `NotFoundError: removeChild`. Everything
+ * the editor renders is a `[data-block]` holding `[data-vline]` lines holding
+ * `[data-run]`/`[data-cell]` spans plus the lone `br` of an empty line — anything
+ * else inside those boundaries is foreign and can go.
+ */
+function sanitizeDom(root: HTMLElement | null): void {
+  if (!root) return
+  for (const child of Array.from(root.children)) {
+    if (!(child instanceof HTMLElement) || !child.hasAttribute('data-block')) child.remove()
+  }
+  root.querySelectorAll<HTMLElement>('[data-vline]').forEach((line) => {
+    for (const node of Array.from(line.childNodes)) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue
+      const el = node as HTMLElement
+      if (el.hasAttribute('data-run') || el.hasAttribute('data-cell')) continue
+      // The lone `<br/>` of an empty line is React's own; keep it, remove any
+      // other element that wandered in.
+      if (el.tagName === 'BR' && line.children.length === 1) continue
+      el.remove()
+    }
+  })
 }
 
 /** Character offset of the start of a 1-based line. */

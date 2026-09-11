@@ -68,7 +68,21 @@ export default function App() {
       () => saveDraft({ content: value, name: fileName, savedAt: Date.now() }),
       DRAFT_DEBOUNCE_MS,
     )
-    return () => window.clearTimeout(timer)
+    // The debounce timer dies the moment the page unloads: an edit made just
+    // before refreshing could still be sitting in the timer, and reloading then
+    // restores the STALE draft — observed as deleted text "coming back" after
+    // a refresh. Flush synchronously on unload (localStorage writes are sync).
+    const flush = () => saveDraft({ content: value, name: fileName, savedAt: Date.now() })
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [fileName, value])
 
   useEffect(() => {

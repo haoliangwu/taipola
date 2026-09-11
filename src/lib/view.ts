@@ -482,14 +482,34 @@ function markFor(tokens: Token[], start: number, end: number): Mark {
  *
  * Lines between two fence markers are code content: their `inCode` flag means
  * no inline parsing and no block prefixes — a `**` inside a fence is literal.
+ *
+ * `lineCount` is the block's OFFICIAL line span (endLine - startLine), which
+ * can exceed the raw's own line count: the parser strips trailing blank lines
+ * from a block's raw (a markdown-it list range often covers the blank line
+ * after its last item). Without padding, a caret on those stripped lines had
+ * no box to anchor to and fell back onto the last content line — a list's
+ * empty-item exit would drop the caret back into the item instead of the
+ * blank line. Blank blocks carry no source at all, so their span is the only
+ * measure of how many blank boxes they must render — `2\n\n\n` consecutive
+ * blank lines collapsing into one invisible box made repeated Enters change
+ * the source with no visible effect.
  */
-export function buildBlockView(raw: string, blockStart: number, revealAt: number[]): BlockView {
+export function buildBlockView(
+  raw: string,
+  blockStart: number,
+  revealAt: number[],
+  lineCount?: number,
+): BlockView {
   const reveals = revealAt.map((r) => r - blockStart)
   const revealInBlock = reveals.length > 0
   const lines: ViewLine[] = []
   let base = 0
   let inFence = false
-  for (const line of raw.split('\n')) {
+
+  const rawLines = raw === '' ? [] : raw.split('\n')
+  const total = Math.max(rawLines.length, lineCount ?? (rawLines.length || 1))
+  for (let li = 0; li < total; li++) {
+    const line = li < rawLines.length ? rawLines[li] : ''
     const local = reveals.filter((r) => r >= base && r <= base + line.length)
     const fenceLine = /^\s*(`{3,}|~{3,})/.test(line)
     lines.push(

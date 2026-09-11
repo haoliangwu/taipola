@@ -6,7 +6,36 @@
 pnpm install
 pnpm dev      # http://localhost:5178
 pnpm build    # 产出 dist/
+pnpm test     # vitest browser mode（真实 Chromium）
 ```
+
+## 测试
+
+测试跑在 **vitest browser mode**（Playwright + 真实 Chromium），不是 jsdom：编辑器输入走浏览器原生管线（`keydown → beforeinput → DOM 变更 → input`），点击/键盘由 userEvent 与真实坐标驱动，因此 jsdom 无法模拟的 `beforeinput`、原生选区、拖选、IME 行为都能真实覆盖。
+
+```bash
+pnpm test          # 跑一遍
+pnpm test:watch    # 监听
+```
+
+首次运行会下载 Chromium 到本项目 `.pw-browsers/`（沙箱环境装不进 `~/Library/Caches/ms-playwright` 时用 `PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers`）。
+
+`src/test/editorTestUtils.tsx` 提供真实操作助手：
+
+- `clickInRun` / `clickAtLine`：按真实坐标点击 run / 空行，浏览器自行解析字形位置（坐标是相对目标元素的；传绝对坐标会把光标点偏到行末）
+- `typeText` / `pressBackspace` / `pressEnter` / `pressShiftEnter`：真实键序列
+- `caretFromDom`：DOM 选区 → 文档源码偏移（含空行锚定）
+- `assertDomMatchesSource`：DOM 各行拼接后必须与文档源码逐字一致（`\n+` 尾部除外）
+
+覆盖的回归场景（`src/components/Editor.test.tsx`、`src/App.test.tsx`）：
+
+1. **标题按 Enter**：光标中间拆分、行末新增空行（行末不再是 no-op）、Shift+Enter 软换行
+2. **列表**：末项 Enter 续行、空 bullet 再次 Enter 退出列表且**保留空行**、退出后光标停在空行上
+3. **空行**：点击空行、空行上打字不丢字
+4. **鼠标选中**：选区跨越 reveal 翻转（块级标记显现/折叠）时视图重渲染不摧毁选区
+5. **撤销 / 数据完整性**：backspace 删除后源码持久化、backspace 后继续输入
+6. **NotFoundError 回归**：各位置反复 Enter、文档底部（块外）点击后 Enter + 打字，均不抛 React 异常且 DOM 与模型一致
+7. **草稿持久化**：编辑后立刻 `pagehide`（刷新前）草稿不回退
 
 ## 现在能做什么
 
@@ -41,7 +70,7 @@ pnpm build    # 产出 dist/
 ```
 .doc                          唯一的滚动容器（contenteditable）
 └── .blk[data-block]          一个 markdown-it 块，data-src-start 记录块起点
-    └── [data-vline]          块内的一行源码 = 一个行盒
+    └── [data-vline]          块内的一行源码 = 一个行盒，data-src 记录行起点
         └── [data-run]        一个样式/可见性一致的 run，data-src 记录块内源偏移
 ```
 
@@ -74,8 +103,10 @@ pnpm build    # 产出 dist/
 
 - `ViewRun.src` / `data-src` 一律是**块内偏移**；`.blk` 的 `data-src-start` 是文档偏移。换算只在点击处理器里做一次。
 - **run 分段在隐藏/显现两个状态间保持一致**（token 边界 + 块级标记边界预先定死），显现只切换 CSS 类、从不替换文本节点——否则锚在相邻文本里的光标会被挪走。
-- 源代码永远是权威；DOM 只是反射。光标状态是源码偏移，DOM 选区读回只在真实手势之后才被信任（`placedByUs` 守卫）。
+- **块视图按官方行跨度补足空行**：解析器会把块尾的空白行从 raw 里剥掉（markdown-it 的列表范围常覆盖末项后的空行），视图必须按 `endLine - startLine` 补齐空行盒，空行上的光标才有落点。
+- **源代码永远是权威；DOM 只是反射。** 光标状态是源码偏移，DOM 选区读回只在真实手势之后才被信任（`placedByUs` 守卫）。
 - `userEditPending`：`beforeinput` 置位、`input` 消费，只有真实用户编辑才从 DOM 重建源码；重渲染引起的 DOM 变动不会反向写回（否则折叠标记会被删掉）。
+- **Enter 永远被接管**（光标在块外时也不例外）：原生 contenteditable Enter 会向 DOM 注入 `<br>`/`<div>`，下一次重渲染就抛 `NotFoundError: removeChild`。`onInput` 里还会清掉已混入的孤儿元素。
 - `assertSourcePreserved`（dev）：每个块都必须恰好覆盖源码对应区间，一字不丢。改块收集逻辑时保持它安静。
 
 ### 会破坏光标的坑（都踩过）
@@ -94,7 +125,7 @@ pnpm build    # 产出 dist/
 ## 已知限制
 
 - **表格各列等宽**（`grid-auto-columns: minmax(0, 1fr)`），不做按内容自适应；无边框与表头样式。
-- **空行渲染为行盒**：空源行和折叠的围栏行占据一个空行盒的高度。
+- **空行按源码行数渲染**：空源行与折叠的围栏行各占一个空行盒；连续空行不再合并成一个盒子。
 - **标题前缀按块显现**：光标在标题行时 `# ` 显示为暗色；不在该块时折叠。
 - 图片会按行内元素渲染，高度受限于一个行盒；加载完成后不会引起位移。
 - mermaid、数学公式尚未支持。

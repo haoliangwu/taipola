@@ -6,3 +6,4 @@ dist-ssr
 .vite
 *.tsbuildinfo
 .dsh-vision-toolkit
+.pw-browsers

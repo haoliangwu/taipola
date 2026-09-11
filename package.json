@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false"
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "dompurify": "^3.2.7",
@@ -20,11 +22,19 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/markdown-it": "^14.1.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "@vitest/browser": "^5.0.0",
+    "@vitest/browser-playwright": "5.0.0",
+    "jsdom": "^30.0.1",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "vitest": "^5.0.0"
   }
 }
