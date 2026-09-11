@@ -609,15 +609,13 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
                 )
                 return (
                   <div key={li} data-vline={li} data-src={line.sourceStart} className={lineClass(state)}>
-                    {line.runs.length === 0 ? (
-                      <br />
-                    ) : line.cellRuns ? (
+                    {line.runs.length === 0 ? null : line.cellRuns ? (
                       // A table row is a grid of CELLS, not of runs: one cell per
                       // grid item, so revealed inline markers inside a cell stay
                       // inside its column instead of each becoming a column.
                       line.cellRuns.map((cell, ci) => (
                         <span key={ci} className="cell" data-cell={ci}>
-                          {cell.length === 0 ? <br /> : cell.map((ri) => renderRun(line.runs[ri], ri))}
+                          {cell.length === 0 ? null : cell.map((ri) => renderRun(line.runs[ri], ri))}
                         </span>
                       ))
                     ) : (
@@ -993,8 +991,9 @@ function stripForeignText(root: HTMLElement | null): void {
  * React's reconciliation only manages the nodes it created; a stray node that
  * React later expects to remove throws `NotFoundError: removeChild`. Everything
  * the editor renders is a `[data-block]` holding `[data-vline]` lines holding
- * `[data-run]`/`[data-cell]` spans plus the lone `br` of an empty line — anything
- * else inside those boundaries is foreign.
+ * `[data-run]`/`[data-cell]` spans (empty lines render NO child of their own —
+ * the line box's min-height keeps them one line tall, and there is no `br` for
+ * the browser or React to fight over).
  *
  * A foreign element's TEXT is salvaged into its parent line box (a pasted
  * `<div>` loses its wrapper, not its characters): `readDocumentSource` picks
@@ -1014,9 +1013,6 @@ function sanitizeDom(root: HTMLElement | null): void {
       if (node.nodeType !== Node.ELEMENT_NODE) continue
       const el = node as HTMLElement
       if (el.hasAttribute('data-run') || el.hasAttribute('data-cell')) continue
-      // The lone `<br/>` of an empty line is React's own; keep it, remove any
-      // other element that wandered in.
-      if (el.tagName === 'BR' && line.children.length === 1) continue
       const text = el.textContent ?? ''
       if (text) el.replaceWith(document.createTextNode(text))
       else el.remove()
