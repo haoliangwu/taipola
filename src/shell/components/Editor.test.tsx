@@ -33,20 +33,26 @@ describe('标题（block 级标记）', () => {
     r = renderEditor(WELCOME)
   })
 
-  it('点击标题文本后按 Enter，标题按光标位置拆成两行', async () => {
-    await clickInRun(r, 0, 0, 1, 0.5)
-    const linesBefore = r.getDoc().split('\n').length
+  it('点击标题文本中间后按 Enter，标题按光标位置拆成两行', async () => {
+    await clickInRun(r, 0, 0, 1, 'middle')
+    const heading = WELCOME.split('\n')[0]
+    // 这次点击真的落在文字中间（修复前助手一律落行尾，用例名不副实）：
+    // 光标既不在 `# ` 之后的行首，也不在行尾。
+    const caret = caretFromDom() ?? -1
+    expect(caret).toBeGreaterThan(2)
+    expect(caret).toBeLessThan(heading.length)
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    expect(doc.split('\n').length).toBeGreaterThan(linesBefore)
-    expect(doc).toContain('# ')
-    expect(doc).toContain('taipola')
+    expect(doc.split('\n').length).toBeGreaterThan(1)
+    // 标题在光标处断成两行：两半拼回去正好还是原来那一行标题。
+    const [first, second] = doc.split('\n')
+    expect(first + second).toBe(heading)
     await assertDomMatchesSource(r)
   })
 
   it('点击标题行末按 Enter，标题下新增一个空行', async () => {
-    await clickInRun(r, 0, 0, 1, 1.0)
+    await clickInRun(r, 0, 0, 1, 'end')
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
@@ -56,7 +62,7 @@ describe('标题（block 级标记）', () => {
 
   it('段落行末按 Enter 也能换行（行末不再是 no-op）', async () => {
     const p = renderEditor('一段文字\n\n第二段\n')
-    await clickInRun(p, 0, 0, 0, 1.0)
+    await clickInRun(p, 0, 0, 0, 'end')
     await pressEnter(p)
     await flush()
     expect(p.getDoc()).toBe('一段文字\n\n\n第二段\n')
@@ -64,7 +70,7 @@ describe('标题（block 级标记）', () => {
   })
 
   it('列表退出空 bullet 后光标停在空行上（不往回跳）', async () => {
-    await clickInRun(r, 6, 2, 4, 1.0)
+    await clickInRun(r, 6, 2, 4, 'end')
     await pressEnter(r)
     await flush()
     await pressEnter(r)
@@ -87,7 +93,7 @@ describe('标题（block 级标记）', () => {
   })
 
   it('Shift+Enter 在标题产生软换行且不触发 React 异常', async () => {
-    await clickInRun(r, 0, 0, 1, 0.5)
+    await clickInRun(r, 0, 0, 1, 'middle')
     const linesBefore = r.getDoc().split('\n').length
     await pressShiftEnter(r)
     await flush()
@@ -128,7 +134,7 @@ describe('列表', () => {
   })
 
   it('列表末项按 Enter 新增一个空 bullet 行', async () => {
-    await clickInRun(r, 6, 2, 4, 1.0)
+    await clickInRun(r, 6, 2, 4, 'end')
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toContain('内容\n- ')
@@ -136,7 +142,7 @@ describe('列表', () => {
   })
 
   it('空 bullet 行再次 Enter：bullet 消失但保留一个空行（不吞换行）', async () => {
-    await clickInRun(r, 6, 2, 4, 1.0)
+    await clickInRun(r, 6, 2, 4, 'end')
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toContain('内容\n- ')
@@ -153,7 +159,7 @@ describe('列表', () => {
 describe('撤销 / 数据完整性（回归）', () => {
   it('backspace 删除标题中的一段文本后源码持久化', async () => {
     const r = renderEditor('# 它FINA==现在能做什么\n\n正文\n')
-    await clickInRun(r, 0, 0, 1, 1.0)
+    await clickInRun(r, 0, 0, 1, 'end')
     for (let i = 0; i < 4; i++) await pressBackspace(r)
     await flush()
     // 光标在行末，4 次 Backspace 删掉结尾 4 个字符。
@@ -163,7 +169,7 @@ describe('撤销 / 数据完整性（回归）', () => {
 
   it('backspace 后继续 typing，不产生异常且源码一致', async () => {
     const r = renderEditor('# 标题\n\n正文\n')
-    await clickInRun(r, 0, 0, 1, 0.5)
+    await clickInRun(r, 0, 0, 1, 'end')
     await pressBackspace(r)
     await flush()
     await typeText(r, 'X')
@@ -277,7 +283,7 @@ describe('表格与完整文档（DOM 重建须与模型可比较）', () => {
       const r = renderEditor(TABLE_DOC)
       await flush()
       await assertDomMatchesSource(r)
-      await clickInRun(r, 0, 0, 1, 0.5)
+      await clickInRun(r, 0, 0, 1, 'middle')
       await pressEnter(r)
       await flush()
       await assertDomMatchesSource(r)
@@ -293,7 +299,7 @@ describe('表格与完整文档（DOM 重建须与模型可比较）', () => {
       const r = renderEditor(WELCOME_DOC)
       await flush()
       await assertDomMatchesSource(r)
-      await clickInRun(r, 0, 0, 1, 0.5)
+      await clickInRun(r, 0, 0, 1, 'middle')
       await pressEnter(r)
       await flush()
       await assertDomMatchesSource(r)
@@ -317,13 +323,17 @@ describe('NotFoundError 回归（换行时不应该有 React removeChild 异常�
 
   it('在各位置反复 Enter 不触发 React 异常且源码一致', async () => {
     const r = renderEditor(WELCOME)
-    await clickInRun(r, 0, 0, 1, 0.5)
+    // 从后往前改：每次回车都会改变块的分段，先动后面的块，前面写死的块索引
+    // 才不会被顶掉（先前这里一路落行尾，回车不改变分段，所以顺序看不出来）。
+    await clickInRun(r, 6, 1, 4, 'middle')
     await pressEnter(r)
     await flush()
-    await clickInRun(r, 4, 0, 1, 0.5)
+    await assertDomMatchesSource(r)
+    await clickInRun(r, 4, 0, 1, 'middle')
     await pressEnter(r)
     await flush()
-    await clickInRun(r, 6, 1, 4, 0.5)
+    await assertDomMatchesSource(r)
+    await clickInRun(r, 0, 0, 1, 'middle')
     await pressEnter(r)
     await flush()
     await assertDomMatchesSource(r)
@@ -353,7 +363,7 @@ describe('NotFoundError 回归（换行时不应该有 React removeChild 异常�
 describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
   it('段落行末连按两次回车后光标停在新空行上（打字不粘进下一段）', async () => {
     const r = renderEditor('第一段文字\n\n第二段\n')
-    await clickInRun(r, 0, 0, 0, 1.0)
+    await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await pressEnter(r)
     await pressEnter(r)
@@ -371,7 +381,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
   it('列表项回车后光标落在新 bullet 上；再次回车退出列表且不改动下一项', async () => {
     const r = renderEditor('- 第一项\n- 第二项\n')
-    await clickInRun(r, 0, 0, 1, 1.0)
+    await clickInRun(r, 0, 0, 1, 'end')
     await flush()
     await pressEnter(r)
     await flush()
@@ -388,7 +398,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     // 复现自真实浏览器：草稿 '标题行\n\n' 的末尾是两个空行（同一个空块的两行），
     // 回车后光标必须锚在"新建的那一行"，而不是空块的第一行。
     const r = renderEditor('标题行\n\n')
-    await clickInRun(r, 0, 0, 0, 1.0)
+    await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await r.user.keyboard('测试')
     await flush()
@@ -424,7 +434,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
   it('Tab 在非列表位置也被拦截（焦点不会跑到浏览器地址栏）', async () => {
     const r = renderEditor('普通段落\n')
     await flush()
-    await clickInRun(r, 0, 0, 0, 1.0)
+    await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     let prevented = false
     const watch = (event: KeyboardEvent) => {
@@ -486,7 +496,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
   it('有序列表中间回车：后面的编号顺延，不再出现重复编号', async () => {
     const r = renderEditor('1. 甲\n2. 乙\n3. 丙\n')
-    await clickInRun(r, 0, 1, 1, 1.0)
+    await clickInRun(r, 0, 1, 1, 'end')
     await flush()
     await pressEnter(r)
     await flush()
@@ -500,7 +510,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
   it('Tab 缩进列表项、Shift+Tab 退回（有序与无序都支持）', async () => {
     const ordered = renderEditor('1. 甲\n2. 乙\n')
-    await clickInRun(ordered, 0, 1, 1, 1.0)
+    await clickInRun(ordered, 0, 1, 1, 'end')
     await flush()
     await ordered.user.keyboard('{Tab}')
     await flush()
@@ -511,7 +521,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(ordered)
 
     const plain = renderEditor('- 甲\n- 乙\n')
-    await clickInRun(plain, 0, 1, 1, 1.0)
+    await clickInRun(plain, 0, 1, 1, 'end')
     await flush()
     await plain.user.keyboard('{Tab}')
     await flush()
@@ -575,12 +585,18 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
   it('表格单元格可点进去就地编辑，源码结构不丢', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
-    await clickInRun(r, 0, 2, 0, 0)
+    // 点单元格文字的开头：旧助手只会落到行尾，这个位置根本表达不出来。
+    await clickInRun(r, 0, 2, 0, 'start')
     await r.user.keyboard('X')
+    await flush()
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| X1 | 2 |\n')
+    // 再点同一个单元格的末尾：输入落在同一个单元格里，不是下一格。
+    await clickInRun(r, 0, 2, 0, 'end')
+    await r.user.keyboard('Y')
     await flush()
     // 三行结构一字不差：分隔行必须留在源码里（它不可见，只能从 DOM 的隐藏副本重建），
     // 改动只落在那一个单元格里。
-    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1X | 2 |\n')
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| X1Y | 2 |\n')
     await assertDomMatchesSource(r)
   })
 
@@ -627,7 +643,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
   it('标题行末回车后按退格：只并回一行，不吃掉标题字符', async () => {
     const r = renderEditor('# 标题\n\n正文\n')
-    await clickInRun(r, 0, 0, 1, 1.0)
+    await clickInRun(r, 0, 0, 1, 'end')
     await flush()
     await pressEnter(r)
     await flush()

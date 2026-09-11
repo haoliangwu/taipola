@@ -93,39 +93,103 @@ export function caretFromDom(): number | null {
   return blockStart + Number(run.dataset.src) + within
 }
 
+/** Where in a run's text a click should land. */
+export type RunPoint = 'start' | 'middle' | 'end' | number
+
+/** `at` as an index into the run's text, clamped to it. */
+function charIndexOf(text: string, at: RunPoint): number {
+  if (typeof at === 'number') return Math.max(0, Math.min(at, text.length))
+  if (at === 'start') return 0
+  if (at === 'end') return text.length
+  return Math.round(text.length / 2)
+}
+
 /**
- * Positions the caret by CLICKING the run's text at the given character
- * position — a real mouse click through `userEvent`, so the browser itself
- * resolves the glyph offset (no synthetic selection juggling).
+ * The viewport box of the character at `index` — for an index AT the end
+ * (`text.length`) there is no character, so the last one's box is used and the
+ * caller aims at its right edge.
+ */
+function characterBox(node: Node | null, index: number): DOMRect | null {
+  if (!node || node.nodeType !== Node.TEXT_NODE) return null
+  const length = node.textContent?.length ?? 0
+  if (length === 0) return null
+  const start = Math.min(index, length - 1)
+  const range = document.createRange()
+  range.setStart(node, start)
+  range.setEnd(node, start + 1)
+  return range.getBoundingClientRect()
+}
+
+/**
+ * Puts the caret at an offset inside a node and announces it with
+ * `selectionchange` — the only signal through which the editor learns where the
+ * caret went.
+ */
+function applyCaretAt(node: Node, offset: number): void {
+  const range = document.createRange()
+  range.setStart(node, offset)
+  range.collapse(true)
+  const sel = window.getSelection()
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+  document.dispatchEvent(new Event('selectionchange'))
+}
+
+/**
+ * Positions the caret by CLICKING the run — a real mouse event sequence through
+ * `userEvent`, so the editor's own hit test (`sourceOffsetAtPoint`) runs exactly
+ * as it does for a human.
  *
- * `userEvent.pointer` coordinates are RELATIVE to the target element's
- * top-left corner — passing viewport coordinates puts the click far to the
- * right of the run, and the browser's native caret then lands at END of the
- * line, silently turning every "mid-text" test into a line-end one.
+ * `at` names the position in the run's TEXT — `'start'`, `'middle'`, `'end'`, or
+ * an exact character index — because that is what the caller means. It replaces
+ * a `charFraction` parameter that could not keep its promise: `0.5` landed at
+ * the line end for every call, so each "mid-text" case (splitting a heading with
+ * Enter, a soft break in the middle of a line) silently tested a line-end click
+ * instead (ADR-0001 §5, §6).
+ *
+ * Three separate facts made that happen, and all three are handled here:
+ *
+ * 1. `userEvent.pointer`'s `coords` are ABSOLUTE viewport coordinates, not
+ *    offsets inside the target element. `rect.width * 0.5` put every click near
+ *    the top-left of the page — outside the line — where the editor's
+ *    point-to-offset fallback correctly answers "end of line".
+ * 2. Those events are untrusted, so the browser runs no default action for them
+ *    and never moves the selection to the clicked glyph.
+ * 3. Even a real point is not a precise character: at a run's edges the
+ *    browser's own resolution is off by one either way (`rect.right` resolves to
+ *    the last character as often as to the end).
+ *
+ * So the click supplies the gesture and the hit test, and the caret is then
+ * placed at the requested character — exactly what the browser's default action
+ * would do for a point aimed at that character.
  */
 export async function clickInRun(
   r: Rendering,
   block: number,
   vline: number,
   run: number,
-  charFraction = 0.5,
+  at: RunPoint = 'middle',
 ): Promise<void> {
   const el = r.runEl(block, vline, run)
   if (!el) throw new Error(`run ${block}/${vline}/${run} not found`)
-  const rect = el.getBoundingClientRect()
-  // A REAL mouse click at the given horizontal fraction of the run's box.
-  // The browser resolves the exact glyph under the point (like a human click).
-  await r.user.pointer({
-    target: el,
-    keys: '[MouseLeft]',
-    coords: {
-      x: Math.min(1, Math.max(0, charFraction)) * rect.width,
-      y: rect.height / 2,
-    },
-  })
+  const node = el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE ? el.firstChild : null
+  const text = node?.textContent ?? ''
+  const index = charIndexOf(text, at)
+
+  const elRect = el.getBoundingClientRect()
+  const box = characterBox(node, index)
+  const x = box ? (index >= text.length ? box.right : box.left + box.width / 2) : elRect.left + elRect.width / 2
+  const y = elRect.top + elRect.height / 2
+
+  await r.user.pointer({ target: el, keys: '[MouseLeft]', coords: { x, y } })
+  if (node) applyCaretAt(node, index)
 }
 
-/** Positions the caret by CLICKING the line box itself (empty lines: no runs). */
+/**
+ * Positions the caret by CLICKING the line box itself — empty lines render no
+ * run, so there is no character to aim at and the caret belongs at the start of
+ * that line (the same place the editor anchors it).
+ */
 export async function clickAtLine(
   r: Rendering,
   block: number,
@@ -135,12 +199,15 @@ export async function clickAtLine(
   const line = blk?.querySelector(`[data-vline="${vline}"]`) as HTMLElement | null
   if (!line) throw new Error(`line ${block}/${vline} not found`)
   const rect = line.getBoundingClientRect()
-  // Coordinates are relative to the target element (see clickInRun).
+  // Viewport coordinates, like clickInRun — `coords` is not relative to the
+  // target element.
   await r.user.pointer({
     target: line,
     keys: '[MouseLeft]',
-    coords: { x: Math.max(6, rect.width / 2), y: rect.height / 2 },
+    coords: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
   })
+  const text = [...line.childNodes].find((child) => child.nodeType === Node.TEXT_NODE)
+  applyCaretAt(text ?? line, 0)
 }
 
 /** Type text at the current caret — a REAL keystroke sequence. */

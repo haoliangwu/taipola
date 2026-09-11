@@ -38,7 +38,7 @@ pnpm verify        # tsc -b + 全部测试
 
 `src/test/editorTestUtils.tsx` 提供真实操作助手：
 
-- `clickInRun` / `clickAtLine`：按真实坐标点击 run / 空行，浏览器自行解析字形位置（坐标是相对目标元素的；传绝对坐标会把光标点偏到行末）
+- `clickInRun` / `clickAtLine`：按真实坐标点击 run / 空行。`userEvent.pointer` 的 `coords` 是**视口绝对坐标**（不是相对目标元素的偏移），而且合成事件没有浏览器默认动作，所以点击之后助手会自己把选区放到指定的位置上——`clickInRun` 的第 5 个参数是 `'start' | 'middle' | 'end' | 字符下标`。旧版本传一个"宽度比例"的 `0.5`，实际每次都落行尾（坐标算错 + 没有默认动作 + 行盒边缘的浏览器解算本身就差一个字符），"文字中间"的用例因此在测行尾，见 ADR-0001 §6。
 - `typeText` / `pressBackspace` / `pressEnter` / `pressShiftEnter`：真实键序列
 - `caretFromDom`：DOM 选区 → 文档源码偏移（含空行锚定）
 - `assertDomMatchesSource`：DOM 各行拼接后必须与文档源码逐字一致（`\n+` 尾部除外）

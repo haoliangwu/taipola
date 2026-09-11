@@ -150,7 +150,7 @@ describe('PROBE', () => {
     watchErrors(async (record, errors) => {
       const r = renderEditor('第一段文字\n\n第二段\n')
       const trace: Snap[] = []
-      await clickInRun(r, 0, 0, 0, 1.0)
+      await clickInRun(r, 0, 0, 0, 'end')
       await flush()
       trace.push(snap('caret at line end', r))
       await steps(r, trace, record, [
@@ -167,7 +167,7 @@ describe('PROBE', () => {
     watchErrors(async (record, errors) => {
       const r = renderEditor('- 第一项\n- 第二项\n')
       const trace: Snap[] = []
-      await clickInRun(r, 0, 0, 1, 1.0)
+      await clickInRun(r, 0, 0, 1, 'end')
       await flush()
       trace.push(snap('caret at item end', r))
       await steps(r, trace, record, [
@@ -185,7 +185,7 @@ describe('PROBE', () => {
     watchErrors(async (record, errors) => {
       const r = renderEditor('# 标题\n\n正文\n')
       const trace: Snap[] = []
-      await clickInRun(r, 0, 0, 1, 1.0)
+      await clickInRun(r, 0, 0, 1, 'end')
       await flush()
       trace.push(snap('caret at line end', r))
       await steps(r, trace, record, [
@@ -220,7 +220,7 @@ describe('PROBE', () => {
     watchErrors(async (record, errors) => {
       const r = renderEditor('甲\n\n乙\n')
       const trace: Snap[] = []
-      await clickInRun(r, 0, 0, 0, 1.0)
+      await clickInRun(r, 0, 0, 0, 'end')
       await flush()
       trace.push(snap('caret at line end', r))
       await steps(
