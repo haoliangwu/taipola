@@ -31,8 +31,8 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/draft), `html.ts` (export)
 - `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Outline.tsx`, `useTheme.ts`
-- `src/editor/` — the native kernel: `dom.ts` (imperative rendering + position mapping),
-  `kernel.ts` (state, events, same-frame caret)
+- `src/editor/` — the native kernel: `render.ts` (imperative rendering, DOM → source),
+  `position.ts` (source offset ↔ DOM position), `kernel.ts` (state, events, same-frame caret)
 - `src/test/` — browser-mode helpers
 - `docs/adr/`, `docs/agents/`, `CONTEXT.md` — decisions, skill configuration, glossary
 

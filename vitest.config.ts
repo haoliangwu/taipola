@@ -40,6 +40,7 @@ export default defineConfig({
           include: [
             'src/shell/**/*.test.tsx',
             'src/platform/**/*.test.ts',
+            'src/editor/**/*.test.ts',
           ],
           setupFiles: ['./src/test/setup.ts'],
           css: false,

@@ -29,9 +29,10 @@ pnpm verify        # tsc -b + 全部测试
   逐语法断言 run 切分与无损往返）、行状态（`inline.ts`）、列表编号与缩进（`lists.ts`）、
   格式化命令（`editCommands.ts`）。改代码时随手跑，几毫秒。`src/core/` 里没有任何浏览器 API，
   所以这一层不需要任何例外。
-- `browser`（`src/shell/**`、`src/platform/**`）只留必须真浏览器的：光标落点与选区、按键
-  拦截、IME 合成、CSS 契约、App 外壳，以及碰 `window`/DOM 的适配器（文件访问、草稿、
-  导出 HTML）。
+- `browser`（`src/shell/**`、`src/platform/**`、`src/editor/**`）只留必须真浏览器的：光标
+  落点与选区、按键拦截、IME 合成、CSS 契约、App 外壳，碰 `window`/DOM 的适配器
+  （文件访问、草稿、导出 HTML），以及位置映射的规则（`src/editor/position.test.ts`：
+  行归属、折叠标记吸附、空行落点、offset↔DOM 往返）。
 
 首次运行会下载 Chromium 到本项目 `.pw-browsers/`（沙箱环境装不进 `~/Library/Caches/ms-playwright` 时用 `PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers`）。
 
@@ -114,7 +115,8 @@ __welcome__()
 
 编辑器核心是**原生 JavaScript**（`src/editor/`）；React 只渲染外壳（标题栏、大纲、工具栏）和那个可编辑的宿主 `<div>`——它从不渲染这个 div 的子节点。
 
-- `src/editor/dom.ts`：把视图模型命令式写成 DOM（按索引原地更新；文本相同就不替换文本节点，避免毁掉浏览器选区与 IME），以及源码偏移 ↔ DOM 位置的双向映射、DOM → 源码的重建。
+- `src/editor/render.ts`：把视图模型命令式写成 DOM（按索引原地更新；文本相同就不替换文本节点，避免毁掉浏览器选区与 IME），以及 DOM → 源码的重建。
+- `src/editor/position.ts`：源码偏移 ↔ DOM 位置的双向映射（offset→锚点、命中测试、行归属）。这些规则由 `src/editor/position.test.ts` 直接断言，不再只能透过内核间接测。
 - `src/editor/kernel.ts`：状态（源码、光标、撤销栈）、原生事件（`keydown` / `beforeinput` / `input` / `composition` / 鼠标 / `selectionchange`），以及"改模型 → 重写 DOM → **同一同步帧内**放回光标"的提交路径。
 - `src/shell/components/Editor.tsx`：薄壳。只做 prop 镜像与 `EditorHandle` 转发，不参与编辑。
 

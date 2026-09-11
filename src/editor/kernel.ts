@@ -26,17 +26,19 @@ import { buildBlockView, type BlockView } from '../core/view'
 import type { EditBuffers } from '../core/editCommands'
 import { indentListItem, renumberLists } from '../core/lists'
 import {
-  applyCaret,
-  domToLocal,
-  lineOfOffset,
   markupSignature,
-  offsetForLine,
   readDocumentSource,
   readLooseText,
   renderDocument,
   sanitizeDom,
+} from './render'
+import {
+  applyCaret,
+  domToLocal,
+  lineOfOffset,
+  offsetForLine,
   sourceOffsetAtPoint,
-} from './dom'
+} from './position'
 
 const UNDO_LIMIT = 300
 

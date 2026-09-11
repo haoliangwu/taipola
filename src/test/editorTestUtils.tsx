@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, expect } from 'vitest'
 import { useState, useRef } from 'react'
 import { Editor, type EditorHandle } from '../shell/components/Editor'
-import { readDocumentSource, normalizeTables } from '../editor/dom'
+import { readDocumentSource, normalizeTables } from '../editor/render'
 
 /**
  * Real-browser operation helpers.
