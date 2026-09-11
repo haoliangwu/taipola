@@ -22,8 +22,6 @@ export interface Block {
   endLine: number
   /** Source characters this block occupies, including its trailing newline. */
   raw: string
-  /** Sanitized HTML for `raw`, or '' for blank blocks. */
-  html: string
   /** Heading level 1-6 for ATX/setext headings, otherwise 0. */
   headingLevel: number
   /** Plain-text heading content, for the outline. */
@@ -245,11 +243,6 @@ export function parseDocument(source: string): ParsedDocument {
   }
   ranges.sort((a, b) => a.startLine - b.startLine)
 
-  const isRelocated = (startLine: number, endLine: number): boolean => {
-    for (let line = startLine; line < endLine; line++) if (relocated.has(line)) return true
-    return false
-  }
-
   const blocks: Block[] = []
   let lineCursor = 0
   /** Character offset at which each source line begins; line 1 starts at 0. */
@@ -270,16 +263,11 @@ export function parseDocument(source: string): ParsedDocument {
     const trailing = raw.length - raw.replace(/\n+$/, '').length
     const text = trailing > 0 ? raw.slice(0, raw.length - trailing) : raw
     if (text.length === 0) return
-    // Relocated content (footnote definitions) is rendered at the end of the
-    // document by the parser, so this slot must hold height open rather than
-    // render a fragment whose anchors point at markup that is not here.
-    const keepAsSource = isRelocated(startLine, endLine)
     blocks.push({
       index: blocks.length,
       startLine,
       endLine,
       raw: text,
-      html: keepAsSource ? '' : renderMarkdown(text),
       headingLevel,
       headingText,
     })
@@ -293,7 +281,6 @@ export function parseDocument(source: string): ParsedDocument {
       startLine,
       endLine,
       raw: '',
-      html: '',
       headingLevel: 0,
       headingText: '',
     })

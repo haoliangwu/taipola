@@ -16,9 +16,20 @@ pnpm test     # vitest browser mode（真实 Chromium）
 **一个已知的覆盖盲区**：userEvent 派发的是合成（untrusted）事件，浏览器不会进入自己的默认行为路径，其中包括"把光标落在空行上再打字时插到哪里"这类**插入点解析**。实测踩到过：合成输入在空行上打字正常，真实浏览器却把字插到上一行末尾（原因是空行缺 `<br>` 落点）。所以涉及浏览器默认行为的关键路径，除了测试还要用真实输入（CDP/人手）复核一次。
 
 ```bash
-pnpm test          # 跑一遍
+pnpm test          # 两层都跑
+pnpm test:unit     # 纯函数层（node，毫秒级，无需浏览器）
+pnpm test:browser  # 真实浏览器层（Chromium）
 pnpm test:watch    # 监听
+pnpm verify        # tsc -b + 全部测试
 ```
+
+**两层是刻意的**：
+
+- `unit`（`src/lib/**/*.test.ts`）覆盖纯函数：解析（`markdown.ts`）、源码→视图映射（`view.ts`，
+  逐语法断言 run 切分与无损往返）、行状态（`inline.ts`）、列表编号与缩进（`lists.ts`）、
+  格式化命令（`editCommands.ts`）。改代码时随手跑，几毫秒。
+- `browser`（`src/components/**`、`src/App.test.tsx`，以及需要 DOM 的 `*.browser.test.ts`）
+  只留必须真浏览器的：光标落点与选区、按键拦截、IME 合成、CSS 契约、App 外壳。
 
 首次运行会下载 Chromium 到本项目 `.pw-browsers/`（沙箱环境装不进 `~/Library/Caches/ms-playwright` 时用 `PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers`）。
 

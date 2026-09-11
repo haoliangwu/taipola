@@ -9,7 +9,7 @@
  *   PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers npx vitest run src/test/probe.test.tsx
  *   rm src/test/probe.test.tsx
  *
- * Scenarios (raw output is recorded in docs/adr-0001-editor-core-native.md §5):
+ * Scenarios (raw output is recorded in docs/adr/0001-editor-core-native.md §5):
  *   S1 paragraph line-end Enter x2 then a real keypress -> the typed text glues
  *      onto the next paragraph (`X第二段`)
  *   S2 list item line-end Enter x2 -> the following item is rewritten as

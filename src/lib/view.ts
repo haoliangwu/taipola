@@ -552,21 +552,27 @@ export function buildBlockView(
   const revealInBlock = reveals.length > 0
   const lines: ViewLine[] = []
   let base = 0
-  let inFence = false
+  // Only a fence with the SAME marker character closes the open one, so ``` inside
+  // a ~~~ block is code content (this must match `computeLineStates`).
+  let openFence: string | null = null
 
   const rawLines = raw === '' ? [] : raw.split('\n')
   const total = Math.max(rawLines.length, lineCount ?? (rawLines.length || 1))
   for (let li = 0; li < total; li++) {
     const line = li < rawLines.length ? rawLines[li] : ''
     const local = reveals.filter((r) => r >= base && r <= base + line.length)
-    const fenceLine = /^\s*(`{3,}|~{3,})/.test(line)
+    const fenceMarker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1][0] ?? null
+    const closes = fenceMarker !== null && fenceMarker === openFence
+    const inCode = openFence !== null && !closes
     lines.push(
       buildLine(line, local.length ? local[0] - base : null, base, {
         revealInBlock,
-        inCode: inFence && !fenceLine,
+        inCode,
       }),
     )
-    if (fenceLine) inFence = !inFence
+    // A matching marker closes the open fence; with nothing open, this line opens one.
+    if (closes) openFence = null
+    else if (openFence === null && fenceMarker !== null) openFence = fenceMarker
     base += line.length + 1
   }
   return { lines }

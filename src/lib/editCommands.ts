@@ -59,6 +59,17 @@ export function insertLink(buffer: EditBuffers): void {
   const { value, start, end } = buffer
   const selected = value.slice(start, end)
 
+  // Refuse inside an image's alt text. `[alt](url)` is not a link there: wrapping
+  // it produces `![[alt](url)](src)`, which markdown-it cannot parse back into an
+  // image (its alt group stops at the first `]`). Doing nothing is the honest
+  // outcome; the caller can still edit the source by hand.
+  for (let open = value.lastIndexOf('![', start); open !== -1; open = open === 0 ? -1 : value.lastIndexOf('![', open - 1)) {
+    const close = value.indexOf(']', open + 2)
+    if (close === -1 || close < start) break
+    if (start <= close) return
+    break
+  }
+
   // Unwrap an existing link that encloses the selection.
   const before = value.slice(0, start)
   const open = before.lastIndexOf('[')
@@ -67,13 +78,10 @@ export function insertLink(buffer: EditBuffers): void {
     const closeParen = value.indexOf(')', close + 2)
     if (before.slice(open - 1, open) !== '!' && close !== -1 && closeParen !== -1 && open < start) {
       const label = value.slice(open + 1, close)
-      const url = value.slice(close + 2, closeParen)
       if (label === selected || selected === '') {
-        const text = `${label}(${url})`
         buffer.value = value.slice(0, open) + label + value.slice(closeParen + 1)
         buffer.start = open
         buffer.end = open + label.length
-        void text
         return
       }
     }

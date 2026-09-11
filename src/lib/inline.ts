@@ -12,10 +12,10 @@
 export interface LineParts {
   /** Leading block markup: list bullet, quote marker, task checkbox. */
   prefix: string
-  /** How many times the line is nested (lists, quotes). */
-  depth: number
   /** True when the line opens or closes a fenced code block. */
   isFence: boolean
+  /** The fence character (`` ` `` or `~`) when `isFence`. */
+  fenceMarker?: string
   /** True for a horizontal rule line. */
   isRule: boolean
   /** True for a table delimiter row (`| --- |`). */
@@ -36,7 +36,6 @@ const TABLE_DELIM_RE = /^\s*\|?[\s:|-]+\|[\s:|-]*$/
 export function parseLine(raw: string): LineParts {
   const parts: LineParts = {
     prefix: '',
-    depth: 0,
     isFence: false,
     isRule: RULE_RE.test(raw),
     isTableDelimiter: false,
@@ -48,6 +47,7 @@ export function parseLine(raw: string): LineParts {
   const fence = FENCE_RE.exec(raw)
   if (fence) {
     parts.isFence = true
+    parts.fenceMarker = fence[2][0]
     parts.prefix = fence[1] + fence[2] + fence[3]
     return parts
   }
@@ -63,14 +63,12 @@ export function parseLine(raw: string): LineParts {
     if (quote && !LIST_RE.test(rest)) {
       prefix += quote[1] + quote[2] + quote[3]
       rest = quote[4]
-      parts.depth++
       continue
     }
     const list = LIST_RE.exec(rest)
     if (list) {
       prefix += list[1] + list[2] + list[3]
       rest = list[4]
-      parts.depth++
       continue
     }
     const task = TASK_RE.exec(rest)
@@ -113,7 +111,12 @@ export function computeLineStates(lines: string[]): LineState[] {
   const states: LineState[] = []
   /** Indent stack of the list we are inside, for `listLevel`. */
   const indents: number[] = []
-  let inFence = false
+  /**
+   * The fence character of the open fence, or null. Tracking WHICH marker opened
+   * it matters: ```inside a ~~~ block is code content, not a closer (CommonMark),
+   * and the view must agree with the outline about that.
+   */
+  let openFence: string | null = null
 
   for (const raw of lines) {
     const parts = parseLine(raw)
@@ -124,9 +127,9 @@ export function computeLineStates(lines: string[]): LineState[] {
       indent: 0,
     }
 
-    if (inFence) {
-      if (parts.isFence) {
-        inFence = false
+    if (openFence !== null) {
+      if (parts.fenceMarker === openFence) {
+        openFence = null
         states.push({ ...base, kind: 'fence' })
         continue
       }
@@ -135,7 +138,7 @@ export function computeLineStates(lines: string[]): LineState[] {
     }
 
     if (parts.isFence) {
-      inFence = true
+      openFence = parts.fenceMarker ?? null
       states.push({ ...base, kind: 'fence' })
       continue
     }
