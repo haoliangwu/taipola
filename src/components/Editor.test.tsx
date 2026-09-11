@@ -401,6 +401,31 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('块元素带 blk 类，表格才拿到网格样式（CSS 契约）', async () => {
+    const r = renderEditor('| a | b |\n| --- | --- |\n| 1 | 2 |\n')
+    await flush()
+    const block = r.blockEl(0)
+    expect(block?.className.split(/\s+/)).toContain('blk')
+    expect(block?.getAttribute('data-kind')).toBe('table')
+    // 计算样式才是真正的验收：`.blk[data-kind='table'] .vl-table` 命中时行才是网格。
+    const row = block?.querySelector('.vl-table') as HTMLElement | null
+    expect(row).not.toBeNull()
+    expect(getComputedStyle(row as HTMLElement).display).toBe('grid')
+  })
+
+  it('有序列表块重置计数器（每段编号从 1 开始）', async () => {
+    const r = renderEditor('1. 一\n2. 二\n\n中间段落\n\n1. 甲\n2. 乙\n')
+    await flush()
+    const blocks = [...r.container.querySelectorAll<HTMLElement>('[data-block]')]
+    const lists = blocks.filter((b) => b.getAttribute('data-kind') === 'list')
+    expect(lists.length).toBe(2)
+    for (const list of lists) expect(getComputedStyle(list).counterReset).toContain('vl-item')
+    // 每个有序行都要拿到计数器的增量来源（顺序渲染态下由 ::before 显示）。
+    for (const list of lists) {
+      expect(list.querySelector('.vl-ordered')).not.toBeNull()
+    }
+  })
+
   it('空行渲染一个 <br> 作为可编辑落点（真实浏览器的插入点依赖它）', async () => {
     // 合成（untrusted）输入不会走浏览器自己的插入点解析，所以"把光标放在空行上
     // 再打字"在测试里能过、在真实浏览器里会把字插到上一行末尾。这条断言把原因

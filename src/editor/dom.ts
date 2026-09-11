@@ -132,6 +132,11 @@ function blockElement(
   start: number,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
+  // The `blk` class is a CSS contract, not decoration: every block-level rule is
+  // written as `.blk[data-kind='table'] …` (table grid, header row, hairlines) or
+  // `.blk[data-kind='list']` (per-list counter reset). Without it those rules
+  // never match and tables render as stacked text.
+  if (el.className !== 'blk') el.className = 'blk'
   setAttr(el, 'data-block', String(block.index))
   setAttr(el, 'data-src-start', String(start))
   setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
