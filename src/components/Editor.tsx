@@ -91,5 +91,3 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     />
   )
 })
-
-export { readDocumentSource, normalizeTables } from '../editor/dom'
