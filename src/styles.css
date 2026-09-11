@@ -559,8 +559,33 @@ body {
   letter-spacing: -0.01em;
 }
 
-.vl-heading {
-  font-size: calc(var(--editor-font-size) * 1.28);
+/* The six levels follow the browser default scale (h1 2em … h6 0.67em) applied
+   to the editor's base size. `em` resolves against `.doc`'s font-size, so the
+   ratios hold whatever the base is set to. h4 lands on the body size and is
+   distinguished by weight/family; h5 and h6 are smaller than body text, exactly
+   as in a browser's default rendering. */
+.vl-h1 {
+  font-size: 2em;
+}
+
+.vl-h2 {
+  font-size: 1.5em;
+}
+
+.vl-h3 {
+  font-size: 1.17em;
+}
+
+.vl-h4 {
+  font-size: 1em;
+}
+
+.vl-h5 {
+  font-size: 0.83em;
+}
+
+.vl-h6 {
+  font-size: 0.67em;
 }
 
 .vl-rule:not(.revealed) {

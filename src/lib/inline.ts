@@ -88,6 +88,8 @@ export function parseLine(raw: string): LineParts {
 
 export interface LineState {
   kind: 'blank' | 'text' | 'heading' | 'rule' | 'fence' | 'code' | 'quote' | 'list' | 'task' | 'table' | 'table-delim'
+  /** Heading depth (1-6) for `kind === 'heading'`, so the six levels can differ. */
+  level?: number
   /** Ordered or unordered, for list markers. */
   ordered: boolean
   checked: boolean | null
@@ -147,7 +149,7 @@ export function computeLineStates(lines: string[]): LineState[] {
 
     const heading = HEADING_RE.exec(raw)
     if (heading) {
-      states.push({ ...base, kind: 'heading' })
+      states.push({ ...base, kind: 'heading', level: heading[2].length })
       continue
     }
 

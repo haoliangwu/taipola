@@ -26,6 +26,7 @@ import type { LineState } from '../lib/inline'
 function lineClass(state: LineState | undefined): string {
   if (!state) return 'vl'
   const cls = ['vl', `vl-${state.kind}`]
+  if (state.level) cls.push(`vl-h${state.level}`)
   if (state.ordered) cls.push('vl-ordered')
   if (state.checked === true) cls.push('vl-checked')
   else if (state.checked === false) cls.push('vl-unchecked')

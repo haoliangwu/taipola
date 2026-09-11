@@ -421,6 +421,25 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect((delim as HTMLElement).getBoundingClientRect().height).toBeLessThanOrEqual(1)
   })
 
+  it('六级标题各有各的字号（浏览器默认比例）', async () => {
+    const r = renderEditor('# 一\n## 二\n### 三\n#### 四\n##### 五\n###### 六\n')
+    await flush()
+    const sizes = [1, 2, 3, 4, 5, 6].map((level) => {
+      const line = r.container.querySelector(`.vl-h${level}`) as HTMLElement | null
+      expect(line).not.toBeNull()
+      return Number.parseFloat(getComputedStyle(line as HTMLElement).fontSize)
+    })
+    // `r.container` 就是 `.doc` 本身（harness 的取值器返回它）。
+    const base = Number.parseFloat(getComputedStyle(r.container).fontSize)
+    // 逐级对应 2 / 1.5 / 1.17 / 1 / 0.83 / 0.67（允许浏览器最小字号造成的偏差）
+    const ratios = [2, 1.5, 1.17, 1, 0.83, 0.67]
+    ratios.forEach((ratio, i) => {
+      expect(sizes[i]).toBeCloseTo(base * ratio, 1)
+    })
+    // 严格递减，六级彼此可辨
+    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeLessThanOrEqual(sizes[i - 1])
+  })
+
   it('表格单元格可点进去就地编辑，源码结构不丢', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
