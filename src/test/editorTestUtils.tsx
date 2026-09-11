@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, expect } from 'vitest'
 import { useState, useRef } from 'react'
 import { Editor, type EditorHandle } from '../components/Editor'
+import { readDocumentSource, normalizeTables } from '../components/Editor'
 
 /**
  * Real-browser operation helpers.
@@ -193,16 +194,11 @@ export function sourceLineText(block: number, vline: number, r: Rendering): stri
 /**
  * Diffs the DOM's own source reconstruction against the committed source:
  * every block's rendered lines must concatenate to the exact document text.
+ * Uses the EDITOR's own rebuild/normalize functions so the comparison is
+ * exactly the integrity check the editor runs — table rows included.
  */
 export async function assertDomMatchesSource(r: Rendering): Promise<void> {
   const doc = r.getDoc()
-  const domLines: string[] = []
-  for (const blk of Array.from(r.container.querySelectorAll('[data-block]'))) {
-    blk.querySelectorAll('[data-vline]').forEach((vl) => {
-      domLines.push(
-        [...vl.querySelectorAll('[data-run]')].map((rn) => rn.textContent).join(''),
-      )
-    })
-  }
-  expect(domLines.join('\n').replace(/\n+$/, '')).toBe(doc.replace(/\n+$/, ''))
+  const dom = readDocumentSource(r.container)
+  expect(dom.replace(/\n+$/, '')).toBe(normalizeTables(doc).replace(/\n+$/, ''))
 }

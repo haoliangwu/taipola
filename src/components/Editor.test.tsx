@@ -13,6 +13,8 @@ import {
   type Rendering,
 } from '../test/editorTestUtils'
 
+import { WELCOME_DOC } from '../lib/welcome'
+
 export const WELCOME = `# 欢迎使用 taipola
 
 一个极简但强大的 Markdown 编辑器。**光标所在的那一行显示 Markdown 源码，光标一离开就渲染成最终的样子** —— 没有左右分栏，也不需要预览按钮。
@@ -227,6 +229,42 @@ describe('跨块编辑（回归：DOM 与模型必须同步）', () => {
     expect(r.getDoc()).toContain('X')
     expect(r.getDoc()).toContain('正文乙')
     await assertDomMatchesSource(r)
+  })
+})
+
+describe('表格与完整文档（DOM 重建须与模型可比较）', () => {
+  const TABLE_DOC = `| 快捷键 | 作用 |\n| --- | --- |\n| Cmd/Ctrl + B | 加粗 |\n| Cmd/Ctrl + I | 斜体 |\n`
+
+  it('表格文档渲染稳定，输入不触发重渲染循环', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const r = renderEditor(TABLE_DOC)
+      await flush()
+      await assertDomMatchesSource(r)
+      await clickInRun(r, 0, 0, 1, 0.5)
+      await pressEnter(r)
+      await flush()
+      await assertDomMatchesSource(r)
+      expect(errSpy).not.toHaveBeenCalled()
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
+
+  it('完整欢迎文档（含全部语法示例）渲染稳定且不循环', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const r = renderEditor(WELCOME_DOC)
+      await flush()
+      await assertDomMatchesSource(r)
+      await clickInRun(r, 0, 0, 1, 0.5)
+      await pressEnter(r)
+      await flush()
+      await assertDomMatchesSource(r)
+      expect(errSpy).not.toHaveBeenCalled()
+    } finally {
+      errSpy.mockRestore()
+    }
   })
 })
 

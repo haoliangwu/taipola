@@ -241,7 +241,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     // never restored, so it vanishes from the screen while the source still
     // holds it. Force a remount from the model when they diverge.
     const root = rootRef.current
-    if (root && readDocumentSource(root) !== doc) {
+    if (root && readDocumentSource(root) !== normalizeTables(doc)) {
       pending.current = caret
       setResetKey((key) => key + 1)
     }
@@ -924,7 +924,7 @@ function readBlockSource(host: HTMLElement): string {
  * tests. This is what keeps a cross-block edit (select-all delete, paste,
  * drag-delete) from losing the blocks the model did not re-absorb.
  */
-function readDocumentSource(root: HTMLElement): string {
+export function readDocumentSource(root: HTMLElement): string {
   const parts: string[] = []
   root.querySelectorAll<HTMLElement>('[data-block]').forEach((host) => {
     parts.push(readBlockSource(host))
@@ -936,27 +936,59 @@ function readDocumentSource(root: HTMLElement): string {
  * The characters a line box currently holds, in DOM order.
  *
  * Span text is the common case. A line box can also hold DIRECT text nodes: the
- * browser inserts typing into an empty line (which renders only a `<br>`)
- * straight into the box, before any run span exists. Skipping them silently
- * ate every keystroke typed into an empty line, so both sources are read,
- * plus the runs nested inside table cells.
+ * browser inserts typing into an empty line (which renders no child of its
+ * own) straight into the box, before any run span exists. Skipping them
+ * silently ate every keystroke typed into an empty line, so both sources are
+ * read.
+ *
+ * TABLE lines are different: the DOM renders a grid of CELLS whose pipes are
+ * deliberately not present as text (blockified grid children would each claim
+ * a column). To rebuild the SOURCE from the DOM they must be re-inserted —
+ * the canonical `| a | b |` form, the same shape `normalizeTables` produces
+ * for the model side of the integrity comparison.
  */
 function textOfLine(lineEl: HTMLElement): string {
+  const cells = [...lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')]
+  if (cells.length > 0) {
+    const parts = cells.map((cell) =>
+      [...cell.querySelectorAll<HTMLElement>('[data-run]')].map((run) => run.textContent ?? '').join(''),
+    )
+    return `| ${parts.join(' | ')} |`
+  }
+
   let text = ''
   for (const node of lineEl.childNodes) {
     if (node.nodeType === Node.TEXT_NODE) {
       text += node.textContent ?? ''
     } else if (node instanceof HTMLElement) {
       if (node.hasAttribute('data-run')) text += node.textContent ?? ''
-      else if (node.hasAttribute('data-cell')) {
-        node.querySelectorAll<HTMLElement>('[data-run]').forEach((run) => {
-          text += run.textContent ?? ''
-        })
-      }
       // `<br>` and other foreign elements contribute no characters.
     }
   }
   return text
+}
+
+/**
+ * Normalizes table rows in a SOURCE string to the canonical form the DOM
+ * rebuild produces. The integrity check compares the model against the DOM,
+ * but table pipes never render as text — the model must be put in the same
+ * shape first, or every table document would look "diverged" forever and the
+ * force-remount would loop.
+ */
+export function normalizeTables(text: string): string {
+  const DELIMITER = /^\|?[\s:|-]+\|[\s:|-]*$/
+  return text
+    .split('\n')
+    .map((line) => {
+      const t = line.trim()
+      if (t.startsWith('|') && t.length > 1 && DELIMITER.test(t)) return ''
+      if (t.startsWith('|') && t.length > 1) {
+        const inner = line.split('|').slice(1, -1).map((c) => c.trim())
+        return `| ${inner.join(' | ')} |`
+      }
+      return line
+    })
+    .join('\n')
 }
 
 /**

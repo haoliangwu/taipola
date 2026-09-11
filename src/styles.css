@@ -46,7 +46,7 @@
   --doc-line: 1.75;
   --editor-pad-x: 40px;
   --editor-pad-y: 32px;
-  --editor-max-width: 46rem;
+  --editor-max-width: 100%;
 }
 
 @media (prefers-color-scheme: dark) {
