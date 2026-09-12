@@ -2,9 +2,11 @@
  * List editing helpers: numbering and indentation.
  *
  * These are pure functions of the Markdown source, so they are testable without
- * a browser. The kernel calls them after structural edits (Enter, Tab, Shift+Tab).
+ * a browser. The kernel calls them after structural edits (Enter, Tab, Shift+Tab,
+ * Backspace).
  */
 
+import { parseLine } from './inline'
 import { offsetForLine } from './lines'
 
 export interface ListItem {
@@ -197,8 +199,8 @@ export interface IndentResult {
   caret: number
 }
 
-/** The line holding `offset`, and its `ListItem` (null when it is not one). */
-function locate(doc: string, offset: number) {
+/** The 0-based line holding `offset`, with the line's own start offset and text. */
+function lineAt(doc: string, offset: number) {
   const lines = doc.split('\n')
   let start = 0
   let index = lines.length - 1
@@ -210,6 +212,12 @@ function locate(doc: string, offset: number) {
     }
     start = end + 1
   }
+  return { lines, index, start, text: lines[index] }
+}
+
+/** The line holding `offset`, and its `ListItem` (null when it is not one). */
+function locate(doc: string, offset: number) {
+  const { lines, index } = lineAt(doc, offset)
   const item = parseListItem(lines[index], index)
   return item ? { lines, index, item } : null
 }
@@ -357,5 +365,60 @@ export function indentListItem(
     withinBody >= 0
       ? indent.length + markerWidth + withinBody
       : Math.max(0, Math.min(caretColumn + delta, indent.length))
+  return { doc: renumbered, caret: offsetForLine(renumbered, index + 1) + column }
+}
+
+/**
+ * Backspace with the caret at a line's CONTENT start — the other half of
+ * `leavingEmptyItem`, for a line that is not empty.
+ *
+ * Two outcomes, decided by whether the line is already at the outermost level:
+ *
+ * - **A nested item steps out one level and stays an item** — the move Shift+Tab
+ *   already makes on it (`list-indent/02`'s T4), which is why this delegates
+ *   instead of re-deriving the level. (`indentListItem` lands it at the nearest
+ *   shallower item's indent; with no item above, that is column 0 and it is a
+ *   top-level item.)
+ * - **An item at the outermost level stops being an item.** Its text joins the
+ *   block above as a continuation line, at that block's prefix width — for the
+ *   usual case the previous item's marker width, which is where Markdown puts
+ *   "this is still content of that item" (three columns under `2. `, six under
+ *   `- [ ] `). With nothing above to continue it lands at column 0 as a
+ *   paragraph, and the items below are renumbered into the list that is left.
+ *
+ * Neither outcome invents list syntax: the prefix comes from `parseLine` (the
+ * per-line owner of block markup, shared with Enter and the line-kind pass), and
+ * the counters come from `renumberLists`.
+ *
+ * Returns null when the keystroke is not this one: the line carries no block
+ * prefix, the caret is not exactly after that prefix (a caret inside the marker is
+ * editing the marker's own characters, and the browser may have it), the body is
+ * empty (that is the empty-item rule's job, and it runs first), or the line is
+ * inside a fence — a code block's `3. ccc` is text, not an item to leave.
+ */
+export function backspaceAtContentStart(doc: string, offset: number): IndentResult | null {
+  const { lines, index, start, text } = lineAt(doc, offset)
+  if (inFence(lines, index)) return null
+  const prefix = parseLine(text).prefix
+  if (prefix === '' || offset !== start + prefix.length) return null
+  const body = text.slice(prefix.length)
+  if (body === '') return null
+
+  const item = parseListItem(text, index)
+  if (item && item.indent !== '') return indentListItem(doc, offset, 'out')
+
+  // The column to land on: the block above's prefix width. Blank lines are
+  // stepped over, so the item above a loose list still receives the text; a
+  // heading or a paragraph above has no prefix and therefore no column to
+  // inherit, which is the "first item becomes a paragraph" case. A fence line's
+  // `prefix` is the fence marker, not a content column, so it counts as none.
+  let above = index - 1
+  while (above >= 0 && lines[above].trim() === '') above--
+  const aboveParts = above < 0 ? null : parseLine(lines[above])
+  const column = aboveParts === null || aboveParts.isFence ? 0 : aboveParts.prefix.length
+  lines[index] = ' '.repeat(column) + body
+  // Renumbering can shorten the lines ABOVE (`10.` becomes `1.`), so the caret is
+  // read off the final text: the line number survives, offsets do not.
+  const renumbered = renumberLists(lines.join('\n'))
   return { doc: renumbered, caret: offsetForLine(renumbered, index + 1) + column }
 }

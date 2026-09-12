@@ -26,8 +26,9 @@ The source directories are split by **dependency category**, not by topic — th
 point of the split, and the test projects in `vitest.config.ts` enforce it:
 
 - `src/core/` — in-process pure logic, no browser API: `markdown.ts` (parsing), `view.ts`
-  (source → view mapping), `inline.ts` (per-line state), `lists.ts` (numbering, indent),
-  `lines.ts` (line number ↔ character offset), `imageSize.ts` (the `{width=…}` image suffix),
+  (source → view mapping), `inline.ts` (per-line state), `lists.ts` (numbering, indent,
+  Backspace out of a list), `lines.ts` (line number ↔ character offset), `imageSize.ts`
+  (the `{width=…}` image suffix),
   `editCommands.ts` (formatting commands),
   `shortcuts.ts` (keystroke → command name), `autosave.ts` (when the draft gets written),
   `welcome.ts` (the welcome document), `markdownIt.ts` (the shared markdown-it instance)

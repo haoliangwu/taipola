@@ -168,6 +168,36 @@ describe('列表', () => {
   })
 })
 
+/**
+ * 行首前缀只有一个主人（`parseLine`）：Enter 抄它来续下一行，Backspace 拿它算"正文从哪开始"。
+ *
+ * 这两条钉住 Enter 那一侧。围栏那条尤其重要：围栏行自己的"前缀"就是围栏标记，
+ * 照抄一遍等于在代码块里又开一个围栏——所以 Enter 在围栏行上只当普通换行。
+ */
+describe('Enter 续写的前缀和 Backspace 认的是同一套', () => {
+  it('引用里的列表项：续上的是 `> - `，不是空的 `> `', async () => {
+    const r = renderEditor('> - aaa\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> - aaa\n> - \n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('围栏那一行回车：只在围栏里开一个新行，不会把围栏标记抄一遍', async () => {
+    const r = renderEditor('```ts\ncode\n```\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('```ts\n\ncode\n```\n')
+    await assertDomMatchesSource(r)
+  })
+})
+
 describe('撤销 / 数据完整性（回归）', () => {
   it('backspace 删除标题中的一段文本后源码持久化', async () => {
     const r = renderEditor('# 它FINA==现在能做什么\n\n正文\n')
@@ -935,6 +965,145 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n乙\n')
+  })
+
+  /**
+   * 非空列表项：在**正文开头**按 Backspace 要把这一项移出列表。
+   *
+   * 旧行为是把它交给浏览器，删掉的是标记自己的那个分隔空格（`3. ccc` → `3.ccc`）。那一行随后
+   * 既不是列表项（`parseListItem` 要求分隔符后有空白），也不匹配内核认的前缀——标记退化成普通
+   * 文字，再按几次光标就离开这一行，删掉的是**上一项的内容**。逐次实测记在
+   * `.scratch/backspace-unlist/issues/01`。
+   */
+  it('非空项：正文开头 Backspace 一次移出列表、再一次并进上一行（不碰上一项）', async () => {
+    const r = renderEditor('1. aaa\n2. b\n3. ccc\n')
+    await flush()
+    await clickInRun(r, 0, 2, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(15) // `ccc` 的起始
+
+    await pressBackspace(r)
+    await flush()
+    // 标记去掉，正文缩进到上一项的内容列（`2. ` 宽 3），成为它的续行；
+    // 光标仍停在这一行的正文起始上（15），没有跳到上一行末尾。
+    expect(r.getDoc()).toBe('1. aaa\n2. b\n   ccc\n')
+    expect(caretFromDom()).toBe(15)
+    await assertDomMatchesSource(r)
+
+    await pressBackspace(r)
+    await flush()
+    // 再按一次：去掉缩进并并进上一行，接缝处**不加空格**（Typora 给 `2. bccc`）。
+    expect(r.getDoc()).toBe('1. aaa\n2. bccc\n')
+    expect(caretFromDom()).toBe(11)
+    await assertDomMatchesSource(r)
+  })
+
+  it('非空项是列表第一项：退化成普通段落，其余项重新编号', async () => {
+    const r = renderEditor('1. aaa\n2. bbb\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(3)
+
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('aaa\n1. bbb\n')
+    expect(caretFromDom()).toBe(0)
+    await assertDomMatchesSource(r)
+
+    // 无序列表的首项也一样。这一段和下面的列表是两个块：非空的 `- ` 能打断段落，
+    // 所以正文退成段落之后列表还在（这里断言的是 DOM 与源码在这条接缝上一致）。
+    const ul = renderEditor('- aaa\n- bbb\n')
+    await flush()
+    await clickInRun(ul, 0, 0, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(2)
+    await pressBackspace(ul)
+    await flush()
+    expect(ul.getDoc()).toBe('aaa\n- bbb\n')
+    expect(caretFromDom()).toBe(0)
+    await assertDomMatchesSource(ul)
+  })
+
+  it('无序项与任务项走同一条规则（标记宽度就是正文要落的列）', async () => {
+    const ul = renderEditor('- aaa\n- bbb\n')
+    await flush()
+    await clickInRun(ul, 0, 1, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(8)
+    await pressBackspace(ul)
+    await flush()
+    expect(ul.getDoc()).toBe('- aaa\n  bbb\n')
+    expect(caretFromDom()).toBe(8)
+    await assertDomMatchesSource(ul)
+
+    // 再按一次：去掉缩进并并进上一行，接缝处同样不加空格（和 `1. ` 那条是同一条规则）。
+    await pressBackspace(ul)
+    await flush()
+    expect(ul.getDoc()).toBe('- aaabbb\n')
+    expect(caretFromDom()).toBe(5)
+    await assertDomMatchesSource(ul)
+
+    const task = renderEditor('- [ ] aaa\n- [ ] bbb\n')
+    await flush()
+    await clickInRun(task, 0, 1, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(16)
+    await pressBackspace(task)
+    await flush()
+    // 复选框算在标记里，所以正文落在第 6 列，和上一项的正文对齐。
+    expect(task.getDoc()).toBe('- [ ] aaa\n      bbb\n')
+    expect(caretFromDom()).toBe(16)
+    await assertDomMatchesSource(task)
+  })
+
+  it('引用行：正文开头 Backspace 退出引用，正文落在引用的内容列上', async () => {
+    const r = renderEditor('> aaa\n> bbb\n')
+    await flush()
+    await clickInRun(r, 0, 1, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(8)
+    await pressBackspace(r)
+    await flush()
+    // 引用里的续行在源码里本来就是裸行（lazy continuation），缩进对齐 `aaa`。
+    expect(r.getDoc()).toBe('> aaa\n  bbb\n')
+    expect(caretFromDom()).toBe(8)
+    await assertDomMatchesSource(r)
+  })
+
+  it('嵌套项：正文开头 Backspace 退一级，正文还是列表项（T4）', async () => {
+    const r = renderEditor('1. aaa\n   1. bbb\n')
+    await flush()
+    await clickInRun(r, 0, 1, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(13)
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('1. aaa\n2. bbb\n')
+    expect(caretFromDom()).toBe(10) // 正文仍在 `bbb` 之前（退一级后它左移了 3 列）
+    await assertDomMatchesSource(r)
+  })
+
+  it('围栏里的 `3. ccc` 是文本：新规则让开，只删掉那个空格', async () => {
+    const r = renderEditor('```\n3. ccc\n```\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 3)
+    await flush()
+    expect(caretFromDom()).toBe(7)
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\n3.ccc\n```\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('光标在正文中间时结构不动：那是普通的一次退格', async () => {
+    const r = renderEditor('1. aaa\n2. ccc\n')
+    await flush()
+    await clickInRun(r, 0, 1, 1, 'middle')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('1. aaa\n2. cc\n')
   })
 })
 

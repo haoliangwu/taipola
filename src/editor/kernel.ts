@@ -21,11 +21,11 @@
  * position is derived through the view (`core/view.ts`) on every render.
  */
 import { parseDocument, type Block } from '../core/markdown'
-import { computeLineStates, type LineState } from '../core/inline'
+import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
 import type { EditBuffers } from '../core/editCommands'
-import { indentListItem, parseListItem, renumberLists } from '../core/lists'
+import { backspaceAtContentStart, indentListItem, parseListItem, renumberLists } from '../core/lists'
 import {
   markupSignature,
   readDocumentSource,
@@ -38,16 +38,13 @@ import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
 
-/**
- * What a line can carry in front of its content: a list marker (`- `, `2. `, a
- * task checkbox) or a quote marker (`> `). Enter repeats this when it opens the
- * next item, and it is what makes `> ` continue a quote rather than end it.
- *
- * The empty-item rule (`leavingEmptyItem`) asks `parseListItem` instead — list
- * syntax has one owner in `core/lists.ts` — and only falls back to a quote check,
- * so the two cannot read a line differently.
- */
-const LINE_PREFIX_RE = /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s*)/
+/** The source line holding an offset: where it starts and ends, and its text. */
+interface LineBounds {
+  start: number
+  /** Exclusive, and the newline itself is not part of the line. */
+  end: number
+  text: string
+}
 
 interface Snapshot {
   value: string
@@ -448,11 +445,16 @@ export class EditorKernel {
         this.commit(this.doc + '\n', this.doc.length + 1)
         return
       }
-      const lineStart = this.doc.lastIndexOf('\n', Math.max(0, live - 1)) + 1
-      const lineEndRaw = this.doc.indexOf('\n', live)
-      const lineEnd = lineEndRaw === -1 ? this.doc.length : lineEndRaw
-      const currentLine = this.doc.slice(lineStart, lineEnd)
-      const prefix = LINE_PREFIX_RE.exec(currentLine)?.[0] ?? ''
+      const { end: lineEnd, text: currentLine } = this.lineBounds(live)
+      // What a line carries in front of its content — a list marker (`- `, `2. `, a
+      // task checkbox), a quote marker (`> `), or several nested (`> - `) — has ONE
+      // owner: `parseLine`, which the line-kind pass reads too. Enter repeats that
+      // markup on the new line, which is what makes `> ` continue a quote and a task
+      // item keep its checkbox. Fences are the exception: a fence line's `prefix` IS
+      // the fence marker, and repeating it would open a second fence instead of a
+      // code line.
+      const parts = parseLine(currentLine)
+      const prefix = parts.isFence ? '' : parts.prefix
 
       const left = this.leavingEmptyItem(live)
       if (left) {
@@ -484,7 +486,7 @@ export class EditorKernel {
         // the insertion point (`at + 1`) overshot by one line whenever the
         // current line was empty: the caret landed on the start of the NEXT
         // line's text, so typing glued onto the following paragraph.
-        const at = lineEndRaw === -1 ? this.doc.length : lineEndRaw + 1
+        const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
         this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), live + 1)
         return
       }
@@ -509,17 +511,30 @@ export class EditorKernel {
       return
     }
 
-    // Backspace on an EMPTY item (`2. ` alone on the line) leaves the list, the
-    // same way Enter does. Without this rule the browser deleted the marker's own
-    // trailing space and the line became `2.` — not an item as far as the editor's
-    // scan is concerned, an empty one as far as markdown-it is — and one more
-    // Backspace turned it into a bare `2` glued onto the item above as a lazy
-    // continuation. This has to come BEFORE the line-join rule below, which would
-    // otherwise swallow the marker into the previous line.
+    // Backspace at a list item's CONTENT start steps the line out of its block —
+    // the whole prefix at once, rather than the browser taking it one character
+    // at a time. Two rules, and both have to come BEFORE the line joins below,
+    // which would otherwise swallow the marker into the line above:
+    //
+    // 1. An EMPTY item (`2. ` alone on the line) leaves the list, the same way
+    //    Enter does. Without it the browser deleted the marker's own trailing
+    //    space and the line became `2.` — not an item as far as the editor's scan
+    //    is concerned, an empty one as far as markdown-it is — and one more
+    //    Backspace turned it into a bare `2` glued onto the item above as a lazy
+    //    continuation.
+    // 2. A NON-EMPTY item goes through `backspaceAtContentStart`: the marker goes
+    //    and the body joins the block above (a nested item only steps out one
+    //    level). Without it the browser deleted the marker's separator space
+    //    (`3. ccc` → `3.ccc`), so the item's text turned into ordinary text — the
+    //    list silently lost an item, and the next press or two kept eating marker
+    //    characters until the caret stood at the line start, where the join rule
+    //    below swallows the line into the item ABOVE. Measured
+    //    keystroke-by-keystroke in `.scratch/backspace-unlist/issues/01`: the
+    //    fourth press deleted the previous item's text.
     if (event.key === 'Backspace' && live !== null) {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        const left = this.leavingEmptyItem(live)
+        const left = this.leavingEmptyItem(live) ?? backspaceAtContentStart(this.doc, live)
         if (left) {
           event.preventDefault()
           this.pushUndo({ value: this.doc, caret: this.caret })
@@ -536,25 +551,39 @@ export class EditorKernel {
     // last character of the nearest text it could find and then dropped a line.
     // (This also covers the old "caret at a block start" case, which is just a
     // line start at a block boundary.)
-    if (event.key === 'Backspace' && live !== null && live > 0 && this.doc[live - 1] === '\n') {
+    //
+    // A line with an indentation has a second start, its CONTENT start, and
+    // Backspace there means the same thing: the indentation is the item's
+    // continuation indent rather than text, so it goes away with the break
+    // (`continuationIndent` decides; `2. b` + `ccc` becomes `2. bccc`).
+    if (event.key === 'Backspace' && live !== null && live > 0) {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        event.preventDefault()
-        this.pushUndo({ value: this.doc, caret: this.caret })
-        const joined = this.doc.slice(0, live - 1) + this.doc.slice(live)
-        // Land the caret at the END of the content above, not at the start of the
-        // line below. When the line above is EMPTY — which is the case that brings
-        // the user here — `live - 1` is already the caret's own line start, so the
-        // caret read as "jumped in front of the next line's text" and typing glued
-        // itself to the following block. Both edit paths (caret on the empty line,
-        // caret at the start of the line below) produce the SAME text, so they must
-        // produce the same caret; this is the offset that describes what the user
-        // meant, and it is also where Enter's reverse lands (Enter then Backspace
-        // returns to the offset from before Enter).
-        let caret = live - 1
-        while (caret > 0 && joined[caret - 1] === '\n') caret--
-        this.commit(joined, caret)
-        return
+        const line = this.lineBounds(live)
+        const before = this.doc.slice(line.start, live)
+        // A line start joins whatever follows it; a CONTENT start only joins when
+        // the indentation in front of it is a continuation indent — otherwise
+        // (`null`) this keystroke is not ours.
+        const joinIndent = before === '' ? '' : this.continuationIndent(before, line)
+        if (joinIndent !== null) {
+          event.preventDefault()
+          this.pushUndo({ value: this.doc, caret: this.caret })
+          const drop = joinIndent.length + 1
+          const joined = this.doc.slice(0, live - drop) + this.doc.slice(live)
+          // Land the caret at the END of the content above, not at the start of the
+          // line below. When the line above is EMPTY — which is the case that brings
+          // the user here — `live - 1` is already the caret's own line start, so the
+          // caret read as "jumped in front of the next line's text" and typing glued
+          // itself to the following block. Both edit paths (caret on the empty line,
+          // caret at the start of the line below) produce the SAME text, so they must
+          // produce the same caret; this is the offset that describes what the user
+          // meant, and it is also where Enter's reverse lands (Enter then Backspace
+          // returns to the offset from before Enter).
+          let caret = live - drop
+          while (caret > 0 && joined[caret - 1] === '\n') caret--
+          this.commit(joined, caret)
+          return
+        }
       }
     }
   }
@@ -575,10 +604,7 @@ export class EditorKernel {
    * item. The callers push undo themselves: Enter already has.
    */
   private leavingEmptyItem(live: number): { doc: string; caret: number } | null {
-    const lineStart = this.doc.lastIndexOf('\n', Math.max(0, live - 1)) + 1
-    const lineEndRaw = this.doc.indexOf('\n', live)
-    const lineEnd = lineEndRaw === -1 ? this.doc.length : lineEndRaw
-    const line = this.doc.slice(lineStart, lineEnd)
+    const { start: lineStart, text: line } = this.lineBounds(live)
     const lineNumber = lineOfOffset(this.doc, lineStart)
     // A fence's contents are text, not Markdown: a `- ` inside one is an example,
     // not an item to leave.
@@ -597,6 +623,54 @@ export class EditorKernel {
     // number survives, offsets do not.
     const doc = renumberLists(withoutMarker)
     return { doc, caret: offsetForLine(doc, lineNumber) }
+  }
+
+  /**
+   * The source line holding `live`: where it starts, where it ends (the newline
+   * itself excluded), and its text.
+   *
+   * Enter, the empty-item rule and the line joins all need these three numbers and
+   * they have to agree — one source line is one line box, so every one of these
+   * decisions is made in source offsets, not in the DOM.
+   */
+  private lineBounds(live: number): LineBounds {
+    const start = this.doc.lastIndexOf('\n', Math.max(0, live - 1)) + 1
+    const endRaw = this.doc.indexOf('\n', live)
+    const end = endRaw === -1 ? this.doc.length : endRaw
+    return { start, end, text: this.doc.slice(start, end) }
+  }
+
+  /**
+   * The indentation of the line `live` sits on, when Backspace there means "join
+   * this continuation line to the line above" — null when it means anything else.
+   *
+   * A continuation line inside a list item (`1. aaa` / `2. b` / an indented `ccc`)
+   * is ONE paragraph in the picture: the indentation is where Markdown wants the
+   * item's content, not text the user typed. So Backspace at the content start
+   * takes the break and the indentation together, and the source becomes
+   * `2. bccc` — the same "no space is inserted" join as at a line start, one
+   * keystroke earlier than the browser would manage it.
+   *
+   * The test is the line's KIND, so it covers the nested cases the same way:
+   * `kind === 'text'` is exactly "no block markup of its own here" — not a list
+   * item, a quote, a heading, a rule, a table row, a note, a fence or code. Two
+   * consequences worth naming:
+   *
+   * - `  - bbb` in a nested list may LOOK like an indented continuation, but its
+   *   indentation IS its level: joining it up would swallow the marker that makes
+   *   it an item, so the kind check keeps it out.
+   * - an indented code block (`    code`, no fence) is not a line kind this editor
+   *   models at all — it reads as text here, exactly as it does in every other
+   *   line rule, so its indentation goes with the break too.
+   */
+  private continuationIndent(before: string, line: LineBounds): string | null {
+    if (before === '' || !/^[ \t]+$/.test(before)) return null
+    // Exactly at the content start, and with content after it: a caret inside the
+    // indentation, or on a whitespace-only line, is deleting whitespace.
+    if (/^[ \t]*/.exec(line.text)?.[0] !== before) return null
+    if (line.text.length === before.length) return null
+    const lineNumber = lineOfOffset(this.doc, line.start)
+    return this.lineStates[lineNumber - 1]?.kind === 'text' ? before : null
   }
 
   private handleMouseDown = (event: MouseEvent): void => {

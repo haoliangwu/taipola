@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { indentListItem, parseListItem, renumberLists } from './lists'
+import { backspaceAtContentStart, indentListItem, parseListItem, renumberLists } from './lists'
 import { md } from './markdownIt'
 
 /** markdown-it's own structure for `source`, with whitespace folded away. */
@@ -263,5 +263,124 @@ describe('Shift+Tab 在最外层：该项变正文，列表断成两个', () => 
 
   it('正文上 Shift+Tab 什么也不做（不是列表项）', () => {
     expect(indentListItem('正文\n', 0, 'out')).toBeNull()
+  })
+})
+
+/**
+ * Backspace 落在**正文开头**时这一行走哪条路。
+ *
+ * 与空项规则（`leavingEmptyItem`，在 kernel 里）是同一件事的两半：空项走"标记没了、留一个空行"，
+ * 非空项走这里——最外层移出列表（正文成为上一项的续行），有上一级就退一级（T4）。
+ */
+describe('backspaceAtContentStart', () => {
+  it('有序项：正文缩进到上一项的内容列，光标留在原地', () => {
+    const doc = '1. aaa\n2. b\n3. ccc\n'
+    expect(backspaceAtContentStart(doc, 15)).toEqual({
+      doc: '1. aaa\n2. b\n   ccc\n',
+      caret: 15,
+    })
+  })
+
+  it('列表第一项：退化成普通段落，其余项重新编号', () => {
+    expect(backspaceAtContentStart('1. aaa\n2. bbb\n', 3)).toEqual({
+      doc: 'aaa\n1. bbb\n',
+      caret: 0,
+    })
+  })
+
+  it('中间的项：正文接在上一项后面，后面的同级项顺延', () => {
+    expect(backspaceAtContentStart('1. aaa\n2. bbb\n3. ccc\n', 10)).toEqual({
+      doc: '1. aaa\n   bbb\n2. ccc\n',
+      caret: 10,
+    })
+  })
+
+  it('松列表（中间隔了空行）：正文照样接在上一项的列上', () => {
+    expect(backspaceAtContentStart('1. aaa\n\n2. bbb\n', 11)).toEqual({
+      doc: '1. aaa\n\n   bbb\n',
+      caret: 11,
+    })
+  })
+
+  it('无序项与任务项共用一条规则：标记宽度决定正文落哪一列', () => {
+    expect(backspaceAtContentStart('- aaa\n- bbb\n', 8)).toEqual({
+      doc: '- aaa\n  bbb\n',
+      caret: 8,
+    })
+    // 复选框算在标记里，所以正文落在第 6 列。
+    expect(backspaceAtContentStart('- [ ] aaa\n- [ ] bbb\n', 16)).toEqual({
+      doc: '- [ ] aaa\n      bbb\n',
+      caret: 16,
+    })
+  })
+
+  it('无序列表的第一项：退化成普通段落（非空的 `- ` 能打断段落，列表还在）', () => {
+    expect(backspaceAtContentStart('- aaa\n- bbb\n', 2)).toEqual({
+      doc: 'aaa\n- bbb\n',
+      caret: 0,
+    })
+  })
+
+  it('引用里的列表项：整行以引用前缀开始，所以按引用那条路走（正文落在引用内容列上）', () => {
+    // `> - [ ] bbb` 不是"列表项"（`parseListItem` 看不见 `>` 里面的标记），
+    // 于是正文退成上一行的续行——渲染上仍在同一个引用列表项里（lazy continuation）。
+    expect(backspaceAtContentStart('> - [ ] aaa\n> - [ ] bbb\n', 20)).toEqual({
+      doc: '> - [ ] aaa\n        bbb\n',
+      caret: 20,
+    })
+  })
+
+  it('引用行：退出引用，正文对齐上一行引用的内容列', () => {
+    expect(backspaceAtContentStart('> aaa\n> bbb\n', 8)).toEqual({
+      doc: '> aaa\n  bbb\n',
+      caret: 8,
+    })
+  })
+
+  it('嵌套项不是"移出列表"而是退一级：那一行仍然是列表项', () => {
+    expect(backspaceAtContentStart('1. aaa\n   1. bbb\n', 13)).toEqual({
+      doc: '1. aaa\n2. bbb\n',
+      caret: 10,
+    })
+  })
+
+  it('上方是段落或标题时正文落在第 0 列（没有可续的块前缀）', () => {
+    expect(backspaceAtContentStart('# 标题\n1. aaa\n', 8)).toEqual({
+      doc: '# 标题\naaa\n',
+      caret: 5,
+    })
+  })
+
+  it('上方是围栏时同样落在第 0 列：围栏的"前缀"是围栏自己，不是内容列', () => {
+    expect(backspaceAtContentStart('```\nx\n```\n1. ccc\n', 13)).toEqual({
+      doc: '```\nx\n```\nccc\n',
+      caret: 10,
+    })
+  })
+
+  it('上方的行如果变短了（`10.` → `1.`），光标按最终文本读', () => {
+    // `10.`/`11.` 重排成 `1.`/`2.` 之后整篇短了两格，正文那行也从第 4 列开始。
+    expect(backspaceAtContentStart('10. aaa\n11. bbb\n12. ccc\n', 20)).toEqual({
+      doc: '1. aaa\n2. bbb\n    ccc\n',
+      caret: 18,
+    })
+  })
+
+  it('光标不在正文开头时让开：标记里、正文中间都不碰结构', () => {
+    expect(backspaceAtContentStart('1. aaa\n2. bbb\n', 9)).toBeNull()
+    expect(backspaceAtContentStart('1. aaa\n2. bbb\n', 11)).toBeNull()
+  })
+
+  it('空项留给 leavingEmptyItem：正文是空的时候让开', () => {
+    expect(backspaceAtContentStart('1. aaa\n2. \n', 10)).toBeNull()
+  })
+
+  it('围栏里的"列表行"是代码，让开', () => {
+    expect(backspaceAtContentStart('```\n3. ccc\n```\n', 7)).toBeNull()
+  })
+
+  it('不是块前缀行（普通段落、续行）让开', () => {
+    expect(backspaceAtContentStart('甲\n  乙\n', 5)).toBeNull()
+    expect(backspaceAtContentStart('1. aaa\n   cont\n', 11)).toBeNull()
   })
 })
