@@ -9,16 +9,12 @@
  * regression `App.test.tsx` pins).
  *
  * When to write — debounced while typing, flushed when the page goes away — is
- * the shell's policy, not this module's, so `save` has no timer in it.
+ * the shell's policy and lives in `core/autosave.ts`; this module only performs
+ * the write, so `save` has no timer in it.
  */
+import type { Draft } from '../core/autosave'
 
 const DRAFT_KEY = 'taipola:draft'
-
-export interface Draft {
-  content: string
-  name: string
-  savedAt: number
-}
 
 export interface DraftStore {
   /** The last draft, or null when there is none (or it is unusable). */

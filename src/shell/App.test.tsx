@@ -3,6 +3,7 @@ import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
+import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
 
 /**
@@ -98,5 +99,41 @@ describe('导出文件名', () => {
     } finally {
       clickSpy.mockRestore()
     }
+  })
+})
+/**
+ * The shortcut WIRING, which `core/shortcuts.test.ts` cannot reach.
+ *
+ * That file proves which key means which command. It cannot prove that the
+ * command then runs the right thing — the mapping from command name to action is
+ * the shell's half, and it had no coverage at all before this.
+ */
+describe('快捷键接线', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('Cmd/Ctrl+B 加粗，Cmd/Ctrl+Shift+K 删掉整行（同一个 K 的两种修饰键）', async () => {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '第一行\n第二行\n', name: 'untitled.md', savedAt: Date.now() }),
+    )
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    const doc = view.container.querySelector('.doc') as HTMLElement
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+    if (!run?.firstChild) throw new Error('first run has no text node')
+    placeCaretAt(run.firstChild, 0)
+
+    await user.keyboard('{Control>}b{/Control}')
+    // 加粗包住空选区：插入一对着标记，光标落在中间。
+    expect(readDocumentSource(doc)).toBe('****第一行\n第二行\n')
+
+    await user.keyboard('{Control>}{Shift>}k{/Shift}{/Control}')
+    // 删掉光标所在那一整行，而不是走链接（Cmd+K）那条路。
+    expect(readDocumentSource(doc)).toBe('第二行\n')
+
+    view.unmount()
   })
 })

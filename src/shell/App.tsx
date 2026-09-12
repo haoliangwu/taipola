@@ -3,6 +3,8 @@ import { Editor, type EditorHandle } from './components/Editor'
 import { Outline } from './components/Outline'
 import { computeStats, extractHeadings } from '../core/markdown'
 import { WELCOME_DOC } from '../core/welcome'
+import { createAutosave } from '../core/autosave'
+import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
 import { THEME_LABEL, useTheme } from './useTheme'
 import {
@@ -15,7 +17,6 @@ import {
   toggleInlineCode,
 } from '../core/editCommands'
 
-const DRAFT_DEBOUNCE_MS = 500
 const OUTLINE_DEBOUNCE_MS = 200
 
 export default function App() {
@@ -55,25 +56,42 @@ export default function App() {
   }, [value])
 
   // --- draft persistence -----------------------------------------------------
+  // The policy (debounce, and write now on unload) is `core/autosave.ts`; this is
+  // the wiring: real localStorage, real timers, real unload events.
+  const autosave = useMemo(
+    () =>
+      createAutosave({
+        write: (draft) => documents.draft.save(draft),
+        setTimer: (run, delayMs) => window.setTimeout(run, delayMs),
+        clearTimer: (handle) => window.clearTimeout(handle),
+        now: () => Date.now(),
+      }),
+    [],
+  )
+
   useEffect(() => {
-    const draft = { content: value, name: fileName, savedAt: Date.now() }
-    const timer = window.setTimeout(() => documents.draft.save(draft), DRAFT_DEBOUNCE_MS)
+    autosave.schedule(value, fileName)
+    return () => autosave.cancel()
+  }, [autosave, fileName, value])
+
+  useEffect(() => {
     // The debounce timer dies the moment the page unloads: an edit made just
     // before refreshing could still be sitting in the timer, and reloading then
     // restores the STALE draft — observed as deleted text "coming back" after
     // a refresh. Flush synchronously on unload (localStorage writes are sync).
-    const flush = () => documents.draft.save(draft)
+    // Registered once: the store remembers the pending draft, so these listeners
+    // do not need re-registering on every keystroke.
+    const flush = () => autosave.flush()
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush()
     }
     window.addEventListener('pagehide', flush)
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      window.clearTimeout(timer)
       window.removeEventListener('pagehide', flush)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [fileName, value])
+  }, [autosave])
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -178,52 +196,44 @@ export default function App() {
     }
   }, [notify])
 
+  // Which key runs what is `core/shortcuts.ts` (pure, unit-tested); this table is
+  // the other half — one place where a command name becomes an action.
+  const shortcutActions = useMemo((): Record<ShellCommand, () => void> => {
+    const run = (fn: () => void) => () => fn()
+    return {
+      blur: () => (document.activeElement as HTMLElement | null)?.blur(),
+      bold: commands.bold,
+      italic: commands.italic,
+      inlineCode: commands.code,
+      link: commands.link,
+      deleteLine: commands.deleteLine,
+      heading1: commands.heading(1),
+      heading2: commands.heading(2),
+      heading3: commands.heading(3),
+      heading4: commands.heading(4),
+      heading5: commands.heading(5),
+      heading6: commands.heading(6),
+      save: run(() => void handleSave(false)),
+      saveAs: run(() => void handleSave(true)),
+      open: run(() => void handleOpen()),
+      newDocument: handleNew,
+      toggleOutline: () => setSidebarOpen((open) => !open),
+    }
+  }, [commands, handleNew, handleOpen, handleSave])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const mod = event.metaKey || event.ctrlKey
-      if (!mod) {
-        if (event.key === 'Escape') {
-          (document.activeElement as HTMLElement | null)?.blur()
-        }
-        return
-      }
-
-      const key = event.key.toLowerCase()
-      const run = (fn: () => void) => {
-        event.preventDefault()
-        fn()
-      }
-
-      if (event.shiftKey) {
-        if (key === 'k') return run(commands.deleteLine)
-        if (key === 's') return run(() => void handleSave(true))
-        if (key === '\\') return run(() => setSidebarOpen((open) => !open))
-        return
-      }
-
-      switch (key) {
-        case 'b':
-          return run(commands.bold)
-        case 'i':
-          return run(commands.italic)
-        case 'e':
-          return run(commands.code)
-        case 'k':
-          return run(commands.link)
-        case 's':
-          return run(() => void handleSave(false))
-        case 'o':
-          return run(() => void handleOpen())
-        case 'n':
-          return run(handleNew)
-        default:
-          if (key >= '1' && key <= '6') return run(commands.heading(Number(key)))
-      }
+      const shortcut = shortcutFor(event)
+      // null means the shell has no binding: no `preventDefault()`, so the
+      // browser keeps its own (Cmd+P must still print).
+      if (!shortcut) return
+      event.preventDefault()
+      shortcutActions[shortcut]()
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commands, handleNew, handleOpen, handleSave])
+  }, [shortcutActions])
 
   return (
     <div className="app">
