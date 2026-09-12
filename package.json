@@ -2,6 +2,7 @@
   "name": "taipola",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "pnpm@12.3.4",
   "type": "module",
   "description": "A minimal, powerful WYSIWYG markdown editor — instant rendering, no split pane.",
   "scripts": {

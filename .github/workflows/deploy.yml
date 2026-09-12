@@ -1,0 +1,61 @@
+name: Deploy to GitHub Pages
+
+# Publishes the static preview. The site is a *project* page, so `vite build` emits
+# base=/taipola/ (see vite.config.ts) and the artifact below is servable as-is: no
+# path rewriting, and no `.nojekyll` — uploading an artifact bypasses Jekyll entirely.
+#
+# Only the build runs here. `pnpm build` is `tsc -b && vite build`, so type errors
+# still fail the deploy, but the browser test layer (which needs Chromium) stays local.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; the newer push wins.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `version:` on purpose — it is read from `packageManager` in package.json,
+      # the same version that wrote pnpm-lock.yaml. `pnpm/action-setup` documents
+      # itself as the action for pnpm v10 and older; v11+ is served by its successor,
+      # `pnpm/setup`, which is why this is not the more familiar action.
+      # `install: false` because the lockfile is installed explicitly below.
+      - uses: pnpm/setup@v2
+        with:
+          install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
