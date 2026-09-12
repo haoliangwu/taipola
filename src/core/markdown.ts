@@ -6,7 +6,7 @@
  * Rendering markdown to HTML is a separate concern that needs DOMPurify and
  * therefore lives in `../platform/html.ts`.
  */
-import { isThematicBreak } from './inline'
+import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
 import { md } from './markdownIt'
 
 /**
@@ -201,8 +201,6 @@ function collectRanges(tokens: MarkdownToken[]): {
   ranges.sort((a, b) => a.startLine - b.startLine)
   return { ranges, relocated }
 }
-
-const FOOTNOTE_DEFINITION = /^ {0,3}\[\^[^\]]+\]:/
 
 /**
  * Splits a markdown document into caret-addressable blocks.

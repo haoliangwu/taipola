@@ -22,6 +22,7 @@ function runs(v: BlockView, line = 0) {
     ...(run.mark.strike ? { strike: true } : {}),
     ...(run.mark.code ? { code: true } : {}),
     ...(run.mark.link ? { link: run.mark.link } : {}),
+    ...(run.mark.footnoteRef ? { footnoteRef: run.mark.footnoteRef } : {}),
     ...(run.mark.img ? { img: run.mark.img.src } : {}),
   }))
 }
@@ -302,5 +303,76 @@ describe('裸 URL：编辑器与导出同一套规则', () => {
   it('只改样式不改字符：runs 仍然拼回原文', () => {
     const raw = 'A https://example.com B user@example.com C 网址是www.example.net。'
     expect(reconstruct(view(raw))).toBe(raw)
+  })
+})
+
+/**
+ * Footnotes, option A: rendered WHERE THEY ARE, not moved to the end.
+ *
+ * The export relocates definitions into a `<section class="footnotes">` at the
+ * bottom. The editor cannot: the whole caret model is "view order == source
+ * order, one line box per source line". So the definition is rendered in place,
+ * as the note it is, and the screen is deliberately not the export's layout. What
+ * DOES have to match is the reference marker (`[1]`) and editability.
+ */
+describe('脚注：引用与定义就地在位渲染', () => {
+  it('正文里的 [^1] 折成上标的 [1]：`[^` 与 `]` 是标记，标签是内容', () => {
+    expect(runs(view('[^1] 后面'))).toEqual([
+      { text: '[^', marker: true, dim: false },
+      { text: '1', marker: false, dim: false, footnoteRef: '1' },
+      { text: ']', marker: true, dim: false },
+      { text: ' 后面', marker: false, dim: false },
+    ])
+  })
+
+  it('标签可以不止一个字符，也认中文标签', () => {
+    expect(runs(view('[^note] x'))[1]).toEqual({
+      text: 'note',
+      marker: false,
+      dim: false,
+      footnoteRef: 'note',
+    })
+    expect(runs(view('[^注] x'))[1].footnoteRef).toBe('注')
+  })
+
+  it('光标在引用里时显示源码（和其它行内构造一样可以改）', () => {
+    const v = view('[^1] 后面', [1])
+    expect(v.lines[0].runs.every((r) => r.marker === false)).toBe(true)
+    expect(v.lines[0].text).toBe('[^1] 后面')
+  })
+
+  it('定义行的 `[^1]: ` 是块级前缀：光标不在其中就折叠，那行带上标签', () => {
+    const v = buildBlockView('[^1]: 小小补充', 0, [], 1)
+    expect(runs(v)).toEqual([
+      { text: '[^1]: ', marker: true, dim: false },
+      { text: '小小补充', marker: false, dim: false },
+    ])
+    expect(v.lines[0].text).toBe('小小补充')
+    // 标签要留在视图里：标记是折叠掉的，`[1]` 只能由渲染层画出来。
+    expect(v.lines[0].footnoteLabel).toBe('1')
+  })
+
+  it('光标进定义块时前缀显现为暗色源码，内容仍可编辑', () => {
+    const v = buildBlockView('[^1]: 小小补充', 0, [2], 1)
+    expect(runs(v)[0]).toMatchObject({ text: '[^1]: ', marker: false, dim: true })
+    expect(v.lines[0].text).toBe('[^1]: 小小补充')
+  })
+
+  it('定义行里的 `[^1]` 不再被当成行内引用（否则会和块级前缀打架）', () => {
+    // 只有一个 marker run，而不是被引用 token 切成四段。
+    expect(runs(view('[^1]: 小小补充')).filter((r) => r.marker)).toHaveLength(1)
+  })
+
+  it('多行定义：续行也在，且能一字不差地拼回源码', () => {
+    const raw = '[^1]: 第一行\n  第二行\n'
+    const v = buildBlockView(raw.trimEnd(), 0, [], 2)
+    expect(v.lines[1].runs.map((r) => r.text).join('')).toBe('  第二行')
+    expect(reconstruct(v)).toBe(raw.trimEnd())
+  })
+
+  it('引用与定义都在时，源码仍然无损', () => {
+    const raw = '见[^1]。\n\n[^1]: 补充。'
+    const v = buildBlockView(raw, 0, [], 3)
+    expect(reconstruct(v)).toBe(raw)
   })
 })

@@ -564,6 +564,50 @@ body {
   color: var(--text);
 }
 
+/* A footnote definition, rendered where it STANDS (option A).
+
+   The exported file relocates notes into a `<section class="footnotes">` at the
+   bottom. The editor cannot follow it there: the caret model is "view order ==
+   source order, one line box per source line", so relocating a definition would
+   decouple the two. The layout therefore differs from the export on purpose —
+   what agrees is the `[1]` marker, not the page it sits on. */
+.vl-footnote {
+  color: var(--text-soft);
+}
+
+/* That marker, DRAWN rather than written: `[^1]: ` collapsed as this line's block
+   prefix, so no characters are left in the DOM to style. Only a definition's first
+   line carries the attribute, so a continuation does not draw a second `[1]`.
+
+   `line-height: 0` matters: a superscript raises the inline box, and without it
+   the line would grow taller than its neighbours — the caret arithmetic is built
+   on one line box per source line. */
+.vl-footnote[data-footnote]::before {
+  content: '[' attr(data-footnote) ']';
+  margin-right: 0.5em;
+  color: var(--accent);
+  font-size: 0.8em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+/* The in-text reference: the label is the DOM text and the brackets come from CSS,
+   so the source stays exact while the reader sees the export's `[1]`. */
+.rn-footnote-ref {
+  color: var(--accent);
+  font-size: 0.8em;
+  vertical-align: super;
+  line-height: 0;
+}
+
+.rn-footnote-ref::before {
+  content: '[';
+}
+
+.rn-footnote-ref::after {
+  content: ']';
+}
+
 /* A rendered image. Its source text is kept in a hidden span so the document can
    be rebuilt from the DOM; the picture replaces it on screen. */
 .rn-image .rn-src {

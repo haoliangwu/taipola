@@ -911,3 +911,71 @@ describe('链接在 DOM 里的样子', () => {
     await assertDomMatchesSource(r)
   })
 })
+
+/**
+ * Footnotes render where they STAND, and stay editable there.
+ *
+ * The export relocates definitions into a `<section class="footnotes">` at the
+ * bottom; the editor deliberately does not, because "view order == source order"
+ * is what the caret arithmetic is built on. So what this pins is the marker (the
+ * `[1]` the reader sees) plus the two things that must not be lost to rendering:
+ * the source, and the ability to type into the note.
+ */
+describe('脚注在编辑器里', () => {
+  const DOC = '见[^1]。\n\n[^1]: 小小补充\n'
+
+  it('引用渲染成上标的 [1]，DOM 文本仍是被折起来的源码', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    const ref = r.container.querySelector<HTMLElement>('.rn-footnote-ref')
+    expect(ref?.textContent).toBe('1')
+    expect(ref?.dataset.footnoteRef).toBe('1')
+    // `[1]` 的两个方括号来自 CSS，所以运行里只剩标签本身；源码里那两个标记
+    // 仍然是零宽地留在 DOM 里，从 DOM 重建源码才不会丢。
+    expect(getComputedStyle(ref!.parentElement!.querySelector('.rn-marker')!).display).toBe('none')
+    await assertDomMatchesSource(r)
+  })
+
+  it('定义行是 vl-footnote，前缀折叠、标记由属性和 CSS 画出来', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    const line = r.container.querySelector<HTMLElement>('.vl-footnote')
+    expect(line?.dataset.footnote).toBe('1')
+    // 前缀 `[^1]: ` 折叠了（零宽），屏幕上剩下的是注脚正文。
+    const marker = line!.querySelector<HTMLElement>('.rn-marker')
+    expect(marker?.textContent).toBe('[^1]: ')
+    expect(getComputedStyle(marker!).display).toBe('none')
+    expect(line!.textContent).toContain('小小补充')
+    await assertDomMatchesSource(r)
+  })
+
+  it('光标进定义行时前缀显现为源码（否则那一行就没法改了）', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    const line = r.container.querySelector<HTMLElement>('.vl-footnote')!
+    r.container.focus({ preventScroll: true })
+    const run = line.querySelector<HTMLElement>('[data-run="1"]')
+    if (!run?.firstChild) throw new Error('the definition has no text run')
+    placeCaretAt(run.firstChild, 0)
+    await flush()
+    // 显现之后前缀不再是零宽的 `rn-marker`，而是暗色的**可见**源码 —— 与标题、
+    // 引用前缀同一套规则（`rn-dim`），所以这一行可以原地改。
+    const revealed = line.querySelector<HTMLElement>('[data-run="0"]')
+    expect(revealed?.textContent).toBe('[^1]: ')
+    expect(revealed?.className).toContain('rn-dim')
+    expect(getComputedStyle(revealed!).display).not.toBe('none')
+    await assertDomMatchesSource(r)
+  })
+
+  it('定义里的正文可以改，改完源码跟着变', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    r.container.focus({ preventScroll: true })
+    const run = r.container.querySelector<HTMLElement>('.vl-footnote [data-run="1"]')
+    if (!run?.firstChild) throw new Error('the definition has no text run')
+    placeCaretAt(run.firstChild, 0)
+    await flush()
+    await r.user.keyboard('X')
+    expect(r.getDoc()).toBe('见[^1]。\n\n[^1]: X小小补充\n')
+  })
+})

@@ -124,3 +124,41 @@ describe('stripInline / visibleToSourceIndex', () => {
     expect(visibleToSourceIndex('abc', 1)).toBe(1)
   })
 })
+
+/**
+ * A footnote definition is a LINE KIND, not a paragraph.
+ *
+ * The renderer draws its marker from the line's class, so the definition has to
+ * be recognisable per line — and the continuation lines have to come with it, or
+ * a note written over two lines would be half styled.
+ */
+describe('脚注定义行', () => {
+  it('定义行是 footnote 类型并带上标签', () => {
+    expect(state('[^1]: 补充说明')).toMatchObject({ kind: 'footnote', footnoteLabel: '1' })
+    // 缩进三个空格以内仍然算定义（与 markdown-it 的块级规则一致）。
+    expect(state('   [^note]: 也认')).toMatchObject({ kind: 'footnote', footnoteLabel: 'note' })
+  })
+
+  it('带缩进的续行跟着定义走，但不重复画标记', () => {
+    const states = computeLineStates(['[^1]: 第一行', '  第二行', '普通段落'])
+    expect(states.map((s) => s.kind)).toEqual(['footnote', 'footnote', 'text'])
+    expect(states[0].footnoteLabel).toBe('1')
+    // 续行没有标签：渲染层只在有标签时画 `[1]`，否则会画出一个空的 `[]`。
+    expect(states[1].footnoteLabel).toBeUndefined()
+  })
+
+  it('空行结束定义', () => {
+    const states = computeLineStates(['[^1]: 补充', '', '  缩进但不在定义里'])
+    expect(states[1].kind).toBe('blank')
+    expect(states[2].kind).not.toBe('footnote')
+  })
+
+  it('正文中间的 [^1]: 不是定义（markdown-it 也只在块首认）', () => {
+    expect(state('见 [^1]: 这是正文').kind).toBe('text')
+  })
+
+  it('围栏里的定义写法是代码内容', () => {
+    const states = computeLineStates(['```', '[^1]: 不是定义', '```'])
+    expect(states[1].kind).toBe('code')
+  })
+})

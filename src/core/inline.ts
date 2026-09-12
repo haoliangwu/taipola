@@ -96,8 +96,31 @@ export function parseLine(raw: string): LineParts {
   return parts
 }
 
+/**
+ * A footnote definition line: `[^label]: …`, with up to three leading spaces.
+ *
+ * It lives HERE, in the module with no imports, because all three layers need the
+ * same answer and a private copy each is how they would drift: `markdown.ts`
+ * claims the line as a source slot (markdown-it-footnote eats it at block time),
+ * `computeLineStates` gives it a line kind, and `view.ts` treats the `[^label]: `
+ * as the line's block prefix instead of as an inline reference.
+ */
+export const FOOTNOTE_DEFINITION = /^ {0,3}\[\^([^\]]+)\]:/
+
 export interface LineState {
-  kind: 'blank' | 'text' | 'heading' | 'rule' | 'fence' | 'code' | 'quote' | 'list' | 'task' | 'table' | 'table-delim'
+  kind:
+    | 'blank'
+    | 'text'
+    | 'heading'
+    | 'rule'
+    | 'fence'
+    | 'code'
+    | 'quote'
+    | 'list'
+    | 'task'
+    | 'table'
+    | 'table-delim'
+    | 'footnote'
   /** Heading depth (1-6) for `kind === 'heading'`, so the six levels can differ. */
   level?: number
   /**
@@ -111,6 +134,15 @@ export interface LineState {
   checked: boolean | null
   /** Source indentation (in characters) of a list line, for nesting. */
   indent: number
+  /**
+   * The label of a `kind === 'footnote'` line's definition, for its first line
+   * only.
+   *
+   * The source's own `[^1]: ` collapses as that line's block prefix, so `[1]` has
+   * to be DRAWN — and a continuation line must not draw a second marker, which is
+   * why this is present on the first line and absent on the rest.
+   */
+  footnoteLabel?: string
 }
 
 /**
@@ -129,6 +161,8 @@ export function computeLineStates(lines: string[]): LineState[] {
    * and the view must agree with the outline about that.
    */
   let openFence: string | null = null
+  /** True while the current line is inside a footnote definition's span. */
+  let inFootnote = false
 
   for (const raw of lines) {
     const parts = parseLine(raw)
@@ -156,9 +190,25 @@ export function computeLineStates(lines: string[]): LineState[] {
     }
 
     if (raw.trim() === '') {
+      inFootnote = false
       states.push({ ...base, kind: 'blank' })
       continue
     }
+
+    // A definition and its indented continuations are one note. markdown-it stops
+    // the definition at the first line that is not indented onto it, so the same
+    // test decides the end here (`markdown.ts` claims the identical span).
+    const definition = FOOTNOTE_DEFINITION.exec(raw)
+    if (definition) {
+      inFootnote = true
+      states.push({ ...base, kind: 'footnote', footnoteLabel: definition[1] })
+      continue
+    }
+    if (inFootnote && /^\s+\S/.test(raw)) {
+      states.push({ ...base, kind: 'footnote' })
+      continue
+    }
+    inFootnote = false
 
     if (parts.isRule) {
       states.push({ ...base, kind: 'rule' })

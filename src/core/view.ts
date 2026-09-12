@@ -11,7 +11,7 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
-import { isThematicBreak } from './inline'
+import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
 import { md } from './markdownIt'
 
 interface MarkerCell {
@@ -29,6 +29,11 @@ interface Mark {
   strike?: boolean
   code?: boolean
   link?: string
+  /**
+   * A footnote reference. The run is the LABEL (`1` of `[^1]`); its brackets are
+   * drawn by CSS, because the source's own `[^` and `]` collapse as markers.
+   */
+  footnoteRef?: string
   /**
    * A collapsed image: the run is rendered as an `<img>` instead of its source
    * text. The source text stays in the DOM (hidden) so a document absorbed from
@@ -102,6 +107,15 @@ interface ViewLine {
    * `vl-soft` / `vl-continues` in `styles.css`.
    */
   softBreak: boolean
+  /**
+   * The label of the footnote definition this line belongs to, on its first line
+   * only — else `undefined`.
+   *
+   * The source's `[^1]: ` is collapsed as this line's block prefix, so the marker
+   * the reader sees has to be drawn from here; a continuation line carries no
+   * label so that it does not draw a second `[1]`.
+   */
+  footnoteLabel?: string
 }
 
 export interface BlockView {
@@ -109,7 +123,7 @@ export interface BlockView {
 }
 
 interface Token {
-  kind: 'bold' | 'italic' | 'strike' | 'code' | 'link' | 'image'
+  kind: 'bold' | 'italic' | 'strike' | 'code' | 'link' | 'image' | 'footnoteRef'
   start: number
   end: number
   innerStart: number
@@ -117,6 +131,8 @@ interface Token {
   url?: string
   /** Image alt text, for a `kind: 'image'` token. */
   alt?: string
+  /** Footnote label, for a `kind: 'footnoteRef'` token. */
+  label?: string
 }
 
 const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
@@ -146,7 +162,11 @@ function findTokens(text: string): Token[] {
  */
 function findSyntaxTokens(text: string): Token[] {
   const tokens: Token[] = []
-  let i = 0
+  // A definition's `[^label]: ` is the LINE's block prefix (see
+  // `blockPrefixRange`), not an inline reference, so the scan starts after it.
+  // Without this the label inside it would be claimed twice and each collapsed
+  // character would become its own marker run.
+  let i = FOOTNOTE_DEFINITION.exec(text)?.[0].length ?? 0
 
   while (i < text.length) {
     const rest = text.slice(i)
@@ -163,6 +183,20 @@ function findSyntaxTokens(text: string): Token[] {
         alt: image[1],
       })
       i += image[0].length
+      continue
+    }
+
+    const footnoteRef = /^\[\^([^\]]+)\]/.exec(rest)
+    if (footnoteRef) {
+      tokens.push({
+        kind: 'footnoteRef',
+        start: i,
+        end: i + footnoteRef[0].length,
+        innerStart: i + 2,
+        innerEnd: i + 2 + footnoteRef[1].length,
+        label: footnoteRef[1],
+      })
+      i += footnoteRef[0].length
       continue
     }
 
@@ -426,6 +460,16 @@ function blockPrefixRange(raw: string): { start: number; end: number } | null {
   // A horizontal rule is content, not a prefix.
   if (isThematicBreak(raw)) return null
 
+  // A footnote definition's `[^1]: ` is a block prefix in exactly the way a bullet
+  // is: collapsed while the caret is outside the block, revealed as dim source
+  // while it is inside. What is left is the note's text, and the `[1]` marker is
+  // drawn by the renderer from `ViewLine.footnoteLabel`.
+  const definition = FOOTNOTE_DEFINITION.exec(raw)
+  if (definition) {
+    const gap = /^[ \t]*/.exec(raw.slice(definition[0].length))?.[0].length ?? 0
+    return { start: 0, end: definition[0].length + gap }
+  }
+
   // Try every pattern at each position and keep whichever consumes the most, so
   // nested prefixes accumulate (`> - item`). Breaking on the first pattern that
   // merely fails would stop before a bare list bullet or quote marker.
@@ -560,6 +604,7 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0,
   return {
     sourceStart,
     softBreak: opts.softBreak === true,
+    footnoteLabel: FOOTNOTE_DEFINITION.exec(raw)?.[1],
     runs,
     cellRuns,
     visibleToSource,
@@ -744,6 +789,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   return {
     sourceStart,
     softBreak: opts.softBreak === true,
+    footnoteLabel: FOOTNOTE_DEFINITION.exec(raw)?.[1],
     runs,
     visibleToSource,
     sourceToVisible,
@@ -762,6 +808,7 @@ function markFor(tokens: Token[], start: number, end: number): Mark {
       else if (token.kind === 'strike') mark.strike = true
       else if (token.kind === 'code') mark.code = true
       else if (token.kind === 'link') mark.link = token.url
+      else if (token.kind === 'footnoteRef') mark.footnoteRef = token.label
     }
   }
   return mark
