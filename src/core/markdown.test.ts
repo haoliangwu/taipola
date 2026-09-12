@@ -123,9 +123,29 @@ describe('extractHeadings（大纲）', () => {
     expect(extractHeadings(source).map((h) => h.text)).toEqual(['真标题', '又真了'])
   })
 
-  // 已知缺口：parseDocument 认 setext 标题，大纲不认（见 .scratch 里的 issue）。
-  it('已知缺口：setext 标题不进大纲', () => {
-    expect(extractHeadings('Title\n=====\n')).toEqual([])
+  it('setext 标题也进大纲（parseDocument 早就在认它）', () => {
+    expect(extractHeadings('Title\n=====\n')).toEqual([{ level: 1, text: 'Title', line: 1 }])
+    expect(extractHeadings('Sub\n---\n')).toEqual([{ level: 2, text: 'Sub', line: 1 }])
+  })
+
+  it('setext 前瞻不外溢：分割线、列表项、引用、围栏', () => {
+    // 上一行是空行时，`---` 是分割线而不是标题下划线（CommonMark）。
+    expect(extractHeadings('上段\n\n---\n')).toEqual([])
+    // 列表项与引用不是段落行，不在它们下面找下划线。
+    expect(extractHeadings('- 项\n---\n')).toEqual([])
+    expect(extractHeadings('> 引用\n---\n')).toEqual([])
+    // 围栏里的 `===` 是代码内容。
+    expect(extractHeadings('```\nTitle\n===\n```\n')).toEqual([])
+  })
+
+  it('setext 与 ATX 混排时按源码顺序进大纲', () => {
+    const doc = '# 一\n\nTitle\n=====\n\n## 二\n\nSub\n---\n'
+    expect(extractHeadings(doc).map((h) => [h.level, h.text, h.line])).toEqual([
+      [1, '一', 1],
+      [1, 'Title', 3],
+      [2, '二', 6],
+      [2, 'Sub', 8],
+    ])
   })
 })
 

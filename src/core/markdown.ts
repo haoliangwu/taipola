@@ -338,6 +338,27 @@ export interface Heading {
   line: number
 }
 
+/** A setext underline: `===` makes an h1, `---` an h2. */
+const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/
+
+/** Three or more `-`, `*` or `_` on their own line: the same rule `view.ts` uses. */
+const THEMATIC_BREAK = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/
+
+/**
+ * Whether a line can be the TEXT of a setext heading.
+ *
+ * Only a plain paragraph line can. A line that already opens another block — an
+ * ATX heading, a blockquote, a list item, a table row, a fence — is not a
+ * paragraph, and CommonMark does not let an underline under it form a heading
+ * either. A rule line is excluded too, which is what keeps `---` on its own from
+ * reading as an underline for the `---` above it.
+ */
+function canCarrySetextUnderline(line: string): boolean {
+  if (line.trim() === '') return false
+  if (THEMATIC_BREAK.test(line)) return false
+  return !/^\s{0,3}(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\||`{3,}|~{3,})/.test(line)
+}
+
 /** Extracts the document outline, ignoring pseudo-headings inside fenced code. */
 export function extractHeadings(source: string): Heading[] {
   const headings: Heading[] = []
@@ -357,7 +378,20 @@ export function extractHeadings(source: string): Heading[] {
     const atx = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line)
     if (atx) {
       headings.push({ level: atx[1].length, text: toPlainText(atx[2]) || '(空标题)', line: i + 1 })
+      return
     }
+
+    // Setext: a paragraph line underlined by the line BELOW it. That is why the
+    // outline needs one line of lookahead, and why a `---` after a blank line is
+    // still just a thematic break (the text above it is not a paragraph there).
+    if (!canCarrySetextUnderline(line)) return
+    const underline = SETEXT_UNDERLINE.exec(lines[i + 1] ?? '')
+    if (!underline) return
+    headings.push({
+      level: underline[1][0] === '=' ? 1 : 2,
+      text: toPlainText(line) || '(空标题)',
+      line: i + 1,
+    })
   })
 
   return headings
