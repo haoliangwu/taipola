@@ -28,14 +28,89 @@ export function parseListItem(line: string, index = 0): ListItem | null {
   return { line: index, indent: match[1], marker: match[2], body: match[3] }
 }
 
+/** The delimiter an ordered item uses; empty for a bullet. */
+function delimiterOf(item: ListItem): string {
+  return item.marker.match(/[.)]/)?.[0] ?? ''
+}
+
+/** Which list an item belongs to: changing the marker starts a NEW list. */
+function markerKind(item: ListItem): string {
+  const delimiter = delimiterOf(item)
+  return delimiter ? `ordered${delimiter}` : item.marker[0]
+}
+
+/** One open list level: how many items it holds, and the style that opened it. */
+interface OpenLevel {
+  count: number
+  kind: string
+}
+
+/** The lists that are open at this point in the scan. */
+interface OpenLists {
+  /** Keyed by the item indent, so a level is one indentation string. */
+  levels: Map<string, OpenLevel>
+  /** Content column of the innermost item; null when no list is open. */
+  contentIndent: number | null
+}
+
+/**
+ * Whether a line is content of the innermost item rather than a line beside it.
+ *
+ * The threshold is the item's CONTENT column (`indent + marker`), not its marker
+ * indent: that is where Markdown puts the boundary. A paragraph indented one or
+ * two spaces under `1. 甲` is a block of its own, so treating it as part of the
+ * item both mis-numbers the list that follows and lets the renumbering glue that
+ * paragraph into the next item's text (`正文2. c` — only `1.` interrupts a
+ * paragraph).
+ */
+function insideItem(line: string, open: OpenLists): boolean {
+  return open.contentIndent !== null && leadingSpaces(line) >= open.contentIndent
+}
+
+/**
+ * Whether a blank line leaves the open lists open.
+ *
+ * A blank line between two items only makes the list LOOSE, it does not end it —
+ * `1. 甲 / (blank) / 2. 乙` is one `<ol>` with two items, and so is a loose item
+ * followed by its own nested list. What follows the blank decides which it is:
+ * content indented into the innermost item belongs to it, an item continues the
+ * list of ITS OWN level when that level's marker style matches, and anything else
+ * starts a new block.
+ */
+function blankKeepsList(lines: string[], index: number, open: OpenLists): boolean {
+  if (open.contentIndent === null) return false
+  for (let i = index + 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue
+    if (insideItem(lines[i], open)) return true
+    const item = parseListItem(lines[i], i)
+    if (!item) return false
+    const level = open.levels.get(item.indent)
+    return level !== undefined && level.kind === markerKind(item)
+  }
+  return false
+}
+
 /**
  * Renumbers every ordered list in the document.
  *
  * Each indentation level is its own sequence and starts at 1, which is also what
  * the rendered state shows (a CSS counter per block that counts from 1) — so the
- * source and the picture agree. A blank line, a code fence, or any line that is
- * not a list item ends the current lists; returning to a shallower indent drops
- * the deeper sequences, so a nested list under the next parent starts at 1 again.
+ * source and the picture agree. Returning to a shallower indent drops the deeper
+ * sequences, so a nested list under the next parent starts at 1 again.
+ *
+ * What ENDS the open lists is a line that is not part of the innermost item and
+ * is not an item of an open level's own style: a paragraph, a heading, a fence,
+ * or a different marker, at that level. What does not end them is everything that
+ * stays inside the item — its continuation lines, a fenced block indented into
+ * it, and a blank line followed by more of the same list. Treating those as an
+ * ending used to rewrite the next sibling to `1.` while the picture kept counting
+ * it as the second item.
+ *
+ * One boundary this line-level rule cannot see: a LAZY continuation written flush
+ * left (`1. 甲 / 续行 / 3. 丙`). Markdown keeps that line inside the item, but
+ * knowing so needs the parser — a flush-left line is just as often a paragraph
+ * that ends the list — so the counters restart there. Recorded in
+ * `.scratch/list-renumber/issues/01-counters-reset-inside-a-list.md`.
  *
  * `5.` in the source is normalized to `1.`. That is deliberate: the rendered
  * counter could not honour a start number anyway, so keeping one in the source
@@ -43,32 +118,53 @@ export function parseListItem(line: string, index = 0): ListItem | null {
  */
 export function renumberLists(text: string): string {
   const lines = text.split('\n')
-  const counters = new Map<string, number>()
+  const open: OpenLists = { levels: new Map(), contentIndent: null }
   let inFence = false
+
+  const endLists = () => {
+    open.levels.clear()
+    open.contentIndent = null
+  }
 
   const out = lines.map((line, index) => {
     if (FENCE_RE.test(line)) {
       inFence = !inFence
-      counters.clear()
+      // A fence indented into the item is that item's code block; a fence at or
+      // above its own level ends the list.
+      if (!insideItem(line, open)) endLists()
       return line
     }
     if (inFence) return line
 
     const item = parseListItem(line, index)
     if (!item) {
-      counters.clear()
+      if (line.trim() === '') {
+        if (blankKeepsList(lines, index, open)) return line
+      } else if (insideItem(line, open)) {
+        // A continuation line of the innermost item: the list is still open.
+        return line
+      }
+      endLists()
       return line
     }
-    // Drop sequences deeper than this line: we have left them.
-    for (const key of [...counters.keys()]) {
-      if (key.length > item.indent.length) counters.delete(key)
-    }
-    if (!/\d/.test(item.marker)) return line
 
-    const next = (counters.get(item.indent) ?? 0) + 1
-    counters.set(item.indent, next)
-    const delimiter = item.marker.match(/[.)]/)?.[0] ?? '.'
-    return `${item.indent}${next}${delimiter} ${item.body}`
+    // Drop levels deeper than this line: we have left them.
+    for (const key of [...open.levels.keys()]) {
+      if (key.length > item.indent.length) open.levels.delete(key)
+    }
+    // This item's own level: a different marker style at the same indent is a
+    // different list, so it starts counting again (`1. a / - b / 1. c` is three).
+    const kind = markerKind(item)
+    const level = open.levels.get(item.indent)
+    const count = level && level.kind === kind ? level.count : 0
+    open.contentIndent = item.indent.length + item.marker.length
+    if (!delimiterOf(item)) {
+      open.levels.set(item.indent, { count: 0, kind })
+      return line
+    }
+
+    open.levels.set(item.indent, { count: count + 1, kind })
+    return `${item.indent}${count + 1}${delimiterOf(item)} ${item.body}`
   })
 
   return out.join('\n')
@@ -249,5 +345,17 @@ export function indentListItem(
 
   const delta = indent.length - item.indent.length
   lines[index] = `${indent}${item.marker}${item.body}`
-  return { doc: renumberLists(lines.join('\n')), caret: Math.max(0, offset + delta) }
+  const renumbered = renumberLists(lines.join('\n'))
+  // Renumbering can change this line's own marker width (`1. jjj` becomes `10.
+  // jjj` at its new level), so the caret is placed from its position INSIDE the
+  // body rather than from an absolute offset, and read off the final text — the
+  // lines above may have been renumbered too.
+  const markerWidth =
+    renumbered.split('\n')[index].length - indent.length - item.body.length
+  const withinBody = caretColumn - item.indent.length - item.marker.length
+  const column =
+    withinBody >= 0
+      ? indent.length + markerWidth + withinBody
+      : Math.max(0, Math.min(caretColumn + delta, indent.length))
+  return { doc: renumbered, caret: offsetForLine(renumbered, index + 1) + column }
 }

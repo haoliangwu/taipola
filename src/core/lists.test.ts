@@ -33,6 +33,84 @@ describe('renumberLists', () => {
     const input = '正文 1. 不是列表\n\n```\n1. 代码里的\n1. 还是代码\n```\n'
     expect(renumberLists(input)).toBe(input)
   })
+
+  /**
+   * 列表在什么情况下**没有**结束。
+   *
+   * 渲染器是权威：下面每组都先用 markdown-it 看结构，再要求源码里的序数和它一致。
+   * 续行、松列表里的空行、项里缩进的围栏都不结束列表，所以后面的同级项要保持序数——
+   * 旧实现见到"不是列表项的行"就清空计数器，把同级项改写成 `1.`，而画面还在往下数。
+   */
+  it('续行不结束列表：后面的同级项保持序数', () => {
+    const input = '1. 甲\n   1. 乙\n      乙的续行\n3. 丙\n'
+    const out = renumberLists(input)
+    expect(out).toBe('1. 甲\n   1. 乙\n      乙的续行\n2. 丙\n')
+    // 丙 是同一个 <ol> 里的第 2 项，所以源码里必须是 2。
+    expect(structure(out)).toContain('<li>乙乙的续行</li></ol></li><li>丙</li></ol>')
+  })
+
+  it('松列表里的空行不结束列表', () => {
+    const input = '1. 甲\n   1. 乙\n\n      - 子一\n3. 丙\n'
+    const out = renumberLists(input)
+    expect(out).toBe('1. 甲\n   1. 乙\n\n      - 子一\n2. 丙\n')
+    expect(structure(out)).toContain('</li></ol></li><li>丙</li></ol>')
+  })
+
+  it('项里缩进的围栏不结束列表，围栏里那行也不参与编号', () => {
+    const input = '1. 甲\n   1. 乙\n      ```\n      1. 假的\n      ```\n3. 丙\n'
+    const out = renumberLists(input)
+    expect(out).toBe('1. 甲\n   1. 乙\n      ```\n      1. 假的\n      ```\n2. 丙\n')
+    expect(structure(out)).toContain('<pre><code>1. 假的</code></pre>')
+  })
+
+  it('标记类型变了就是新列表：那一层的计数器跟着重置', () => {
+    // 渲染是三个列表（ol / ul / ol），第三个从 1 开始。
+    expect(renumberLists('1. a\n- b\n1. c\n')).toBe('1. a\n- b\n1. c\n')
+    // 空行 + 换成无序标记，同样不该把 ol 的序数带过去。
+    expect(renumberLists('1. a\n\n- b\n1. c\n')).toBe('1. a\n\n- b\n1. c\n')
+  })
+
+  /**
+   * "哪些行在项里"的界线是**内容列**（缩进 + 标记宽度），不是标记的缩进。
+   *
+   * 缩进 1–2 格的段落不在 `1. a` 项里，它会结束列表；把它当成项里的内容，
+   * 既会算错后面列表的序数，还会让它被并进下一个列表项的文字里
+   * （`正文2. c` —— 只有 `1.` 能打断段落）。
+   */
+  it('缩进不足内容列的正文结束列表', () => {
+    const input = '1. a\n2. b\n\n 正文\n\n1. c\n2. d\n'
+    expect(renumberLists(input)).toBe(input)
+    expect(structure(renumberLists(input))).toContain('<p>正文</p><ol><li>c</li><li>d</li></ol>')
+
+    const glued = '1. a\n\n 正文\n1. c\n'
+    expect(renumberLists(glued)).toBe(glued)
+    expect(structure(renumberLists(glued))).toContain('<p>正文</p>')
+  })
+
+  it('缩进不足内容列的围栏同样结束列表', () => {
+    const input = '1. a\n2. b\n\n ```\nx\n ```\n1. c\n'
+    expect(renumberLists(input)).toBe(input)
+    expect(structure(renumberLists(input))).toContain('<pre><code>x</code></pre><ol><li>c</li></ol>')
+  })
+
+  /**
+   * 空行之后接回来的是**哪一层**，要看那一层自己的标记类型，不是最内层的。
+   *
+   * `1. a / - b / (空行) / 1. c` 里嵌进去的是无序列表，回到顶格的 `1. c`
+   * 仍然属于外层那个 ol，所以它该是 2。
+   */
+  it('空行之后接回来的是外层列表：按那一层的标记类型判断', () => {
+    const input = '1. a\n   - b\n\n1. c\n'
+    const out = renumberLists(input)
+    expect(out).toBe('1. a\n   - b\n\n2. c\n')
+    // c 是外层那个 ol 的第 2 项（空行让它变成松列表，所以项里包着 <p>）。
+    expect(structure(out)).toContain('<li><p>c</p></li></ol>')
+
+    // 更深一层同理：回到子列表那一层，就按子列表那一层计数。
+    const deep = '1. a\n   1. b\n      - c\n\n   1. d\n'
+    expect(renumberLists(deep)).toBe('1. a\n   1. b\n      - c\n\n   2. d\n')
+    expect(structure(renumberLists(deep))).toContain('<li><p>d</p></li></ol>')
+  })
 })
 
 describe('parseListItem', () => {
@@ -114,6 +192,15 @@ describe('indentListItem', () => {
     const out = indentListItem(doc, doc.length - 1, 'out')
     expect(out?.doc).toBe('1. 甲\n2. 乙\n')
     // 已经在最外层时不是"无效"，而是变正文：见下面 T3 那一组。
+  })
+
+  it('缩出时编号位数变了，光标仍停在正文里原来的位置', () => {
+    const doc = '1. a\n2. b\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n   1. jjj\n'
+    const result = indentListItem(doc, doc.length - 1, 'out')
+    // 缩出成第 10 项：标记从 `1. ` 变成 `10. `，比原来宽一格。
+    expect(result?.doc.endsWith('10. jjj\n')).toBe(true)
+    // 光标本来在行末，重排之后仍然在行末——按 `offset + delta` 算会差一格。
+    expect(result?.caret).toBe(result!.doc.length - 1)
   })
 
   it('缩进后重新编号：新层级从 1 开始，原层级顺延', () => {
