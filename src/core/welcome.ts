@@ -1,23 +1,33 @@
-export const WELCOME_DOC = `# 欢迎使用 taipola
+/**
+ * The document a first-time visitor lands in, and the name it answers to.
+ *
+ * The two travel together on purpose: the title bar shows this name, the save
+ * picker suggests it and an export is named after it. Spelling it out at each of
+ * those places is how the title bar ended up saying one thing while the save
+ * dialog said `untitled.md`.
+ */
+export const WELCOME_NAME = 'welcome.md'
 
-一个极简但强大的 Markdown 编辑器。**光标所在的那一行显示 Markdown 源码，光标一离开就渲染成最终的样子** —— 没有左右分栏，也不需要预览按钮。
+export const WELCOME_DOC = `# 你好呀，我是 taipola
 
-试试用方向键上下移动光标，看这段文字在你眼前变形。
+我是住在你浏览器里的一个小小的 Markdown 编辑器。**光标停在哪一段，我就把那一段的 Markdown 源码摊开给你看；光标一走开，我马上把它变回好看的样子。** 没有左右分栏，也没有"预览"按钮 —— 我一直觉得，写字的时候不该在心里默默换算两遍。
 
-## 它现在能做什么
+你可以用方向键上下走走看，我就当着你的面变来变去。
 
-- **即时渲染**：段落、标题、列表、引用、代码块、表格全部就地渲染
-- **中文输入法友好**：保留原生可编辑区，拼音候选、联想词、合成期间的输入都正常
-- **自带撤销栈**：\`Cmd/Ctrl + Z\` / \`Cmd/Ctrl + Shift + Z\` 走编辑器自己的快照栈，跨块可靠（浏览器原生撤销跨块不靠谱）
-- **打开 / 保存**：\`Cmd/Ctrl + O\` 打开 md 文件，\`Cmd/Ctrl + S\` 保存（支持就写回原文件）
-- **侧边大纲**：点击标题跳转
-- **自动保存草稿**：关掉页面也不丢内容
+## 我会些什么
+
+- **即时渲染**：段落、标题、列表、引用、代码块、表格，我都就地帮你变
+- **中文输入法友好**：我不抢你的拼音候选，也不打断联想词，你合成的时候我安安静静不吭声
+- **自带撤销栈**：\`Cmd/Ctrl + Z\` / \`Cmd/Ctrl + Shift + Z\` 走的是我自己的快照栈，跨块也靠得住（浏览器自带的那个，跨块就有点不听话）
+- **打开 / 保存**：\`Cmd/Ctrl + O\` 打开 md 文件，\`Cmd/Ctrl + S\` 保存 —— 浏览器要是允许，我就直接写回原文件
+- **侧边大纲**：点一下标题，我就跳过去
+- **自动保存草稿**：你手滑关掉页面，我也还记得你写到哪儿了
 
 ## 行内样式
 
-**粗体**、*斜体*、~~删除线~~、\`行内代码\`、[链接](https://example.com)、脚注[^1]。
+**粗体**、*斜体*、~~删除线~~、\`行内代码\`、[链接](https://example.com)，还有脚注[^1]，这些我都认得。
 
-[^1]: 脚注会被渲染到文档末尾。
+[^1]: 像我这样的小小补充，导出成 HTML 的时候才会被挪到文末去。
 
 ## 标题分级
 
@@ -30,9 +40,9 @@ export const WELCOME_DOC = `# 欢迎使用 taipola
 
 ## 无序列表
 
-- 用 \`-\`、\`*\` 或 \`+\` 开头都是一项
-- 光标离开这个块，符号就折叠成圆点
-- 缩进两个空格就是子项
+- 用 \`-\`、\`*\` 或 \`+\` 开头，在我眼里都是一项
+- 光标一离开这个块，符号就缩成一个小圆点
+- 缩进两个空格，就是我收下的子项
 
 ## 有序列表
 
@@ -54,8 +64,8 @@ export const WELCOME_DOC = `# 欢迎使用 taipola
 > 写作是把思绪压进纸张的过程。
 > —— 某个已经想不起来的人
 
-> 嵌套引用：
-> > 被引用的引用，照样渲染。
+> 嵌套引用我也照收：
+> > 被引用的引用，照样好好渲染。
 
 ## 任务列表
 
@@ -77,7 +87,7 @@ export function activeBlock(blocks: Block[], caret: number): Block | undefined {
 }
 \`\`\`
 
-没有声明语言的围栏：
+没写语言的围栏，我也照收：
 
 \`\`\`
 echo "hello, taipola"
@@ -98,7 +108,7 @@ echo "hello, taipola"
 
 ![示例图片](https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1)
 
-自动链接：https://example.com 在路上碰到 https://example.net 也会被识别。
+你随手打出来的网址我也认：https://example.com 就像这样，夹在句子里的 https://example.net 也跑不掉。
 
 ## 分割线
 
@@ -106,5 +116,5 @@ echo "hello, taipola"
 
 ---
 
-就这样，开始写你的东西吧。删掉这篇，或者直接覆盖它。
+好啦，接下来就交给你了。这篇可以直接删掉，也可以干脆改成你自己的第一句话。
 `
