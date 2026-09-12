@@ -218,7 +218,7 @@ export function computeLineStates(lines: string[]): LineState[] {
     // or a list, but NOT a lazily continued blockquote — measured, `> 引用里` then
     // an un-prefixed `[^1]: …` exports as ONE quoted paragraph, text and all.
     const lazyQuote = openQuote && !quoted
-    openQuote = openQuote || quoted
+    if (quoted) openQuote = true
 
     // A definition and its indented continuations are one note. markdown-it stops
     // the definition at the first line that is not indented onto it, so the same

@@ -324,30 +324,32 @@ function autolinksIn(text: string): Autolink[] {
     anchored.push(autolink)
   }
 
-  // Two `://` inside one URL (`https://x.dev/a://b`): the parser reaches the
-  // first one first and consumes through the URL, so the first match owns it.
-  const kept: Autolink[] = []
-  for (const link of anchored.sort((a, b) => a.start - b.start)) {
-    const previous = kept[kept.length - 1]
-    if (previous && link.start < previous.end) continue
-    kept.push(link)
+  // Two `://` inside one URL (`https://x.dev/a://b`): the parser reaches the first
+  // one first and consumes through the whole URL, so the earlier match owns the
+  // span and a later one that starts inside it is dropped.
+  const owned: Autolink[] = []
+  for (const link of [...anchored].sort((a, b) => a.start - b.start)) {
+    const previous = owned[owned.length - 1]
+    if (!previous || link.start >= previous.end) owned.push(link)
   }
 
-  // Pass 2: everything pass 1 left over.
-  const found = [...kept]
-  let claimed = 0
-  const matchUnclaimedUpTo = (to: number) => {
-    if (to > claimed) {
-      const matches = md.linkify.match(text.slice(claimed, to))
-      for (const m of matches ?? []) found.push(toAutolink(m, claimed))
+  // Pass 2: `match()` over the stretches pass 1 did not own. The gaps are built
+  // first so the tail is just the last one — no separate call for it, and an empty
+  // gap costs nothing (`match('')` is null).
+  const gaps: SourceRange[] = []
+  let cursor = 0
+  for (const link of owned) {
+    gaps.push({ start: cursor, end: link.start })
+    cursor = link.end
+  }
+  gaps.push({ start: cursor, end: text.length })
+
+  const found = [...owned]
+  for (const gap of gaps) {
+    for (const match of md.linkify.match(text.slice(gap.start, gap.end)) ?? []) {
+      found.push(toAutolink(match, gap.start))
     }
-    claimed = Math.max(claimed, to)
   }
-  for (const link of kept) {
-    matchUnclaimedUpTo(link.start)
-    claimed = Math.max(claimed, link.end)
-  }
-  matchUnclaimedUpTo(text.length)
 
   return found.sort((a, b) => a.start - b.start)
 }
@@ -460,8 +462,9 @@ function blockPrefixRange(raw: string): { start: number; end: number } | null {
   // definition at all.
   const definition = FOOTNOTE_DEFINITION.exec(raw)
   if (definition) {
-    const gap = /^[ \t]*/.exec(raw.slice(definition[0].length))?.[0].length ?? 0
-    return { start: 0, end: definition[0].length + gap }
+    const after = raw.slice(definition[0].length)
+    const separator = /^[ \t]*/.exec(after)![0].length
+    return { start: 0, end: definition[0].length + separator }
   }
 
   // Try every pattern at each position and keep whichever consumes the most, so
@@ -791,7 +794,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   }
 }
 
-function markFor(tokens: Token[], start: number, end: number, revealed: Set<number>): Mark {
+function markFor(tokens: Token[], start: number, end: number, visibleMarker: Set<number>): Mark {
   const mark: Mark = {}
   for (const token of tokens) {
     if (token.innerStart <= start && token.innerEnd >= end) {
@@ -805,7 +808,7 @@ function markFor(tokens: Token[], start: number, end: number, revealed: Set<numb
         // construct is open for editing — the source is showing then, and the two
         // together read as `[^[1]]`. A block marker is withdrawn the same way, by
         // the `:not(.revealed)` gate on its CSS.
-        if (!revealed.has(token.start)) mark.footnoteRef = token.label
+        if (!visibleMarker.has(token.start)) mark.footnoteRef = token.label
       }
     }
   }

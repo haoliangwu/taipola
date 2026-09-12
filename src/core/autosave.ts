@@ -100,7 +100,9 @@ export function createAutosave(deps: AutosaveDeps): Autosave {
     pending = null
 
     const stored = deps.peek()
-    if (!announced && stored !== null && stored.savedAt > baseline) {
+    // Newer than anything this session has seen, so it is another tab's.
+    const foreignDraft = stored !== null && stored.savedAt > baseline
+    if (foreignDraft && !announced) {
       // Announced at most ONCE per session. The other tab keeps typing, so every
       // later write would find a newer record again and re-announce it every
       // debounce window; a toast that never stops is worse than the information
