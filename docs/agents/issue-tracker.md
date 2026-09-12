@@ -12,6 +12,8 @@ they are committed like any other source of truth.
   numbered from `01`, never a single combined tickets file
 - Triage state is recorded as a `Status:` line near the top of each issue file (see
   `triage-labels.md` for the role strings)
+- `Status: resolved` closes an issue once the work ships — the only value that is not a triage
+  role. Record the commit and the acceptance evidence under `## Comments`
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
 ## When a skill says "publish to the issue tracker"

@@ -14,3 +14,12 @@ actual label strings used in this repo's issue tracker (the local markdown track
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding
 label string from this table.
+
+## The one value that is not a triage role
+
+`resolved` closes a ticket: the work shipped. It is not in the table above because triage decides
+what to do with an issue, while `resolved` records that there is nothing left to do — a lifecycle
+state, not a role. The wayfinding flow in `issue-tracker.md` already uses `resolved` for a finished
+ticket, so the same word means the same thing everywhere in the tracker.
+
+When you set it, record the commit and the acceptance evidence under `## Comments`.
