@@ -12,8 +12,6 @@ export const WELCOME_DOC = `# 你好呀，我是 taipola
 
 我是住在你浏览器里的一个极简 Markdown 编辑器。
 
-![taipola 的头像](https://raw.githubusercontent.com/haoliangwu/taipola/main/docs/logo.webp){width=128}
-
 **光标停在哪一段，我就把那一段的 Markdown 源码摊开给你看；光标一走开，我马上把它变回好看的样子。**
 
 没有左右分栏，也没有"预览"按钮 —— 我一直觉得，写字的时候不该在心里默默换算两遍。
