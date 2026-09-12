@@ -299,7 +299,13 @@ export class EditorKernel {
         ? range.startContainer
         : range.startContainer.parentElement
     )?.closest?.<HTMLElement>('[data-block]')
-    if (!host) return null
+    // The block must be OURS. `selectionchange` is a document-level event, and a
+    // `[data-block]` says nothing about which editor instance owns it: a second
+    // mounted kernel would read its own view against our offsets, believe the
+    // caret had moved, and then place OUR caret over in the other editor. One
+    // editor per page hides this, so the check is what makes it correct rather
+    // than lucky.
+    if (!host || !this.host?.contains(host)) return null
     const index = Number(host.dataset.block)
     const view = this.views[index]
     if (!view) return null

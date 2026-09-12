@@ -59,6 +59,9 @@ describe('标题（block 级标记）', () => {
     await flush()
     const doc = r.getDoc()
     expect(doc).toMatch(/^# 欢迎使用 taipola\n\n\n/)
+    // 光标必须落在新开的那一行行首，而不是插入点之后一行（ADR §7 第 1 条）。
+    // 手工推算：标题 14 字，行尾偏移 14；新行起始于 15。旧算术 `at + 1` 给 16。
+    expect(caretFromDom()).toBe(15)
     await assertDomMatchesSource(r)
   })
 
@@ -68,6 +71,8 @@ describe('标题（block 级标记）', () => {
     await pressEnter(p)
     await flush()
     expect(p.getDoc()).toBe('一段文字\n\n\n第二段\n')
+    // 同上：段落 4 字，行尾偏移 4，新行起始于 5。
+    expect(caretFromDom()).toBe(5)
     await assertDomMatchesSource(p)
   })
 
@@ -443,6 +448,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
+    // 两次回车都要把光标带到新开的空行上（ADR §7 S5：修复前光标停在下一段行首）。
+    // 手工推算：段 5 字，第一次回车后新行起始于 6，第二次回车后起始于 7。
+    expect(caretFromDom()).toBe(7)
     // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
     await r.user.keyboard('X')
     await flush()
@@ -725,6 +733,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('# 标题\n\n正文\n')
+    // 并回一行之后，光标停在接缝上：标题 4 字，接缝就是偏移 4。
+    // （修复前那条路会先被浏览器吃掉一个字符、再让光标脱离所有块。）
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 })
