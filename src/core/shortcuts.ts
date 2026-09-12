@@ -60,7 +60,9 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
   if (stroke.shiftKey === true) {
     if (key === 'k') return 'deleteLine'
     if (key === 's') return 'saveAs'
-    if (key === '\\') return 'toggleOutline'
+    // Shift+Backslash reports '|' in every browser I know of; '\\' is kept for
+    // layouts where it does not. 只认 '\\' 是一个从来没生效过的绑定。
+    if (key === '\\' || key === '|') return 'toggleOutline'
     return null
   }
 

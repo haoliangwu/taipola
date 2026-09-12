@@ -226,7 +226,10 @@ export default function App() {
       // null means the shell has no binding: no `preventDefault()`, so the
       // browser keeps its own (Cmd+P must still print).
       if (!shortcut) return
-      event.preventDefault()
+      // Escape is the exception: swallowing it takes the key away from the IME
+      // and the browser, which use it to cancel a composition. Blurring is the
+      // whole command, so it needs no default suppressed.
+      if (shortcut !== 'blur') event.preventDefault()
       shortcutActions[shortcut]()
     }
 

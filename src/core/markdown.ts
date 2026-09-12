@@ -353,6 +353,10 @@ const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/
  */
 function canCarrySetextUnderline(line: string): boolean {
   if (line.trim() === '') return false
+  // An underline is not text. Without this, `Title\n=====\n---` reads as an h1
+  // for `Title` and then a second heading whose text is `=====` — a phantom the
+  // renderer does not have (markdown-it gives h1 + hr there).
+  if (SETEXT_UNDERLINE.test(line)) return false
   if (isThematicBreak(line)) return false
   return !/^\s{0,3}(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\||`{3,}|~{3,})/.test(line)
 }

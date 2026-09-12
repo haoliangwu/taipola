@@ -38,7 +38,9 @@ describe('shortcutFor', () => {
     // Cmd+K 是链接，Cmd+Shift+K 是删除整行
     expect(shortcutFor(mod('k'))).toBe('link')
     expect(shortcutFor(mod('k', { shiftKey: true }))).toBe('deleteLine')
-    // Cmd+Shift+\ 切大纲
+    // Cmd+Shift+\ 切大纲。Shift+反斜杠在浏览器里报的是 '|'——只认 '\' 的话
+    // 这个绑定永远不会触发（老实现就是这样），所以两个都收。
+    expect(shortcutFor(mod('|', { shiftKey: true }))).toBe('toggleOutline')
     expect(shortcutFor(mod('\\', { shiftKey: true }))).toBe('toggleOutline')
     // Cmd+\ 没有绑定
     expect(shortcutFor(mod('\\'))).toBeNull()

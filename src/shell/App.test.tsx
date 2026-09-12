@@ -53,6 +53,35 @@ describe('草稿持久化', () => {
     expect(draft?.content).toBe('# 它FINA==现在\n\n正文\n')
     view.unmount()
   })
+
+  it('标签页转入后台（visibilitychange → hidden）也立刻落盘，不等防抖', async () => {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '甲\n', name: 'untitled.md', savedAt: Date.now() }),
+    )
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    const doc = view.container.querySelector('.doc') as HTMLElement
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+    if (!run?.firstChild) throw new Error('first run has no text node')
+    placeCaretAt(run.firstChild, 0)
+    await user.keyboard('X')
+
+    // 防抖还没到点，盘上还是旧草稿。
+    expect(documents.draft.load()?.content).toBe('甲\n')
+
+    // 只派发 visibilitychange（不派发 pagehide），标签页转入后台。
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    try {
+      document.dispatchEvent(new Event('visibilitychange'))
+      // 这条写入只可能来自 visibilitychange 那条接线。
+      expect(documents.draft.load()?.content).toBe('X甲\n')
+    } finally {
+      Reflect.deleteProperty(document, 'visibilityState')
+    }
+    view.unmount()
+  })
 })
 
 /**

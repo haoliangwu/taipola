@@ -136,6 +136,10 @@ describe('extractHeadings（大纲）', () => {
     expect(extractHeadings('> 引用\n---\n')).toEqual([])
     // 围栏里的 `===` 是代码内容。
     expect(extractHeadings('```\nTitle\n===\n```\n')).toEqual([])
+    // 下划线行本身不是正文：`Title / ===== / ---` 是 h1 + 分割线，
+    // 不是 h1 再加一个正文为 `=====` 的 h2（渲染器给的是 h1 + hr）。
+    expect(extractHeadings('Title\n=====\n---\n')).toEqual([{ level: 1, text: 'Title', line: 1 }])
+    expect(extractHeadings('Title\n--\n--\n')).toEqual([{ level: 2, text: 'Title', line: 1 }])
   })
 
   it('setext 与 ATX 混排时按源码顺序进大纲', () => {

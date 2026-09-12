@@ -82,6 +82,28 @@ describe('createAutosave', () => {
     expect(backend.pending()).toBe(0)
   })
 
+  it('一次卸载里 flush 两次只写一遍（pagehide 与 visibilitychange 会同时到）', () => {
+    const backend = fakeBackend()
+    const autosave = createAutosave(backend.deps)
+
+    autosave.schedule({ content: '甲', name: 'untitled.md' })
+    autosave.flush()
+    autosave.flush()
+
+    expect(backend.writes).toHaveLength(1)
+  })
+
+  it('防抖计时器写过之后，flush 不会把同一份草稿再写一遍', () => {
+    const backend = fakeBackend()
+    const autosave = createAutosave(backend.deps)
+
+    autosave.schedule({ content: '甲', name: 'untitled.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    autosave.flush()
+
+    expect(backend.writes).toHaveLength(1)
+  })
+
   it('cancel 丢掉待写的草稿，一个字节都不写', () => {
     const backend = fakeBackend()
     const autosave = createAutosave(backend.deps)

@@ -12,6 +12,7 @@ import {
   assertDomMatchesSource,
   flush,
   caretFromDom,
+  placeCaretAt,
   type Rendering,
 } from '../../test/editorTestUtils'
 
@@ -100,11 +101,15 @@ describe('标题（block 级标记）', () => {
   })
 
   it('Shift+Enter 在标题产生软换行且不触发 React 异常', async () => {
+    // 中线落点：run 1 起始于 2、长 12，middle 取 6，所以光标在 8。
     await clickInRun(r, 0, 0, 1, 'middle')
+    expect(caretFromDom()).toBe(8)
     const linesBefore = r.getDoc().split('\n').length
     await pressShiftEnter(r)
     await flush()
     expect(r.getDoc().split('\n').length).toBeGreaterThan(linesBefore)
+    // 软换行只在光标处插一个换行，光标跟着走一格（8 → 9）。
+    expect(caretFromDom()).toBe(9)
     await assertDomMatchesSource(r)
   })
 
@@ -171,6 +176,8 @@ describe('撤销 / 数据完整性（回归）', () => {
     await flush()
     // 光标在行末，4 次 Backspace 删掉结尾 4 个字符。
     expect(r.getDoc()).toBe('# 它FINA==现在\n\n正文\n')
+    // 每退一格光标跟着退一格：`# ` 之后 13 字，4 次退格后落在 11。
+    expect(caretFromDom()).toBe(11)
     await assertDomMatchesSource(r)
   })
 
@@ -737,5 +744,38 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     // （修复前那条路会先被浏览器吃掉一个字符、再让光标脱离所有块。）
     expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
+  })
+})
+
+/**
+ * DOM ownership between kernels.
+ *
+ * `selectionchange` is a document-level event, so every mounted kernel sees it.
+ * Without an ownership check the kernel treats any `[data-block]` as its own,
+ * reads its own view against the other document's offsets, and then moves ITS
+ * caret into the other editor. The app mounts one editor per page, so nothing
+ * else exercises this on purpose.
+ */
+describe('内核只认自己的 DOM', () => {
+  it('同页挂载两个编辑器时，一个内核不会把另一个的选区搬到自己这边', async () => {
+    const first = renderEditor('# 甲\n\n乙\n')
+    const second = renderEditor('# 丙\n\n丁\n')
+
+    // 光标放进第二个编辑器的第二个块。
+    const run = second.runEl(2, 0, 0)
+    if (!run?.firstChild) throw new Error('second editor: run has no text node')
+    placeCaretAt(run.firstChild, 0)
+    await flush()
+
+    // 选区留在被点击的那一个里。
+    const range = window.getSelection()?.getRangeAt(0)
+    expect(second.container.contains(range?.startContainer ?? null)).toBe(true)
+
+    // 真正的判别式在第一个编辑器身上：它没被碰过，caret 仍是 0，所以它的块 0
+    // 应该保持 reveal。没有这条守卫时它会误读对方的偏移（块 2 → 4），于是自己
+    // 重渲染、块 0 折叠、块 2 显现——两个内核还会来回抢，最后谁后注册谁赢，
+    // 所以只看选区在谁那里是分不出来的。
+    const firstLine = first.container.querySelector('[data-block="0"] [data-vline="0"]')
+    expect(firstLine?.classList.contains('revealed')).toBe(true)
   })
 })

@@ -60,6 +60,16 @@ export function createAutosave(deps: AutosaveDeps): Autosave {
     timer = null
   }
 
+  /** Writes the pending draft, once. */
+  const writePending = () => {
+    if (!pending) return
+    const draft = pending
+    // Cleared BEFORE the write: one unload fires both `pagehide` and a hidden
+    // `visibilitychange`, and the second one must not write the same draft again.
+    pending = null
+    deps.write(draft)
+  }
+
   return {
     schedule(document) {
       // The `savedAt` of the edit, not of the eventual write: the record should
@@ -68,13 +78,13 @@ export function createAutosave(deps: AutosaveDeps): Autosave {
       stopTimer()
       timer = deps.setTimer(() => {
         timer = null
-        if (pending) deps.write(pending)
+        writePending()
       }, DRAFT_DEBOUNCE_MS)
     },
 
     flush() {
       stopTimer()
-      if (pending) deps.write(pending)
+      writePending()
     },
 
     cancel() {
