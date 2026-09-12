@@ -36,7 +36,10 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
 - `src/editor/` — the native kernel: `render.ts` (imperative rendering, DOM → source),
   `position.ts` (source offset ↔ DOM position), `kernel.ts` (state, events, same-frame caret)
 - `src/test/` — browser-mode helpers
-- `docs/adr/`, `docs/agents/`, `CONTEXT.md` — decisions, skill configuration, glossary
+- `docs/adr/`, `docs/agents/`, `CONTEXT.md` — decisions, skill configuration, glossary.
+  Before changing block collection, run segmentation or any inline syntax, read
+  `docs/adr/0002-caret-invariants-and-pitfalls.md`: it lists the invariants the caret
+  arithmetic depends on and the symptoms each one produced when broken.
 
 ## Agent skills
 
