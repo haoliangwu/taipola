@@ -194,6 +194,13 @@ describe('桌面外壳（1280px）不变', () => {
     await page.viewport(...DESKTOP)
   })
 
+  it('不显式设视口时，测试环境默认就在桌面那一档', () => {
+    // 这条钉的是 `src/test/setup.ts` 的默认：跑测试的 iframe 默认只有 ~414px，
+    // 那会让整个浏览器层悄悄落到 900px 断点以下（大纲、格式工具条全被藏掉）。
+    // 桌面是优先支持的那一端，所以默认由 setup 显式设成桌面宽度。
+    expect(window.innerWidth).toBeGreaterThan(900)
+  })
+
   it('大纲仍是常驻栏，工具条在，mini 组与遮罩不可见', () => {
     const { el, visible } = renderApp()
     expect(visible('.outline')).toBe(true)
