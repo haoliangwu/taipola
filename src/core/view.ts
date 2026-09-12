@@ -11,6 +11,8 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
+import { isThematicBreak } from './inline'
+
 interface MarkerCell {
   /** Source range of the opening marker, e.g. the `**` of `**bold**`. */
   openStart: number
@@ -187,7 +189,7 @@ const BLOCK_PREFIXES: RegExp[] = [
 function blockPrefixRange(raw: string): { start: number; end: number } | null {
   if (raw.trim() === '') return null
   // A horizontal rule is content, not a prefix.
-  if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(raw)) return null
+  if (isThematicBreak(raw)) return null
 
   // Try every pattern at each position and keep whichever consumes the most, so
   // nested prefixes accumulate (`> - item`). Breaking on the first pattern that
@@ -389,7 +391,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   if (isFenceLine) {
     blockMarker = { start: 0, end: raw.length }
   } else if (!inCode && !isTableCell) {
-    if (raw.trim() !== '' && /^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(raw)) {
+    if (raw.trim() !== '' && isThematicBreak(raw)) {
       blockMarker = { start: 0, end: raw.length }
     } else {
       blockMarker = blockPrefixRange(raw)

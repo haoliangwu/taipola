@@ -6,6 +6,7 @@
  * Rendering markdown to HTML is a separate concern that needs DOMPurify and
  * therefore lives in `../platform/html.ts`.
  */
+import { isThematicBreak } from './inline'
 import { md } from './markdownIt'
 
 /**
@@ -341,9 +342,6 @@ export interface Heading {
 /** A setext underline: `===` makes an h1, `---` an h2. */
 const SETEXT_UNDERLINE = /^\s{0,3}(=+|-+)\s*$/
 
-/** Three or more `-`, `*` or `_` on their own line: the same rule `view.ts` uses. */
-const THEMATIC_BREAK = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/
-
 /**
  * Whether a line can be the TEXT of a setext heading.
  *
@@ -355,8 +353,13 @@ const THEMATIC_BREAK = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/
  */
 function canCarrySetextUnderline(line: string): boolean {
   if (line.trim() === '') return false
-  if (THEMATIC_BREAK.test(line)) return false
+  if (isThematicBreak(line)) return false
   return !/^\s{0,3}(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\||`{3,}|~{3,})/.test(line)
+}
+
+/** One outline entry; the fallback keeps an empty heading clickable. */
+function heading(level: number, text: string, line: number): Heading {
+  return { level, text: toPlainText(text) || '(空标题)', line }
 }
 
 /** Extracts the document outline, ignoring pseudo-headings inside fenced code. */
@@ -377,7 +380,7 @@ export function extractHeadings(source: string): Heading[] {
 
     const atx = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line)
     if (atx) {
-      headings.push({ level: atx[1].length, text: toPlainText(atx[2]) || '(空标题)', line: i + 1 })
+      headings.push(heading(atx[1].length, atx[2], i + 1))
       return
     }
 
@@ -387,11 +390,7 @@ export function extractHeadings(source: string): Heading[] {
     if (!canCarrySetextUnderline(line)) return
     const underline = SETEXT_UNDERLINE.exec(lines[i + 1] ?? '')
     if (!underline) return
-    headings.push({
-      level: underline[1][0] === '=' ? 1 : 2,
-      text: toPlainText(line) || '(空标题)',
-      line: i + 1,
-    })
+    headings.push(heading(underline[1][0] === '=' ? 1 : 2, line, i + 1))
   })
 
   return headings

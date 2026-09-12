@@ -70,7 +70,7 @@ export default function App() {
   )
 
   useEffect(() => {
-    autosave.schedule(value, fileName)
+    autosave.schedule({ content: value, name: fileName })
     return () => autosave.cancel()
   }, [autosave, fileName, value])
 
@@ -199,7 +199,6 @@ export default function App() {
   // Which key runs what is `core/shortcuts.ts` (pure, unit-tested); this table is
   // the other half — one place where a command name becomes an action.
   const shortcutActions = useMemo((): Record<ShellCommand, () => void> => {
-    const run = (fn: () => void) => () => fn()
     return {
       blur: () => (document.activeElement as HTMLElement | null)?.blur(),
       bold: commands.bold,
@@ -213,9 +212,9 @@ export default function App() {
       heading4: commands.heading(4),
       heading5: commands.heading(5),
       heading6: commands.heading(6),
-      save: run(() => void handleSave(false)),
-      saveAs: run(() => void handleSave(true)),
-      open: run(() => void handleOpen()),
+      save: () => void handleSave(false),
+      saveAs: () => void handleSave(true),
+      open: () => void handleOpen(),
       newDocument: handleNew,
       toggleOutline: () => setSidebarOpen((open) => !open),
     }

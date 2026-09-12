@@ -44,11 +44,11 @@ describe('createAutosave', () => {
     const backend = fakeBackend()
     const autosave = createAutosave(backend.deps)
 
-    autosave.schedule('一', 'untitled.md')
+    autosave.schedule({ content: '一', name: 'untitled.md' })
     backend.advance(300)
-    autosave.schedule('二', 'untitled.md')
+    autosave.schedule({ content: '二', name: 'untitled.md' })
     backend.advance(300)
-    autosave.schedule('三', 'untitled.md')
+    autosave.schedule({ content: '三', name: 'untitled.md' })
 
     expect(backend.writes).toEqual([])
     backend.advance(DRAFT_DEBOUNCE_MS)
@@ -61,10 +61,10 @@ describe('createAutosave', () => {
     const backend = fakeBackend()
     const autosave = createAutosave(backend.deps)
 
-    autosave.schedule('删除前的文本', 'untitled.md')
+    autosave.schedule({ content: '删除前的文本', name: 'untitled.md' })
     backend.advance(DRAFT_DEBOUNCE_MS)
     // 用户删掉几个字，防抖计时器还没到点就刷新了页面。
-    autosave.schedule('删除后的文本', 'untitled.md')
+    autosave.schedule({ content: '删除后的文本', name: 'untitled.md' })
     autosave.flush()
 
     expect(backend.writes.map((draft) => draft.content)).toEqual(['删除前的文本', '删除后的文本'])
@@ -74,7 +74,7 @@ describe('createAutosave', () => {
     const backend = fakeBackend()
     const autosave = createAutosave(backend.deps)
 
-    autosave.schedule('甲', 'untitled.md')
+    autosave.schedule({ content: '甲', name: 'untitled.md' })
     autosave.flush()
     backend.advance(DRAFT_DEBOUNCE_MS * 4)
 
@@ -86,7 +86,7 @@ describe('createAutosave', () => {
     const backend = fakeBackend()
     const autosave = createAutosave(backend.deps)
 
-    autosave.schedule('不要写', 'untitled.md')
+    autosave.schedule({ content: '不要写', name: 'untitled.md' })
     autosave.cancel()
     backend.advance(DRAFT_DEBOUNCE_MS * 4)
 
@@ -99,7 +99,7 @@ describe('createAutosave', () => {
     const autosave = createAutosave(backend.deps)
 
     backend.advance(1_000)
-    autosave.schedule('内容', 'untitled.md')
+    autosave.schedule({ content: '内容', name: 'untitled.md' })
     backend.advance(DRAFT_DEBOUNCE_MS)
 
     expect(backend.writes[0].savedAt).toBe(1_000)

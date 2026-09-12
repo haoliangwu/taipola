@@ -7,8 +7,11 @@
  * makes "which key runs what" assertable at all; it used to be a switch inside a
  * `keydown` listener, reachable only through a real browser and never covered.
  *
- * The table is the one the README documents, including the combinations that
- * deliberately do nothing.
+ * This is the shell's half of the keyboard, not all of it. `Tab` / `Shift+Tab`
+ * (list indent) and `Cmd/Ctrl+Z` (undo, redo) belong to the editor kernel, which
+ * handles them on its own host — they are editing commands, not app commands.
+ * What is here is what `README.md` lists under 快捷键, including the
+ * combinations that deliberately do nothing.
  */
 
 export type ShellCommand =

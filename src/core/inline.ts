@@ -27,6 +27,18 @@ export interface LineParts {
 const FENCE_RE = /^(\s*)(`{3,}|~{3,})(.*)$/
 const HEADING_RE = /^(\s{0,3})(#{1,6})(\s+)(.*)$/
 const RULE_RE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/
+
+/**
+ * Three or more `-`, `*` or `_` alone on a line: a thematic break.
+ *
+ * Exported because this rule has to be the SAME wherever it is asked, and three
+ * modules were carrying their own copy of the regex: the outline (is the line
+ * under this paragraph a `---` heading underline, or a rule?), the view's
+ * block-prefix scan (a rule is content, not a prefix), and this one.
+ */
+export function isThematicBreak(raw: string): boolean {
+  return RULE_RE.test(raw)
+}
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(.*)$/
 const TASK_RE = /^(\[[ xX]\])(\s+)(.*)$/
 const QUOTE_RE = /^(\s*)(>+)(\s?)(.*)$/
@@ -37,7 +49,7 @@ export function parseLine(raw: string): LineParts {
   const parts: LineParts = {
     prefix: '',
     isFence: false,
-    isRule: RULE_RE.test(raw),
+    isRule: isThematicBreak(raw),
     isTableDelimiter: false,
     isTableRow: raw.trim().startsWith('|') || (raw.includes('|') && raw.trim().endsWith('|')),
   }

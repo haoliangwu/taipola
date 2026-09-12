@@ -33,9 +33,15 @@ export interface AutosaveDeps {
   now(): number
 }
 
+/** The document as the policy sees it: what to write, and what to call it. */
+export interface DraftInput {
+  content: string
+  name: string
+}
+
 export interface Autosave {
   /** Records the document and (re)starts the debounce. */
-  schedule(content: string, name: string): void
+  schedule(document: DraftInput): void
   /** Writes the pending draft immediately, cancelling the debounce. */
   flush(): void
   /** Drops the pending draft without writing it. */
@@ -44,7 +50,7 @@ export interface Autosave {
 
 export const DRAFT_DEBOUNCE_MS = 500
 
-export function createAutosave(deps: AutosaveDeps, debounceMs = DRAFT_DEBOUNCE_MS): Autosave {
+export function createAutosave(deps: AutosaveDeps): Autosave {
   let pending: Draft | null = null
   let timer: number | null = null
 
@@ -55,15 +61,15 @@ export function createAutosave(deps: AutosaveDeps, debounceMs = DRAFT_DEBOUNCE_M
   }
 
   return {
-    schedule(content, name) {
+    schedule(document) {
       // The `savedAt` of the edit, not of the eventual write: the record should
       // say when the document last changed.
-      pending = { content, name, savedAt: deps.now() }
+      pending = { ...document, savedAt: deps.now() }
       stopTimer()
       timer = deps.setTimer(() => {
         timer = null
         if (pending) deps.write(pending)
-      }, debounceMs)
+      }, DRAFT_DEBOUNCE_MS)
     },
 
     flush() {
