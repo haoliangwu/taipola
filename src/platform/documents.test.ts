@@ -101,6 +101,27 @@ describe('save：不支持写回时走下载', () => {
     expect(downloads[0].filename).toBe('report.md')
   })
 
+  // The welcome document has a name but no handle. Resolving the name from the
+  // handle alone is what made the title bar and the save dialog disagree.
+  it('没有句柄时用调用方给的名字，而不是自己编一个', async () => {
+    const downloads: Download[] = []
+    const documents = createDocuments(downloadOnly(downloads))
+
+    const result = await documents.save(null, '# 正文\n', { name: 'welcome.md' })
+
+    expect(result).toEqual({ status: 'downloaded', name: 'welcome.md' })
+    expect(downloads[0].filename).toBe('welcome.md')
+  })
+
+  it('有句柄时句柄的名字说了算', async () => {
+    const downloads: Download[] = []
+    const documents = createDocuments(downloadOnly(downloads))
+
+    await documents.save({ name: 'report.md', handle: null }, 'x', { name: 'welcome.md' })
+
+    expect(downloads[0].filename).toBe('report.md')
+  })
+
   it('supportsWriteBack 只反映适配器的能力', () => {
     expect(createDocuments(downloadOnly([])).supportsWriteBack()).toBe(false)
     expect(createDocuments(writeBack([], [])).supportsWriteBack()).toBe(true)
@@ -130,6 +151,14 @@ describe('save：支持写回时写回原文件', () => {
 
     expect(result).toEqual({ status: 'saved', document: { name: 'untitled.md', handle: HANDLE_B } })
     expect(writes).toEqual([{ handle: HANDLE_B, text: '新文档\n' }])
+  })
+
+  it('保存选择器建议的名字也可以是调用方给的', async () => {
+    const documents = createDocuments(writeBack([], []))
+
+    const result = await documents.save(null, '新文档\n', { name: 'welcome.md' })
+
+    expect(result).toEqual({ status: 'saved', document: { name: 'welcome.md', handle: HANDLE_B } })
   })
 
   it('另存为也会弹选择器：用户取消时什么都没写', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
@@ -163,6 +163,43 @@ describe('快捷键接线', () => {
     // 删掉光标所在那一整行，而不是走链接（Cmd+K）那条路。
     expect(readDocumentSource(doc)).toBe('第二行\n')
 
+    view.unmount()
+  })
+})
+
+/**
+ * The welcome document's NAME is part of the welcome document.
+ *
+ * Reported: a fresh page called it `untitled.md` in the title bar, and the
+ * console helper `__welcome__()` restored the text while leaving the name of
+ * whatever file had been open, so the helper looked like it had half worked.
+ */
+describe('欢迎文档的名字', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('首次打开时标题栏就是 welcome.md', () => {
+    const view = render(<App />)
+    expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+    view.unmount()
+  })
+
+  it('__welcome__ 连名字一起恢复，而不是只换正文', async () => {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '别的文档\n', name: '报告.md', savedAt: Date.now() }),
+    )
+    const view = render(<App />)
+    expect(view.container.querySelector('.doc-name')?.textContent).toBe('报告.md')
+
+    const scope = window as typeof window & { __welcome__?: () => string }
+    expect(scope.__welcome__, 'DEV-only helper missing').toBeTypeOf('function')
+    await act(async () => {
+      scope.__welcome__?.()
+    })
+
+    expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
     view.unmount()
   })
 })

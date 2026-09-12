@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
 import { Outline } from './components/Outline'
 import { computeStats, extractHeadings } from '../core/markdown'
-import { WELCOME_DOC } from '../core/welcome'
+import { WELCOME_DOC, WELCOME_NAME } from '../core/welcome'
 import { createAutosave } from '../core/autosave'
 import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
@@ -19,13 +19,16 @@ import {
 
 const OUTLINE_DEBOUNCE_MS = 200
 
+/** What `新建` starts from: a document with no file behind it yet. */
+const NEW_DOC = { content: '# 未命名\n\n', name: 'untitled.md' }
+
 export default function App() {
   const editorRef = useRef<EditorHandle>(null)
 
   const initial = useMemo(() => {
     const draft = documents.draft.load()
     if (draft) return { value: draft.content, name: draft.name }
-    return { value: WELCOME_DOC, name: 'untitled.md' }
+    return { value: WELCOME_DOC, name: WELCOME_NAME }
   }, [])
 
   const [value, setValue] = useState(initial.value)
@@ -121,7 +124,9 @@ export default function App() {
 
   const handleSave = useCallback(
     async (forcePicker = false) => {
-      const result = await documents.save(doc, value, { forcePicker })
+      // The shell owns the display name, so it hands it over: with no file handle
+      // there is nothing else to name the saved document after.
+      const result = await documents.save(doc, value, { forcePicker, name: fileName })
       if (result.status === 'cancelled') {
         // The user declined — dismissing the picker, or refusing the write
         // permission. Nothing was written, so the document stays dirty.
@@ -139,19 +144,27 @@ export default function App() {
       setSavedValue(value)
       notify(result.status === 'downloaded' ? '已下载文件' : '已保存')
     },
-    [doc, notify, value],
+    [doc, fileName, notify, value],
   )
+
+  /**
+   * Adopt a document that has no file behind it — the welcome document, or a new
+   * one. Clearing `doc` is the point rather than bookkeeping: it is what stops a
+   * later save from writing the new text into whatever file was open before.
+   */
+  const adoptDocument = useCallback((content: string, name: string) => {
+    editorRef.current?.setDocument(content)
+    setSavedValue(content)
+    setDoc(null)
+    setFileName(name)
+    setHeadings(extractHeadings(content))
+  }, [])
 
   const handleNew = useCallback(() => {
     if (dirty && !window.confirm('当前文档还没保存，确定新建吗？')) return
-    const blank = '# 未命名\n\n'
-    editorRef.current?.setDocument(blank)
-    setSavedValue(blank)
-    setDoc(null)
-    setFileName('untitled.md')
-    setHeadings(extractHeadings(blank))
+    adoptDocument(NEW_DOC.content, NEW_DOC.name)
     editorRef.current?.focus()
-  }, [dirty])
+  }, [adoptDocument, dirty])
 
   const applyEdit = useCallback((mutate: Parameters<EditorHandle['applyEdit']>[0]) => {
     editorRef.current?.applyEdit(mutate)
@@ -187,14 +200,17 @@ export default function App() {
     if (!import.meta.env.DEV) return
     const scope = window as typeof window & { __welcome__?: () => string }
     scope.__welcome__ = () => {
-      editorRef.current?.setDocument(WELCOME_DOC)
+      // Restores the whole welcome document, not just its text: the title bar
+      // said the name of whatever file was open, which made the helper look like
+      // it had only half worked.
+      adoptDocument(WELCOME_DOC, WELCOME_NAME)
       notify('已恢复欢迎文档')
       return WELCOME_DOC
     }
     return () => {
       delete scope.__welcome__
     }
-  }, [notify])
+  }, [adoptDocument, notify])
 
   // Which key runs what is `core/shortcuts.ts` (pure, unit-tested); this table is
   // the other half — one place where a command name becomes an action.

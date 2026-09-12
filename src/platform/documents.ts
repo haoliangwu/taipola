@@ -72,11 +72,16 @@ export interface Documents {
   /**
    * Saves `text` as `doc`'s file, or as a new one when there is no `doc` or
    * `forcePicker` asks for "save as".
+   *
+   * `name` is the shell's display name, and it is the same rule `exportHtml`
+   * states below: a document can have a name without having a handle. Without it
+   * the welcome document was shown as `welcome.md` while the save picker offered
+   * `untitled.md`, because the only name this layer could see was the absent one.
    */
   save(
     doc: OpenDocument | null,
     text: string,
-    options?: { forcePicker?: boolean },
+    options?: { forcePicker?: boolean; name?: string },
   ): Promise<SaveResult>
   /**
    * Downloads the rendered document as a standalone HTML file named after
@@ -164,7 +169,7 @@ export function createDocuments(adapter: StorageAdapter): Documents {
 
     async save(doc, text, options = {}) {
       const forcePicker = options.forcePicker ?? false
-      const name = doc?.name ?? DEFAULT_NAME
+      const name = doc?.name ?? options.name ?? DEFAULT_NAME
 
       try {
         if (!adapter.writeBack) {
