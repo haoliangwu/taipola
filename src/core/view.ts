@@ -107,15 +107,6 @@ interface ViewLine {
    * `vl-soft` / `vl-continues` in `styles.css`.
    */
   softBreak: boolean
-  /**
-   * The label of the footnote definition this line belongs to, on its first line
-   * only — else `undefined`.
-   *
-   * The source's `[^1]: ` is collapsed as this line's block prefix, so the marker
-   * the reader sees has to be drawn from here; a continuation line carries no
-   * label so that it does not draw a second `[1]`.
-   */
-  footnoteLabel?: string
 }
 
 export interface BlockView {
@@ -463,7 +454,10 @@ function blockPrefixRange(raw: string): { start: number; end: number } | null {
   // A footnote definition's `[^1]: ` is a block prefix in exactly the way a bullet
   // is: collapsed while the caret is outside the block, revealed as dim source
   // while it is inside. What is left is the note's text, and the `[1]` marker is
-  // drawn by the renderer from `ViewLine.footnoteLabel`.
+  // drawn by the renderer — from `LineState.footnoteLabel`, so that "which label is
+  // this" has exactly one answer on a line. A view cannot supply it: the label
+  // belongs to the line KIND, and a `[^1]: ` inside a code fence is not a
+  // definition at all.
   const definition = FOOTNOTE_DEFINITION.exec(raw)
   if (definition) {
     const gap = /^[ \t]*/.exec(raw.slice(definition[0].length))?.[0].length ?? 0
@@ -604,7 +598,6 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0,
   return {
     sourceStart,
     softBreak: opts.softBreak === true,
-    footnoteLabel: FOOTNOTE_DEFINITION.exec(raw)?.[1],
     runs,
     cellRuns,
     visibleToSource,
@@ -779,7 +772,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     runs.push({
       text: raw.slice(i, end),
       src: sourceStart + i,
-      mark: markFor(tokens, i, end),
+      mark: markFor(tokens, i, end, visibleMarker),
       marker: false,
       dim: isMarkerRun || undefined,
     })
@@ -789,7 +782,6 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   return {
     sourceStart,
     softBreak: opts.softBreak === true,
-    footnoteLabel: FOOTNOTE_DEFINITION.exec(raw)?.[1],
     runs,
     visibleToSource,
     sourceToVisible,
@@ -799,7 +791,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   }
 }
 
-function markFor(tokens: Token[], start: number, end: number): Mark {
+function markFor(tokens: Token[], start: number, end: number, revealed: Set<number>): Mark {
   const mark: Mark = {}
   for (const token of tokens) {
     if (token.innerStart <= start && token.innerEnd >= end) {
@@ -808,7 +800,13 @@ function markFor(tokens: Token[], start: number, end: number): Mark {
       else if (token.kind === 'strike') mark.strike = true
       else if (token.kind === 'code') mark.code = true
       else if (token.kind === 'link') mark.link = token.url
-      else if (token.kind === 'footnoteRef') mark.footnoteRef = token.label
+      else if (token.kind === 'footnoteRef') {
+        // The `[1]` is DRAWN from this mark, so it has to be withdrawn while the
+        // construct is open for editing — the source is showing then, and the two
+        // together read as `[^[1]]`. A block marker is withdrawn the same way, by
+        // the `:not(.revealed)` gate on its CSS.
+        if (!revealed.has(token.start)) mark.footnoteRef = token.label
+      }
     }
   }
   return mark

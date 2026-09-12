@@ -75,12 +75,6 @@ function runElement(
   if (span.className !== className) span.className = className
   const title = run.mark.link !== undefined && !run.marker ? run.mark.link : ''
   if (span.title !== title) span.title = title
-  // The reference's label, for the CSS that draws its brackets. The source's own
-  // `[^` and `]` collapsed as markers, so there is nothing else left to show which
-  // note this points at.
-  const footnote = run.mark.footnoteRef
-  if (footnote !== undefined && !run.marker) setAttr(span, 'data-footnote-ref', footnote)
-  else if (span.hasAttribute('data-footnote-ref')) span.removeAttribute('data-footnote-ref')
   // Only touch the text when it actually differs: assigning `textContent`
   // replaces the text node, which would throw away the browser's selection (and
   // an in-flight IME composition) for no reason.
@@ -170,9 +164,12 @@ function lineElement(
   const className = classes.join(' ')
   if (el.className !== className) el.className = className
   // A definition's `[1]`: the prefix that would have shown it collapsed as this
-  // line's block prefix, so the renderer has to draw it. Set only where there IS a
-  // label — a continuation line has none, and `[]` would be worse than nothing.
-  const label = line.footnoteLabel ?? ''
+  // line's block prefix, so the renderer has to draw it. The label comes from the
+  // line's STATE rather than from the view, because the state is what knows the
+  // line is a definition — a `[^1]: ` inside a code fence is not one, and reading
+  // the raw line here would have marked it anyway. Only a definition's first line
+  // has a label, so a continuation draws no second `[1]`.
+  const label = state?.footnoteLabel ?? ''
   if (label !== '') setAttr(el, 'data-footnote', label)
   else if (el.hasAttribute('data-footnote')) el.removeAttribute('data-footnote')
 

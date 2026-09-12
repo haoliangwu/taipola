@@ -581,8 +581,12 @@ body {
 
    `line-height: 0` matters: a superscript raises the inline box, and without it
    the line would grow taller than its neighbours — the caret arithmetic is built
-   on one line box per source line. */
-.vl-footnote[data-footnote]::before {
+   on one line box per source line.
+
+   `:not(.revealed)` matters just as much: while the caret is in the block the
+   source is showing, and an unconditional marker renders `[1][^1]: …`. Every other
+   drawn block marker in this file gates the same way. */
+.vl-footnote:not(.revealed)[data-footnote]::before {
   content: '[' attr(data-footnote) ']';
   margin-right: 0.5em;
   color: var(--accent);

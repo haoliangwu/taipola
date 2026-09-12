@@ -99,13 +99,26 @@ export function parseLine(raw: string): LineParts {
 /**
  * A footnote definition line: `[^label]: …`, with up to three leading spaces.
  *
- * It lives HERE, in the module with no imports, because all three layers need the
- * same answer and a private copy each is how they would drift: `markdown.ts`
- * claims the line as a source slot (markdown-it-footnote eats it at block time),
- * `computeLineStates` gives it a line kind, and `view.ts` treats the `[^label]: `
- * as the line's block prefix instead of as an inline reference.
+ * A definition is more than one line, and both halves of that grammar live here.
+ * Three modules in this layer need the same answer, and a private copy each is how
+ * they would drift: `markdown.ts` claims the definition's lines as source slots
+ * (markdown-it-footnote eats them at block time, so without that they would be
+ * invisible and uneditable), `computeLineStates` gives them a line kind, and
+ * `view.ts` treats the `[^label]: ` as the line's block prefix rather than as an
+ * inline reference. The mismatch this prevents is not cosmetic: if the span walk
+ * and the line kind disagreed, a note would be styled as one thing and addressed
+ * as another.
  */
 export const FOOTNOTE_DEFINITION = /^ {0,3}\[\^([^\]]+)\]:/
+
+/**
+ * A line indented onto the definition above it — the rest of the note.
+ *
+ * `markdown-it-footnote` ends a definition at the first line that is not indented
+ * onto it, so this single test is what both the span walk in `markdown.ts` and the
+ * line-kind pass below have to agree on.
+ */
+export const FOOTNOTE_CONTINUATION = /^\s+\S/
 
 export interface LineState {
   kind:
@@ -163,6 +176,8 @@ export function computeLineStates(lines: string[]): LineState[] {
   let openFence: string | null = null
   /** True while the current line is inside a footnote definition's span. */
   let inFootnote = false
+  /** True while a blockquote is open, including its lazy continuations. */
+  let openQuote = false
 
   for (const raw of lines) {
     const parts = parseLine(raw)
@@ -191,20 +206,30 @@ export function computeLineStates(lines: string[]): LineState[] {
 
     if (raw.trim() === '') {
       inFootnote = false
+      openQuote = false
       states.push({ ...base, kind: 'blank' })
       continue
     }
 
+    const quoted = /^\s*>/.test(raw)
+    // CommonMark lets a blockquote's content continue onto a line with no `>` of
+    // its own, and a line-local scan cannot see the container it is continuing.
+    // It matters for exactly one rule here: a definition MAY interrupt a paragraph
+    // or a list, but NOT a lazily continued blockquote — measured, `> 引用里` then
+    // an un-prefixed `[^1]: …` exports as ONE quoted paragraph, text and all.
+    const lazyQuote = openQuote && !quoted
+    openQuote = openQuote || quoted
+
     // A definition and its indented continuations are one note. markdown-it stops
     // the definition at the first line that is not indented onto it, so the same
     // test decides the end here (`markdown.ts` claims the identical span).
-    const definition = FOOTNOTE_DEFINITION.exec(raw)
+    const definition = lazyQuote ? null : FOOTNOTE_DEFINITION.exec(raw)
     if (definition) {
       inFootnote = true
       states.push({ ...base, kind: 'footnote', footnoteLabel: definition[1] })
       continue
     }
-    if (inFootnote && /^\s+\S/.test(raw)) {
+    if (inFootnote && FOOTNOTE_CONTINUATION.test(raw)) {
       states.push({ ...base, kind: 'footnote' })
       continue
     }

@@ -6,7 +6,7 @@
  * Rendering markdown to HTML is a separate concern that needs DOMPurify and
  * therefore lives in `../platform/html.ts`.
  */
-import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
+import { FOOTNOTE_CONTINUATION, FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
 import { md } from './markdownIt'
 
 /**
@@ -226,7 +226,7 @@ export function parseDocument(source: string): ParsedDocument {
   for (let line = 0; line < lines.length; line++) {
     if (claimedLines.has(line) || !FOOTNOTE_DEFINITION.test(lines[line])) continue
     let end = line + 1
-    while (end < lines.length && /^\s+\S/.test(lines[end])) end++
+    while (end < lines.length && FOOTNOTE_CONTINUATION.test(lines[end])) end++
     ranges.push({ startLine: line, endLine: end, headingLevel: 0, headingText: '', softBreakLines: [] })
     for (let l = line; l < end; l++) {
       claimedLines.add(l)

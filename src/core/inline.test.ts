@@ -157,6 +157,32 @@ describe('脚注定义行', () => {
     expect(state('见 [^1]: 这是正文').kind).toBe('text')
   })
 
+  it('引用里的懒续行不算定义（markdown-it 也把它当引用的正文）', () => {
+    // `> 引用里` 的下一行没有 `>`，是 CommonMark 的懒续行 —— 它仍是引用里的正文，
+    // 导出把它整段渲染在 blockquote 里。行级扫描看不见容器，所以要显式挡住：
+    // 定义**可以**打断段落和列表，但**不能**打断一个正在懒续的引用。
+    const states = computeLineStates(['> 引用里', '[^1]: 引用的一部分吗'])
+    expect(states.map((s) => s.kind)).toEqual(['quote', 'text'])
+  })
+
+  it('引用结束（空行）之后，定义照常认', () => {
+    const states = computeLineStates(['> 引用里', '', '[^1]: 定义'])
+    expect(states[2]).toMatchObject({ kind: 'footnote', footnoteLabel: '1' })
+  })
+
+  it('段落与列表被打断时仍然是定义（markdown-it 两条都实测过）', () => {
+    expect(computeLineStates(['正文第一行', '[^1]: 定义'])[1].kind).toBe('footnote')
+    expect(computeLineStates(['- 列表项', '[^1]: 定义'])[1].kind).toBe('footnote')
+    expect(computeLineStates(['- 列表项', '  [^1]: 缩进两格'])[1].kind).toBe('footnote')
+  })
+
+  it('带 > 前缀的定义行仍是引用（这一处编辑器与导出不同，且早于本次改动）', () => {
+    // markdown-it 认 `> [^1]: x` 为定义（整行不产出可见内容），编辑器的行级前缀
+    // 规则看不见容器内的定义，所以它显示成引用正文。这是**既有**的偏差，不是本次
+    // 引入的：本票只负责把不引入新的偏差这件事钉住。
+    expect(computeLineStates(['> [^1]: 带前缀'])[0].kind).toBe('quote')
+  })
+
   it('围栏里的定义写法是代码内容', () => {
     const states = computeLineStates(['```', '[^1]: 不是定义', '```'])
     expect(states[1].kind).toBe('code')

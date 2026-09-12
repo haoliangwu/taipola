@@ -929,7 +929,6 @@ describe('脚注在编辑器里', () => {
     await flush()
     const ref = r.container.querySelector<HTMLElement>('.rn-footnote-ref')
     expect(ref?.textContent).toBe('1')
-    expect(ref?.dataset.footnoteRef).toBe('1')
     // `[1]` 的两个方括号来自 CSS，所以运行里只剩标签本身；源码里那两个标记
     // 仍然是零宽地留在 DOM 里，从 DOM 重建源码才不会丢。
     expect(getComputedStyle(ref!.parentElement!.querySelector('.rn-marker')!).display).toBe('none')
@@ -964,6 +963,29 @@ describe('脚注在编辑器里', () => {
     expect(revealed?.textContent).toBe('[^1]: ')
     expect(revealed?.className).toContain('rn-dim')
     expect(getComputedStyle(revealed!).display).not.toBe('none')
+    // 而且画出来的 `[1]` 必须让位：源码已经在显示了，两个形态叠起来就是
+    // `[1][^1]: 小小补充`。（这一条最初漏了，正是因为它只测了折叠态。）
+    expect(getComputedStyle(line, '::before').content).toBe('none')
+    expect(line.className).toContain('revealed')
+    await assertDomMatchesSource(r)
+  })
+
+  it('引用展开时也不画方括号（否则是 `[^[1]]`）', async () => {
+    // 开头先有一个 `见`：编辑器的初始光标在偏移 0，如果引用就在行首，它一上来
+    // 就是展开态，那样这条用例的前半段就测不到折叠态了。
+    const r = renderEditor('见[^1]。\n')
+    await flush()
+    expect(r.container.querySelectorAll('.rn-footnote-ref')).toHaveLength(1)
+
+    r.container.focus({ preventScroll: true })
+    const label = r.container.querySelector<HTMLElement>('.rn-footnote-ref')
+    if (!label?.firstChild) throw new Error('the reference has no text run')
+    placeCaretAt(label.firstChild, 0)
+    await flush()
+    // 标记显现 -> 源码就是这个形态，CSS 不能再补方括号，也不该再着色。
+    expect(r.container.querySelectorAll('.rn-footnote-ref')).toHaveLength(0)
+    const line = r.container.querySelector<HTMLElement>('.vl')!
+    expect(line.textContent).toBe('见[^1]。')
     await assertDomMatchesSource(r)
   })
 

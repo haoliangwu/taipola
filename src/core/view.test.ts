@@ -335,10 +335,16 @@ describe('脚注：引用与定义就地在位渲染', () => {
     expect(runs(view('[^注] x'))[1].footnoteRef).toBe('注')
   })
 
-  it('光标在引用里时显示源码（和其它行内构造一样可以改）', () => {
-    const v = view('[^1] 后面', [1])
-    expect(v.lines[0].runs.every((r) => r.marker === false)).toBe(true)
-    expect(v.lines[0].text).toBe('[^1] 后面')
+  it('光标在引用里时显示源码，且**不再**带上会被画出来的标记', () => {
+    // 关键的一条：`[1]` 是渲染层根据这个 mark 画出来的。展开时源码正在显示，
+    // 如果 mark 还在，屏幕上就是 `[^[1]]` —— 两个形态叠在一起。
+    const collapsed = view('[^1] 后面')
+    expect(collapsed.lines[0].runs.filter((r) => r.mark.footnoteRef).length).toBe(1)
+
+    const opened = view('[^1] 后面', [1])
+    expect(opened.lines[0].runs.every((r) => r.marker === false)).toBe(true)
+    expect(opened.lines[0].runs.some((r) => r.mark.footnoteRef !== undefined)).toBe(false)
+    expect(opened.lines[0].text).toBe('[^1] 后面')
   })
 
   it('定义行的 `[^1]: ` 是块级前缀：光标不在其中就折叠，那行带上标签', () => {
@@ -348,8 +354,10 @@ describe('脚注：引用与定义就地在位渲染', () => {
       { text: '小小补充', marker: false, dim: false },
     ])
     expect(v.lines[0].text).toBe('小小补充')
-    // 标签要留在视图里：标记是折叠掉的，`[1]` 只能由渲染层画出来。
-    expect(v.lines[0].footnoteLabel).toBe('1')
+    // 标签**不**在这里：它是"这一行是什么"的一部分，由 `computeLineStates` 给出
+    // （`inline.test.ts` 钉住），渲染层从行状态读它。视图再算一遍的话，围栏里的
+    // `[^1]: ` 会被算成定义行——那个 bug 就是这么来的。标签到 DOM 的那一跳由
+    // `Editor.test.tsx` 的 `data-footnote` 用例覆盖。
   })
 
   it('光标进定义块时前缀显现为暗色源码，内容仍可编辑', () => {
