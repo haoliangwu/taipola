@@ -72,6 +72,53 @@ export function renumberLists(text: string): string {
   return out.join('\n')
 }
 
+/** Width of a line's leading whitespace, in characters. */
+function leadingSpaces(line: string): number {
+  return /^\s*/.exec(line)?.[0].length ?? 0
+}
+
+/**
+ * The last line that belongs to `item`.
+ *
+ * An item is a SPAN, not a line: a nested list, the continuation lines of a
+ * multi-line item and a fenced block inside it all live on the lines below, and
+ * whatever moved the item has to move them too. Rewriting only the item's own
+ * line left them behind, so they were re-parented to the item above — the
+ * structure the user was trying to preserve, turned inside out.
+ *
+ * The rule is deliberately line-level: this module is a pure function of the
+ * source (`parseListItem` is a regex) and does not read the parser. A line
+ * belongs to the item when it is indented DEEPER than the item's own indent — the
+ * same rule Markdown uses for a nested block. A blank line belongs to the item
+ * only when an indented line follows it (a loose list item), and it is never
+ * included at the end of the span, where it is just the gap to the next block.
+ *
+ * Where the line-level rule and markdown-it's `list_item` span can part ways is
+ * written down, with the measurements, in
+ * `.scratch/list-indent/issues/01-indent-does-not-carry-nested-items.md`: they
+ * agree on every indented shape (including a fence whose body is indented with
+ * it), and a line that is only inside the item through Markdown's LAZY
+ * continuation — flush left, no blank line above — is not part of the span, since
+ * seeing it would mean re-implementing the parser here.
+ */
+function lastLineOfItem(lines: string[], item: ListItem): number {
+  let end = item.line
+  for (let i = item.line + 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue
+    if (leadingSpaces(lines[i]) <= item.indent.length) break
+    end = i
+  }
+  return end
+}
+
+/** Moves a line `delta` columns in (positive) or out (negative). */
+function shiftLine(line: string, delta: number): string {
+  if (delta >= 0) return ' '.repeat(delta) + line
+  // Never remove more than the line actually has: the rest of the span is at
+  // least as deep as the item, but a clamped line keeps its text intact.
+  return line.slice(Math.min(-delta, leadingSpaces(line)))
+}
+
 export interface IndentResult {
   /** The new document source. */
   doc: string
@@ -79,21 +126,19 @@ export interface IndentResult {
   caret: number
 }
 
-/** The line holding `offset`, and its `ListItem` (null when it is not one). */
+/** The line holding `offset`, its `ListItem`, and where that line starts. */
 function locate(doc: string, offset: number) {
   const lines = doc.split('\n')
   let start = 0
-  let index = lines.length - 1
   for (let i = 0; i < lines.length; i++) {
     const end = start + lines[i].length
     if (offset <= end) {
-      index = i
-      break
+      const item = parseListItem(lines[i], i)
+      return item ? { lines, index: i, item, start } : null
     }
     start = end + 1
   }
-  const item = parseListItem(lines[index], index)
-  return item ? { lines, index, item } : null
+  return null
 }
 
 /** The nearest list item above `index`; a non-item line ends the search. */
@@ -122,7 +167,9 @@ function shallowestAbove(lines: string[], index: number, depth: number): ListIte
  * Tab nests the item under the item above it, stepping by that item's own marker
  * width — exactly the indentation Markdown needs for a nested list to be a child
  * rather than a sibling. Shift+Tab moves the item out to the level of the nearest
- * shallower item above it. Returns null when the move is impossible (no item
+ * shallower item above it. Either way the WHOLE item moves: its nested list, the
+ * continuation lines of a multi-line item and an indented fenced block inside it
+ * go with it (`lastLineOfItem`). Returns null when the move is impossible (no item
  * above, nothing to deepen, or already at the outermost level), which leaves the
  * key to the browser.
  */
@@ -133,7 +180,7 @@ export function indentListItem(
 ): IndentResult | null {
   const found = locate(doc, offset)
   if (!found) return null
-  const { lines, index, item } = found
+  const { lines, index, item, start } = found
 
   let indent: string
   if (direction === 'in') {
@@ -150,6 +197,25 @@ export function indentListItem(
   if (indent === item.indent) return null
 
   const delta = indent.length - item.indent.length
-  lines[index] = `${indent}${item.marker}${item.body}`
-  return { doc: renumberLists(lines.join('\n')), caret: Math.max(0, offset + delta) }
+  const end = lastLineOfItem(lines, item)
+  for (let i = index; i <= end; i++) {
+    if (i === index) {
+      lines[i] = `${indent}${item.marker}${item.body}`
+    } else if (lines[i].trim() !== '') {
+      // A blank line inside the span carries no indentation of its own, so
+      // moving it would only add trailing whitespace.
+      lines[i] = shiftLine(lines[i], delta)
+    }
+  }
+
+  // The caret is ALWAYS on the item's own line: `locate` refuses any other line,
+  // because a continuation line is not a list item and a nested ITEM would be the
+  // subject of this call instead of this one. So the only shift it can see is the
+  // item's own indent — and when that indent SHRINKS, a caret sitting inside the
+  // removed columns has to stick to the line start rather than run into the block
+  // above. Nothing here needs clamping at 0: the columns removed are at most the
+  // caret's own column, which is at least `start`, so the result is ≥ `start`.
+  const column = offset - start
+  const adjust = delta >= 0 ? delta : -Math.min(-delta, column)
+  return { doc: renumberLists(lines.join('\n')), caret: offset + adjust }
 }
