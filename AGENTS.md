@@ -42,8 +42,9 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
 
 ### Issue tracker
 
-Issues and specs are local markdown under `.scratch/<feature>/` (no git remote, nothing is
-published). See `docs/agents/issue-tracker.md`.
+Issues and specs are local markdown under `.scratch/<feature>/` — gitignored and never
+committed, so the tracker is not published even though the app now is. See
+`docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
