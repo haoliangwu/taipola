@@ -592,11 +592,19 @@ function SaveIcon() {
   )
 }
 
+/**
+ * An arrow coming DOWN into a tray: 导出.
+ *
+ * It pointed the other way at first, which is the classic upload/share glyph —
+ * wrong way round for a command that hands the browser a file to download, and
+ * easy to confuse with the floppy beside it. The tray is the same either way;
+ * the arrow is what decides what a reader thinks the button does.
+ */
 function ExportIcon() {
   return (
     <Glyph>
-      <path d="M8 10.5V2.5" />
-      <path d="M4.8 5.7 8 2.5l3.2 3.2" />
+      <path d="M8 2.5v8" />
+      <path d="M4.8 7.3 8 10.5l3.2-3.2" />
       <path d="M3 13.5h10" />
     </Glyph>
   )
