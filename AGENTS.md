@@ -27,7 +27,8 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
 
 - `src/core/` — in-process pure logic, no browser API: `markdown.ts` (parsing), `view.ts`
   (source → view mapping), `inline.ts` (per-line state), `lists.ts` (numbering, indent),
-  `lines.ts` (line number ↔ character offset), `editCommands.ts` (formatting commands),
+  `lines.ts` (line number ↔ character offset), `imageSize.ts` (the `{width=…}` image suffix),
+  `editCommands.ts` (formatting commands),
   `shortcuts.ts` (keystroke → command name), `autosave.ts` (when the draft gets written),
   `welcome.ts` (the welcome document), `markdownIt.ts` (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
@@ -40,6 +41,8 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   Before changing block collection, run segmentation or any inline syntax, read
   `docs/adr/0002-caret-invariants-and-pitfalls.md`: it lists the invariants the caret
   arithmetic depends on and the symptoms each one produced when broken.
+  `docs/adr/0003-image-size-syntax.md` covers the one inline syntax this repo adds
+  (`{width=…}`), including why it is pixels-only and who reads it.
 
 ## Agent skills
 

@@ -130,6 +130,37 @@ describe('行内标记：折叠与显现', () => {
     expect(v.lines[0].text).toBe('![alt](https://x.dev/a.png)')
   })
 
+  /*
+   * 尺寸后缀 `{width=200}`（`core/imageSize.ts`）属于图片本身：它和 `![alt](url)` 是同一个
+   * run，屏幕上是同一张图，源码里的字符一个不少。写这份文件的其他编辑器会把后缀当正文显示，
+   * 这是选这条语法的已知代价（`.scratch/image-resize/issues/01`）。
+   */
+  it('图片可以带尺寸后缀：同一个 run，width 一并带走', () => {
+    const source = '![alt](https://x.dev/a.png){width=200}'
+    const v = view(source)
+    expect(runs(v)).toEqual([
+      { text: source, marker: false, dim: false, img: 'https://x.dev/a.png' },
+    ])
+    expect(v.lines[0].runs[0].mark.img).toEqual({
+      src: 'https://x.dev/a.png',
+      alt: 'alt',
+      width: '200',
+    })
+    // 无损：run 拼回去就是原来的源码，DOM 重建不会丢后缀。
+    expect(reconstruct(v)).toBe(source)
+  })
+
+  it('光标落在尺寸后缀里也恢复源码（图片一样让位）', () => {
+    const source = '![alt](https://x.dev/a.png){width=200}'
+    const v = view(source, [source.length - 2])
+    expect(runs(v).every((r) => r.img === undefined)).toBe(true)
+    expect(reconstruct(v)).toBe(source)
+  })
+
+  it('不写尺寸后缀时不带 width', () => {
+    expect(view('![alt](https://x.dev/a.png)').lines[0].runs[0].mark.img?.width).toBeUndefined()
+  })
+
   it('代码围栏内的行内标记是字面量', () => {
     const v = view('```\nconst a = **x**\n```')
     const code = runs(v, 1)

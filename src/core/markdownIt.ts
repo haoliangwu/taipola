@@ -2,6 +2,7 @@ import MarkdownIt from 'markdown-it'
 import footnote from 'markdown-it-footnote'
 import taskLists from 'markdown-it-task-lists'
 import hljs from 'highlight.js/lib/common'
+import { readImageSize } from './imageSize'
 
 /**
  * The one and only configured markdown-it instance.
@@ -68,3 +69,35 @@ export function exportableHref(url: string): string | null {
   const href = md.normalizeLink(url)
   return md.validateLink(href) ? href : null
 }
+
+/**
+ * Turns the image size suffix into a real `width`, on the export side.
+ *
+ * markdown-it parses `![a](x.png){width=200}` as an image followed by a text token
+ * holding the suffix. Without this rule the exported HTML would show `{width=200}`
+ * as text beside a picture the editor drew at 200px — the same "two truths" the
+ * autolink and soft-break work had to close. `readImageSize` is the reader the
+ * editor's own scan uses (`view.ts`), so the two cannot recognise different
+ * suffixes.
+ *
+ * Runs after `inline` (so the children exist) and before rendering, and consumes
+ * the suffix from the following text token rather than leaving stray characters.
+ */
+md.core.ruler.after('inline', 'image_size', (state) => {
+  for (const token of state.tokens) {
+    const children = token.type === 'inline' ? token.children : null
+    if (!children) continue
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]
+      if (child.type !== 'image') continue
+      const next = children[i + 1]
+      if (!next || next.type !== 'text') continue
+      const size = readImageSize(next.content)
+      if (!size) continue
+      child.attrSet('width', size.width)
+      next.content = next.content.slice(size.suffixLength)
+      if (next.content === '') children.splice(i + 1, 1)
+    }
+  }
+  return true
+})

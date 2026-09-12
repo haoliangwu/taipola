@@ -665,6 +665,16 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(r.getDoc()).toContain(`![示例图片](${url})`)
   })
 
+  it('图片带上 {width=200}：屏幕上就按 200 宽画，源码一字不丢', async () => {
+    const r = renderEditor('看图：\n\n![示例](https://example.com/a.png){width=200}\n')
+    await flush()
+    const img = r.container.querySelector('img')
+    expect(img?.getAttribute('src')).toBe('https://example.com/a.png')
+    expect(img?.getAttribute('width')).toBe('200')
+    await assertDomMatchesSource(r)
+    expect(r.getDoc()).toContain('{width=200}')
+  })
+
   it('光标进入图片所在行时，图片让位给源码（可编辑）', async () => {
     // 首行放一段文字：初始光标在偏移 0，正好落在第一行，图片行保持渲染态。
     const r = renderEditor('甲\n\n![甲](https://example.com/a.png)\n')

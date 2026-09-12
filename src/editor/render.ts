@@ -21,7 +21,7 @@
  * previous text node and the next keystroke lands a line too high.
  */
 import type { Block } from '../core/markdown'
-import type { BlockView, ViewRun } from '../core/view'
+import type { BlockView, ImageMark, ViewRun } from '../core/view'
 import type { LineState } from '../core/inline'
 
 /* -------------------------------------------------------------------------- */
@@ -95,7 +95,7 @@ function imageElement(
   index: number,
   state: LineState | undefined,
 ): HTMLElement {
-  const img = run.mark.img as { src: string; alt: string }
+  const img = run.mark.img as ImageMark
   const usable =
     existing &&
     existing.hasAttribute('data-run') &&
@@ -122,6 +122,15 @@ function imageElement(
   }
   if (picture.getAttribute('src') !== img.src) picture.setAttribute('src', img.src)
   if (picture.getAttribute('alt') !== img.alt) picture.setAttribute('alt', img.alt)
+  // The width attribute is dropped when the suffix is, or a removed size would
+  // stay on the reused element and the picture would keep a size the source no
+  // longer asks for.
+  const width = img.width ?? ''
+  if (width === '') {
+    if (picture.hasAttribute('width')) picture.removeAttribute('width')
+  } else {
+    setAttr(picture, 'width', width)
+  }
   return span
 }
 

@@ -12,6 +12,7 @@
  */
 
 import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
+import { readImageSize } from './imageSize'
 import { exportableHref, md } from './markdownIt'
 
 interface MarkerCell {
@@ -21,6 +22,18 @@ interface MarkerCell {
   /** Source range of the closing marker. */
   closeStart: number
   closeEnd: number
+}
+
+/**
+ * A collapsed image: the run is rendered as an `<img>` instead of its source
+ * text. The source text stays in the DOM (hidden) so a document absorbed from the
+ * DOM keeps the picture.
+ */
+export interface ImageMark {
+  src: string
+  alt: string
+  /** Width in pixels, from the `{width=…}` suffix; absent when the image is unsized. */
+  width?: string
 }
 
 interface Mark {
@@ -34,12 +47,7 @@ interface Mark {
    * drawn by CSS, because the source's own `[^` and `]` collapse as markers.
    */
   footnoteRef?: string
-  /**
-   * A collapsed image: the run is rendered as an `<img>` instead of its source
-   * text. The source text stays in the DOM (hidden) so a document absorbed from
-   * the DOM keeps the picture.
-   */
-  img?: { src: string; alt: string }
+  img?: ImageMark
 }
 
 /** A run of characters sharing one styling and one visibility. */
@@ -122,6 +130,8 @@ interface Token {
   url?: string
   /** Image alt text, for a `kind: 'image'` token. */
   alt?: string
+  /** Image width in pixels, from the `{width=…}` suffix. */
+  width?: string
   /** Footnote label, for a `kind: 'footnoteRef'` token. */
   label?: string
 }
@@ -164,16 +174,22 @@ function findSyntaxTokens(text: string): Token[] {
 
     const image = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest)
     if (image) {
+      // The size suffix is part of the picture, not text beside it: the editor
+      // draws one <img> for the whole thing, and the export has to read the same
+      // suffix (`core/imageSize.ts`).
+      const size = readImageSize(rest.slice(image[0].length))
+      const length = image[0].length + (size?.suffixLength ?? 0)
       tokens.push({
         kind: 'image',
         start: i,
-        end: i + image[0].length,
+        end: i + length,
         innerStart: i + 2,
         innerEnd: i + 2 + image[1].length,
         url: image[2],
         alt: image[1],
+        width: size?.width,
       })
-      i += image[0].length
+      i += length
       continue
     }
 
@@ -723,7 +739,13 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
       runs.push({
         text,
         src: sourceStart + picture.start,
-        mark: { img: { src: picture.url ?? '', alt: picture.alt ?? '' } },
+        mark: {
+          img: {
+            src: picture.url ?? '',
+            alt: picture.alt ?? '',
+            ...(picture.width ? { width: picture.width } : {}),
+          },
+        },
         marker: false,
       })
       i = picture.end
