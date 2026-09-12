@@ -23,6 +23,7 @@
 import { parseDocument, type Block } from '../core/markdown'
 import { computeLineStates, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
+import { exportableHref } from '../core/markdownIt'
 import type { EditBuffers } from '../core/editCommands'
 import { indentListItem, renumberLists } from '../core/lists'
 import {
@@ -528,6 +529,23 @@ export class EditorKernel {
     if (!host || this.readOnly) return
     const hit = sourceOffsetAtPoint(event.clientX, event.clientY, event.target as Element | null)
     if (!hit) return
+
+    // Cmd/Ctrl+click follows a link, the way it does everywhere else. It has to be
+    // done by hand: a link is a `span` and not an `<a>` on purpose (a plain click in
+    // edit mode has to place the caret), so the browser has nothing to follow and
+    // nothing to take over. Here the default IS suppressed — the caret must not move
+    // under a link the user is only visiting.
+    if (event.metaKey || event.ctrlKey) {
+      const href = this.linkAt(hit.block, hit.local)
+      if (href !== null) {
+        event.preventDefault()
+        // `noopener` so the opened page gets no handle on this one; the export sets
+        // the same pair on its anchors.
+        window.open(href, '_blank', 'noopener,noreferrer')
+        return
+      }
+    }
+
     const target = this.offsets[hit.block] + hit.local
     this.caret = target
     this.recompute()
@@ -539,6 +557,32 @@ export class EditorKernel {
   private handleMouseUp = (): void => {
     // A drag-select ends here: let the browser's final selection reach the model.
     this.placedByUs = false
+  }
+
+  /**
+   * The href of the link run covering a block-local source offset, or null.
+   *
+   * Read from the VIEW rather than from the span's DOM attributes. The view is the
+   * truth and the DOM is its reflection (ADR-0001), and the only href the DOM
+   * carries today is the `title` tooltip, which merely happens to hold the same
+   * string — following a tooltip is not a contract worth being built on.
+   *
+   * Returns null for a URL the export would refuse, so a `[x](javascript:…)` in the
+   * document cannot become click-to-execute. That gate is `exportableHref`, the
+   * same one the autolink scan uses, which is markdown-it's own `validateLink`.
+   */
+  private linkAt(block: number, local: number): string | null {
+    const view = this.views[block]
+    if (!view) return null
+    for (const line of view.lines) {
+      for (const run of line.runs) {
+        if (run.marker || run.mark.link === undefined) continue
+        if (local >= run.src && local < run.src + run.text.length) {
+          return exportableHref(run.mark.link)
+        }
+      }
+    }
+    return null
   }
 
   private pushUndo(snapshot: Snapshot): void {

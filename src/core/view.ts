@@ -12,7 +12,7 @@
  */
 
 import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
-import { md } from './markdownIt'
+import { exportableHref, md } from './markdownIt'
 
 interface MarkerCell {
   /** Source range of the opening marker, e.g. the `**` of `**bold**`. */
@@ -420,11 +420,11 @@ function withAutolinks(text: string, syntax: Token[]): Token[] {
 
   for (const region of textRegions(0, text.length, syntax)) {
     for (const found of autolinksIn(text.slice(region.start, region.end))) {
-      const url = md.normalizeLink(found.url)
-      // markdown-it skips a link it will not export, so the view must not show
-      // one either: a link here that the export refuses would be the same
-      // two-truths bug in the other direction.
-      if (!md.validateLink(url)) continue
+      // markdown-it skips a link it will not export, so the view must not show one
+      // either: a link here that the export refuses would be the same two-truths
+      // bug in the other direction.
+      const url = exportableHref(found.url)
+      if (url === null) continue
       const start = region.start + found.start
       const end = region.start + found.end
       links.push({ kind: 'link', start, end, innerStart: start, innerEnd: end, url })

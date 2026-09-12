@@ -1001,3 +1001,117 @@ describe('脚注在编辑器里', () => {
     expect(r.getDoc()).toBe('见[^1]。\n\n[^1]: X小小补充\n')
   })
 })
+
+/**
+ * Cmd/Ctrl+click follows a link.
+ *
+ * A link here is a `span` and not an `<a>` on purpose — a plain click in edit mode
+ * has to place the caret — so the browser has nothing to follow and this is done by
+ * hand in the kernel's `mousedown`. What the tests pin, beyond the feature: a plain
+ * click must still behave exactly as before, and the URL gate is a security
+ * boundary rather than a nicety.
+ */
+describe('Cmd/Ctrl+click 打开链接', () => {
+  /**
+   * The kernel listens on `mousedown` (in capture) and uses the pointer coordinates
+   * for its hit test, so a real rect and a real target are what make this work.
+   * `userEvent.pointer` cannot carry modifiers, hence the direct events.
+   */
+  function modifiedClick(el: HTMLElement, init: MouseEventInit): void {
+    const rect = el.getBoundingClientRect()
+    const at: MouseEventInit = {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      ...init,
+    }
+    el.dispatchEvent(new MouseEvent('mousedown', at))
+    el.dispatchEvent(new MouseEvent('mouseup', at))
+  }
+
+  /**
+   * The link's own run, found by class rather than by index: in
+   * `见 [文字](url) 结束` the run before the text is the collapsed `[` MARKER
+   * (`display: none`, so a zero-sized rect and no hit test), and counting runs to
+   * find the right one is how this test first aimed its click at nothing.
+   */
+  function linkRun(r: Rendering): HTMLElement {
+    const el = r.container.querySelector<HTMLElement>('.rn-link')
+    if (!el) throw new Error('no link run on the line')
+    return el
+  }
+
+  async function withOpenSpy(run: (open: ReturnType<typeof vi.spyOn>) => Promise<void>) {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    try {
+      await run(open)
+    } finally {
+      open.mockRestore()
+    }
+  }
+
+  it('Cmd+click 打开显式链接', async () => {
+    const r = renderEditor('见 [链接文字](https://x.dev) 结束\n')
+    await flush()
+    await withOpenSpy(async (open) => {
+      modifiedClick(linkRun(r), { metaKey: true })
+      expect(open).toHaveBeenCalledWith('https://x.dev', '_blank', 'noopener,noreferrer')
+    })
+  })
+
+  it('Cmd+click 裸 URL 打开的是归一化之后的绝对地址', async () => {
+    // 裸 URL 的 href 不是源码原文：`www.` 要补上 scheme。这里比对的正是导出会写的那个地址。
+    const r = renderEditor('见 www.example.net 结束\n')
+    await flush()
+    await withOpenSpy(async (open) => {
+      modifiedClick(linkRun(r), { metaKey: true })
+      expect(open).toHaveBeenCalledWith('http://www.example.net', '_blank', 'noopener,noreferrer')
+    })
+  })
+
+  it('Ctrl+click 也认（Windows/Linux；macOS 上系统会把 ctrl+click 当右键）', async () => {
+    const r = renderEditor('见 [链接文字](https://x.dev) 结束\n')
+    await flush()
+    await withOpenSpy(async (open) => {
+      modifiedClick(linkRun(r), { ctrlKey: true })
+      expect(open).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('普通点击不打开，仍然是落光标', async () => {
+    const r = renderEditor('见 [链接文字](https://x.dev) 结束\n')
+    await flush()
+    await withOpenSpy(async (open) => {
+      modifiedClick(linkRun(r), {})
+      expect(open).not.toHaveBeenCalled()
+      // 源码里 `链接文字` 占 [3,7)：落光标说明这条老路径没被新分支吃掉。
+      const caret = caretFromDom() ?? -1
+      expect(caret).toBeGreaterThanOrEqual(3)
+      expect(caret).toBeLessThanOrEqual(7)
+    })
+  })
+
+  it('不可执行的 URL 不跟随（导出的 HTML 也会把它丢掉）', async () => {
+    // 跟随一个没校验的 `[x](javascript:…)` 等于把这份 Markdown 变成"点一下就执行"。
+    // 门用的是 markdown-it 自己的 validateLink，也就是导出那条路走的同一道门。
+    const r = renderEditor('见 [x](javascript:alert(1)) 结束\n')
+    await flush()
+    await withOpenSpy(async (open) => {
+      modifiedClick(linkRun(r), { metaKey: true })
+      expect(open).not.toHaveBeenCalled()
+    })
+  })
+
+  it('Cmd+click 非链接文字不打开', async () => {
+    const r = renderEditor('见 普通文字 结束\n')
+    await flush()
+    const text = r.runEl(0, 0, 0)
+    if (!text) throw new Error('the line has no run')
+    await withOpenSpy(async (open) => {
+      modifiedClick(text, { metaKey: true })
+      expect(open).not.toHaveBeenCalled()
+    })
+  })
+})

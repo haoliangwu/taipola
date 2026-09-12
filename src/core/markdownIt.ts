@@ -52,3 +52,19 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   token.attrSet('rel', 'noopener noreferrer')
   return defaultLinkOpen(tokens, idx, options, env, self)
 }
+
+/**
+ * The href the export would write for `url`, or null when it would refuse it.
+ *
+ * The one answer to "is this URL allowed", asked by two callers that must not
+ * disagree: the autolink scan (a URL the export drops must not render as a link)
+ * and the kernel's Cmd/Ctrl+click (a URL the export drops must not be FOLLOWED —
+ * following an unvalidated `[x](javascript:…)` would execute it).
+ *
+ * `validateLink` is markdown-it's own gate, the one the exported HTML already
+ * passes through, so the editor cannot be more permissive than the file it writes.
+ */
+export function exportableHref(url: string): string | null {
+  const href = md.normalizeLink(url)
+  return md.validateLink(href) ? href : null
+}
