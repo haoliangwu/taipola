@@ -21,7 +21,7 @@
  * "save as" or for a new document; download otherwise) is shared and lives here,
  * so the two adapters only supply the primitives that actually differ.
  */
-import { createLocalStorageDraftStore, type DraftStore } from './draft'
+import { localStorageDraft, type DraftStore } from './draft'
 import { renderStandaloneHtml } from './html'
 
 const DEFAULT_NAME = 'untitled.md'
@@ -78,10 +78,19 @@ export interface Documents {
     text: string,
     options?: { forcePicker?: boolean },
   ): Promise<SaveResult>
-  /** Downloads the rendered document as a standalone HTML file. */
-  exportHtml(source: string, doc: OpenDocument | null): void
-  /** Downloads the markdown source as a `.md` file. */
-  exportMarkdown(text: string, doc: OpenDocument | null): void
+  /**
+   * Downloads the rendered document as a standalone HTML file named after
+   * `name` — the document's DISPLAY name, which the shell owns.
+   *
+   * The name is a plain string rather than the document handle on purpose. The
+   * handle only exists once a file has been picked or saved, while the shell
+   * always has a display name (it shows one in the title bar, and a draft
+   * restored on load has a name but no handle). Asking for the handle here made
+   * a restored draft export as `untitled.html`.
+   */
+  exportHtml(source: string, name: string): void
+  /** Downloads the markdown source as a `.md` file named after `name`. */
+  exportMarkdown(text: string, name: string): void
   /** Whether a save can reach the same file again — for the status-bar sentence. */
   supportsWriteBack(): boolean
   draft: DraftStore
@@ -177,30 +186,34 @@ export function createDocuments(adapter: StorageAdapter): Documents {
       }
     },
 
-    exportHtml(source, doc) {
-      const name = doc?.name ?? DEFAULT_NAME
-      adapter.download(renderStandaloneHtml(source, stripExtension(name)), htmlFileName(name), HTML_MIME)
+    exportHtml(source, name) {
+      adapter.download(renderStandaloneHtml(source, baseName(name)), htmlFileName(name), HTML_MIME)
     },
 
-    exportMarkdown(text, doc) {
-      const name = doc?.name ?? DEFAULT_NAME
+    exportMarkdown(text, name) {
       adapter.download(text, markdownFileName(name), MARKDOWN_MIME)
     },
 
     supportsWriteBack: () => adapter.writeBack,
 
-    draft: createLocalStorageDraftStore(),
+    draft: localStorageDraft,
   }
 }
 
-/** `report.md` → `report`; used for the exported HTML file's `<title>`. */
-function stripExtension(name: string): string {
-  return name.replace(/\.\w+$/, '')
+/**
+ * The document's name without a markdown extension: `report.md` → `report`.
+ *
+ * Only the extensions this editor opens are stripped, so a name that merely
+ * contains a dot keeps it (`notes.v2` → `notes.v2.html`). Used for both the
+ * exported file's name and its `<title>`.
+ */
+function baseName(name: string): string {
+  return name.replace(/\.(md|markdown|mdown|txt)$/i, '')
 }
 
-/** `report.txt` → `report.html`; a name with no extension just gets `.html`. */
+/** `report.txt` → `report.html`; a name with no markdown extension just gets `.html`. */
 function htmlFileName(name: string): string {
-  return `${stripExtension(name)}.html`
+  return `${baseName(name)}.html`
 }
 
 /** `report.txt` → `report.md`; a name that already ends in `.md` is kept. */

@@ -160,7 +160,7 @@ describe('export', () => {
     const downloads: Download[] = []
     const documents = createDocuments(downloadOnly(downloads))
 
-    documents.exportHtml('# 标题\n', { name: '笔记.md', handle: null })
+    documents.exportHtml('# 标题\n', '笔记.md')
 
     expect(downloads).toHaveLength(1)
     expect(downloads[0].filename).toBe('笔记.html')
@@ -172,8 +172,17 @@ describe('export', () => {
     const downloads: Download[] = []
     const documents = createDocuments(downloadOnly(downloads))
 
-    documents.exportMarkdown('# 标题\n', { name: '笔记.txt', handle: null })
+    documents.exportMarkdown('# 标题\n', '笔记.txt')
 
     expect(downloads[0]).toMatchObject({ text: '# 标题\n', filename: '笔记.txt.md' })
+  })
+
+  it('只剥掉 markdown 扩展名，普通带点的文件名原样保留', async () => {
+    const downloads: Download[] = []
+    const documents = createDocuments(downloadOnly(downloads))
+
+    documents.exportHtml('x\n', 'notes.v2')
+
+    expect(downloads[0].filename).toBe('notes.v2.html')
   })
 })

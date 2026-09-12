@@ -284,14 +284,14 @@ export default function App() {
           <button
             type="button"
             className="text-button"
-            onClick={() => documents.exportHtml(value, doc)}
+            onClick={() => documents.exportHtml(value, fileName)}
           >
             导出 HTML
           </button>
           <button
             type="button"
             className="text-button"
-            onClick={() => documents.exportMarkdown(value, doc)}
+            onClick={() => documents.exportMarkdown(value, fileName)}
           >
             导出 MD
           </button>
