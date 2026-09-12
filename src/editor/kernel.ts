@@ -25,7 +25,7 @@ import { computeLineStates, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
 import type { EditBuffers } from '../core/editCommands'
-import { indentListItem, renumberLists } from '../core/lists'
+import { indentListItem, parseListItem, renumberLists } from '../core/lists'
 import {
   markupSignature,
   readDocumentSource,
@@ -37,6 +37,17 @@ import { lineOfOffset, offsetForLine } from '../core/lines'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
+
+/**
+ * What a line can carry in front of its content: a list marker (`- `, `2. `, a
+ * task checkbox) or a quote marker (`> `). Enter repeats this when it opens the
+ * next item, and it is what makes `> ` continue a quote rather than end it.
+ *
+ * The empty-item rule (`leavingEmptyItem`) asks `parseListItem` instead — list
+ * syntax has one owner in `core/lists.ts` — and only falls back to a quote check,
+ * so the two cannot read a line differently.
+ */
+const LINE_PREFIX_RE = /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s*)/
 
 interface Snapshot {
   value: string
@@ -441,17 +452,11 @@ export class EditorKernel {
       const lineEndRaw = this.doc.indexOf('\n', live)
       const lineEnd = lineEndRaw === -1 ? this.doc.length : lineEndRaw
       const currentLine = this.doc.slice(lineStart, lineEnd)
-      const prefix =
-        /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?|>\s*)/.exec(currentLine)?.[0] ?? ''
-      const body = currentLine.slice(prefix.length)
+      const prefix = LINE_PREFIX_RE.exec(currentLine)?.[0] ?? ''
 
-      // An EMPTY item (`- ` alone on the line, caret anywhere on it) exits the
-      // list: the bullet is removed but the line stays as a blank line.
-      if (prefix !== '' && currentLine === prefix && body.trim() === '') {
-        const withoutBullet =
-          this.doc.slice(0, lineStart) + this.doc.slice(lineStart + prefix.length)
-        // Leaving the list splits it in two, so the tail starts again at 1.
-        this.commit(renumberLists(withoutBullet), lineStart)
+      const left = this.leavingEmptyItem(live)
+      if (left) {
+        this.commit(left.doc, left.caret)
         return
       }
       if (prefix !== '') {
@@ -504,6 +509,26 @@ export class EditorKernel {
       return
     }
 
+    // Backspace on an EMPTY item (`2. ` alone on the line) leaves the list, the
+    // same way Enter does. Without this rule the browser deleted the marker's own
+    // trailing space and the line became `2.` — not an item as far as the editor's
+    // scan is concerned, an empty one as far as markdown-it is — and one more
+    // Backspace turned it into a bare `2` glued onto the item above as a lazy
+    // continuation. This has to come BEFORE the line-join rule below, which would
+    // otherwise swallow the marker into the previous line.
+    if (event.key === 'Backspace' && live !== null) {
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        const left = this.leavingEmptyItem(live)
+        if (left) {
+          event.preventDefault()
+          this.pushUndo({ value: this.doc, caret: this.caret })
+          this.commit(left.doc, left.caret)
+          return
+        }
+      }
+    }
+
     // Backspace at the START of a source line: join it with the previous line by
     // deleting exactly that newline. Letting the browser do it is what ate a
     // character out of the previous block's text node instead — the browser sees
@@ -532,6 +557,46 @@ export class EditorKernel {
         return
       }
     }
+  }
+
+  /**
+   * Takes an EMPTY item (`- ` alone on its line, caret anywhere on it) out of its
+   * list: the marker goes, the line stays as a blank line, and the rest of the
+   * list is renumbered. A lone quote marker (`> `) leaves its quote the same way.
+   *
+   * Both keys that mean "leave this item" land here. Enter opens the next item,
+   * and exits the list when this one has nothing in it. Backspace would otherwise
+   * delete the marker's own trailing space and leave `2.` behind — a form the
+   * editor's own scan does not read as an item (`parseListItem` wants whitespace
+   * after the delimiter) while markdown-it reads it as an empty one, so the same
+   * document said two different things on screen and in the export.
+   *
+   * Returns the new document and caret, or null when this line is not an empty
+   * item. The callers push undo themselves: Enter already has.
+   */
+  private leavingEmptyItem(live: number): { doc: string; caret: number } | null {
+    const lineStart = this.doc.lastIndexOf('\n', Math.max(0, live - 1)) + 1
+    const lineEndRaw = this.doc.indexOf('\n', live)
+    const lineEnd = lineEndRaw === -1 ? this.doc.length : lineEndRaw
+    const line = this.doc.slice(lineStart, lineEnd)
+    const lineNumber = lineOfOffset(this.doc, lineStart)
+    // A fence's contents are text, not Markdown: a `- ` inside one is an example,
+    // not an item to leave.
+    if (this.lineStates[lineNumber - 1]?.kind === 'code') return null
+    // The list case asks `parseListItem` — the one owner of list syntax — rather
+    // than a second grammar. It reports an empty body exactly when the line holds
+    // nothing but its marker.
+    const item = parseListItem(line)
+    const marker =
+      item !== null && item.body === '' ? item.indent + item.marker : /^>\s*$/.test(line) ? line : null
+    if (marker === null) return null
+    const withoutMarker = this.doc.slice(0, lineStart) + this.doc.slice(lineStart + marker.length)
+    // Leaving the list splits it in two, so the tail starts again at 1. The
+    // renumbering can also SHORTEN the lines above (`10.` becomes `1.`), so the
+    // caret is read off the final text instead of the old offset — the line
+    // number survives, offsets do not.
+    const doc = renumberLists(withoutMarker)
+    return { doc, caret: offsetForLine(doc, lineNumber) }
   }
 
   private handleMouseDown = (event: MouseEvent): void => {

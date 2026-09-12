@@ -834,6 +834,83 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(caretFromDom()).toBe(7)
   })
 
+  it('空 bullet 上按 Backspace：退出列表，和 Enter 是同一个结果', async () => {
+    const r = renderEditor('1. aaa\n2. \n3. bbb\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    expect(caretFromDom()).toBe(10)
+    await pressBackspace(r)
+    await flush()
+    // 标记去掉、空行留下、后面的重新编号。旧行为是删掉标记里的那个空格，
+    // 留下 `2.`：编辑器自己的扫描不认它是列表项，markdown-it 认，两边就分岔了。
+    expect(r.getDoc()).toBe('1. aaa\n\n2. bbb\n')
+    expect(caretFromDom()).toBe(7) // 退出来的那个空行
+    await assertDomMatchesSource(r)
+
+    // 光标在行首也一样。旧行为会先把标记并进上一行（`1. aaa2. `）。
+    const atStart = renderEditor('1. aaa\n2. \n3. bbb\n')
+    await flush()
+    await clickInRun(atStart, 0, 1, 0, 'start')
+    await flush()
+    await pressBackspace(atStart)
+    await flush()
+    expect(atStart.getDoc()).toBe('1. aaa\n\n2. bbb\n')
+    expect(caretFromDom()).toBe(7)
+    await assertDomMatchesSource(atStart)
+  })
+
+  it('两位数的编号被重排缩短时，光标仍在退出来的那个空行上', async () => {
+    const r = renderEditor('10. aaa\n11. \n12. bbb\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    // `10.` → `1.` 之后整篇都短了一格：光标要按重排后的文本算（旧算法按重排前的偏移给 8，
+    // 正好落到 `2. bbb` 上）。
+    expect(r.getDoc()).toBe('1. aaa\n\n2. bbb\n')
+    expect(caretFromDom()).toBe(7)
+    await assertDomMatchesSource(r)
+  })
+
+  it('空任务项上按 Backspace 同样退出列表', async () => {
+    const r = renderEditor('- [ ] \n- 乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('\n- 乙\n')
+    expect(caretFromDom()).toBe(0)
+    await assertDomMatchesSource(r)
+  })
+
+  it('只有引用标记的行：Backspace 退出引用，和 Enter 一样', async () => {
+    const r = renderEditor('> 引用\n> \n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 引用\n\n')
+    expect(caretFromDom()).toBe(5)
+    await assertDomMatchesSource(r)
+  })
+
+  it('围栏里那行 `- ` 是代码，不是空项：Backspace 只删掉那个空格', async () => {
+    const r = renderEditor('```\n- \n```\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    // 空项规则不认它（围栏里是文本），于是退回浏览器的普通退格：删掉空格，
+    // 而不是把整个 `- ` 标记拿掉（那会把代码示例改掉）。
+    expect(r.getDoc()).toBe('```\n-\n```\n')
+    await assertDomMatchesSource(r)
+  })
+
   it('连续两个空行：一次 Backspace 只吃掉一个，光标落在上一段末尾', async () => {
     const r = renderEditor('甲\n\n\n乙\n')
     await flush()
