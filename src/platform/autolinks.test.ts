@@ -12,9 +12,15 @@
  * editor renders) and the export from `renderDocumentHtml` (what the file
  * contains). The corpus is the ticket's probe document plus the four traps, and
  * every case is its own paragraph so a failure names the construct that broke.
+ *
+ * It is NOT "the two renderings are always identical", and pretending otherwise
+ * was this ticket's first mistake. Four shapes still differ, all of them
+ * export-side defects, and they are pinned below as a bounded table rather than
+ * left to be rediscovered.
  */
 import { describe, expect, it } from 'vitest'
 import { buildBlockView } from '../core/view'
+import { md } from '../core/markdownIt'
 import { renderDocumentHtml } from './html'
 
 interface Link {
@@ -77,6 +83,11 @@ const CASES: Array<{ name: string; lines: string[] }> = [
   { name: '行首裸域名，行尾 URL', lines: ['example.com 开头，https://example.com 结尾'] },
   { name: 'URL 贴着中文收尾', lines: ['https://example.com中文结尾'] },
   { name: '反斜杠转义的冒号', lines: ['http\\://example.com'] },
+  // 星号三条：markdown-it 有一条**刻意**的收尾 `*` 裁剪（免得吃掉强调的收尾标记），
+  // linkify-it 自己没有，所以这条规则是我们补上的，两边因此一致。
+  { name: 'URL 结尾的星号：两边都裁掉', lines: ['https://x.dev/a*'] },
+  { name: 'URL 被星号包住', lines: ['*https://x.dev/a*'] },
+  { name: 'URL 结尾的波浪号：两边都保留（对比星号）', lines: ['https://x.dev/a~~'] },
 ]
 
 describe('裸 URL：视图与导出得到同一组链接', () => {
@@ -90,34 +101,64 @@ describe('裸 URL：视图与导出得到同一组链接', () => {
   })
 
   /**
-   * A KNOWN divergence, pinned instead of hidden: `~~https://x.dev~~` exports as
-   * a link that SWALLOWS the closing tildes, `<a href="https://x.dev~~">`.
+   * The four shapes where the two renderings still differ — pinned on BOTH sides,
+   * so the list is bounded and cannot quietly grow, and so a future change that
+   * "fixes" the view by matching the export has to argue with this comment first.
    *
-   * The editor shows a clean link inside strikethrough, which is the sane
-   * reading, and it is deliberately not changed to match: `~~` is a syntax marker
-   * to it, and the exported href is simply broken (`https://x.dev~~` is not a
-   * URL). The editor is the side that reads right, so the fix — if any — belongs
-   * in the export, and that is a separate decision.
-   *
-   * The mechanism is markdown-it's rule ORDER, not a choice of ours. Its inline
-   * rules run `… linkify … strikethrough …`, and linkify-it does not treat `~` as
-   * trailing punctuation — measured, `matchAtStart('https://x.dev~~')` returns a
-   * 20-character match with both tildes in it. The URL therefore eats the closing
-   * `~~` before the strikethrough rule ever runs. That same rule carries an
-   * explicit trailing-`*` trim (markdown-it special-cases emphasis), which is why
-   * `**https://x.dev**` agrees.
-   *
-   * Note how narrow it is: the email case above goes through markdown-it's CORE
-   * linkify rule, which only looks at `text` tokens and so respects the
-   * strikethrough tokens. Only a `://` URL sitting flush against `~~` is affected.
+   * Every one is an EXPORT-side defect, and the editor is deliberately the side
+   * that does not move. Following the export would mean: a code span that stops
+   * rendering as code, an href the reader cannot map back to the source
+   * (`https://x.dev%60c%60`), and link text that is neither what the user typed
+   * nor valid Markdown. `.scratch/autolinks/issues/02` carries the mechanisms and
+   * the decision to make; the two tests below pin the mechanisms themselves, so
+   * they go red — and this table can be deleted — if markdown-it ever fixes them.
    */
-  it('已知分歧：~~URL~~ 的导出把波浪号吞进了链接（编辑器是对的）', () => {
-    const lines = ['~~https://strike.dev~~ 后面']
-    expect(viewLinks(lines)).toEqual([
-      { text: 'https://strike.dev', href: 'https://strike.dev' },
-    ])
-    expect(exportLinks(lines)).toEqual([
-      { text: 'https://strike.dev~~', href: 'https://strike.dev~~' },
-    ])
+  it.each([
+    {
+      name: '删除线里的裸域名：导出的快路径 pretest 说"没有链接"',
+      lines: ['~~example.com~~'],
+      view: [{ text: 'example.com', href: 'http://example.com' }],
+      exported: [] as Link[],
+    },
+    {
+      name: '反斜杠 + URL：导出的 scheme 回扫窗口被 pending 长度截断',
+      lines: ['\\https://x.dev'],
+      view: [{ text: 'https://x.dev', href: 'https://x.dev' }],
+      exported: [] as Link[],
+    },
+    {
+      name: 'URL 紧贴行内代码：导出的 URL 把反引号也吃了进去',
+      lines: ['https://x.dev`c`'],
+      view: [{ text: 'https://x.dev', href: 'https://x.dev' }],
+      exported: [{ text: 'https://x.dev`c`', href: 'https://x.dev%60c%60' }],
+    },
+    {
+      name: 'URL 紧贴加粗：导出的 URL 把 `a**b` 也吃了进去',
+      lines: ['https://x.dev/a**b**'],
+      view: [{ text: 'https://x.dev/a', href: 'https://x.dev/a' }],
+      exported: [{ text: 'https://x.dev/a**b', href: 'https://x.dev/a**b' }],
+    },
+  ])('已知分歧（导出侧缺陷）：$name', ({ lines, view: expected, exported }) => {
+    expect(viewLinks(lines)).toEqual(expected)
+    expect(exportLinks(lines)).toEqual(exported)
+  })
+
+  it('分歧机制 1：`~~` 里的裸域名是被 pretest 快路径漏掉的，不是规则不同意', () => {
+    // 导出确实解析出了删除线，只是那个 text token 从来没被访问过 —— `<s>` 在，
+    // 链接不在。所以这是缺陷，不是"两种读法都说得通"。
+    expect(renderDocumentHtml('~~example.com~~')).toContain('<s>example.com</s>')
+    // 快路径对同一个东西给出两个答案：整段说"没有"，单独的域名说"有"。
+    expect(md.linkify.pretest('~~example.com~~')).toBe(false)
+    expect(md.linkify.pretest('example.com')).toBe(true)
+    expect(md.linkify.match('example.com')).not.toBeNull()
+  })
+
+  it('分歧机制 2：`\\https://x.dev` 的回扫窗口只够到 `ttps`', () => {
+    // markdown-it 的回扫上界是 `pos - min(10, pending.length, pos)`，而这里的
+    // pending 只有 `http` 那么长，于是它问的是 `ttps://x.dev`。
+    // `\h` 在 CommonMark 里根本不是转义（只对 ASCII 标点生效），所以"这是个链接、
+    // 前面有个字面反斜杠"才是对 Markdown 的忠实读法 —— 编辑器是对的。
+    expect(md.linkify.matchAtStart('ttps://x.dev')).toBeNull()
+    expect(md.linkify.matchAtStart('https://x.dev')).not.toBeNull()
   })
 })

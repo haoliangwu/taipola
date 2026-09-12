@@ -233,19 +233,31 @@ function isSchemeChar(code: number): boolean {
   )
 }
 
-/** An autolink found in a run of plain text, as offsets into it. */
-interface Autolink {
+/** A half-open `[start, end)` range of offsets. */
+interface SourceRange {
   start: number
   end: number
+}
+
+/** An autolink found in a run of plain text, as offsets into it. */
+interface Autolink extends SourceRange {
   /** The href linkify-it means, before normalization (`www.x.dev` → `http://www.x.dev`). */
   url: string
+}
+
+/** What linkify-it hands back for one match. */
+type LinkifyMatch = NonNullable<ReturnType<typeof md.linkify.matchAtStart>>
+
+/** A linkify-it match as an `Autolink`, `offset` being where its text starts. */
+function toAutolink(match: LinkifyMatch, offset: number): Autolink {
+  return { start: offset + match.index, end: offset + match.lastIndex, url: match.url }
 }
 
 /**
  * The autolinks linkify-it finds in one run of plain text.
  *
- * markdown-it finds them in TWO passes, and only the pair reproduces what it
- * exports:
+ * markdown-it finds them in TWO passes, and following the pair is what keeps the
+ * common cases identical to the export:
  *
  * 1. its inline rule fires at a literal `://`, scans BACKWARDS for the scheme
  *    (at most ten characters, and it must start with a letter) and then asks
@@ -273,7 +285,18 @@ function autolinksIn(text: string): Autolink[] {
     // markdown-it's own guard against a "match" that consumed no more than the
     // scheme it was anchored on.
     if (!link || link.url.length <= colon - schemeStart) continue
-    anchored.push({ start: schemeStart, end: schemeStart + link.lastIndex, url: link.url })
+
+    // markdown-it then strips trailing `*` — the one special case it makes for
+    // emphasis, so a `**bold**` wrapper's closing marker cannot be swallowed.
+    // linkify-it has no such rule (`matchAtStart('https://x.dev/a*')` keeps the
+    // star), so without this the view links a URL the export does not have.
+    const autolink = toAutolink(link, schemeStart)
+    while (autolink.url.endsWith('*') && autolink.end > autolink.start) {
+      autolink.url = autolink.url.slice(0, -1)
+      autolink.end--
+    }
+    if (autolink.end <= autolink.start) continue
+    anchored.push(autolink)
   }
 
   // Two `://` inside one URL (`https://x.dev/a://b`): the parser reaches the
@@ -291,9 +314,7 @@ function autolinksIn(text: string): Autolink[] {
   const matchUnclaimedUpTo = (to: number) => {
     if (to > claimed) {
       const matches = md.linkify.match(text.slice(claimed, to))
-      for (const m of matches ?? []) {
-        found.push({ start: claimed + m.index, end: claimed + m.lastIndex, url: m.url })
-      }
+      for (const m of matches ?? []) found.push(toAutolink(m, claimed))
     }
     claimed = Math.max(claimed, to)
   }
@@ -307,20 +328,39 @@ function autolinksIn(text: string): Autolink[] {
 }
 
 /**
- * The runs of PLAIN TEXT between the syntax tokens — the text markdown-it hands
- * to linkify-it, and only that text.
+ * The runs of PLAIN TEXT between the syntax tokens — the text markdown-it's CORE
+ * linkify rule visits.
  *
- * Its core rule walks `text` tokens and skips everything else: a code span, an
- * existing link's own text and an image's alt text are not text tokens, so
- * nothing inside them becomes a link, while emphasis does hold text and does.
- * These gaps are that same set, so matching in them is not an approximation of
- * markdown-it's rule — it is the rule. It is also why the traps in the ticket
- * need no special cases: `` `https://x.dev` `` is a code token, whose inside is
- * never a region, and the URL of `[文字](https://x.dev)` lives between an
+ * That rule walks `text` tokens and skips everything else: a code span, an
+ * existing link's own text and an image's alt are not text tokens, so nothing
+ * inside them becomes a link, while emphasis does hold text and does. These gaps
+ * are that same set, which is why the traps need no special cases — a code span's
+ * inside is never a region, and a link's destination sits between an
  * already-claimed token's `innerEnd` and `end`.
+ *
+ * It is NOT the whole of markdown-it's rule, and the difference was measured
+ * rather than assumed. markdown-it has an EARLIER inline pass that fires at a
+ * `://` and hands `matchAtStart` everything from the scheme to the END OF THE
+ * BLOCK — inline structure included. Bounding that pass to a gap is a deliberate
+ * choice, and it leaves shapes where the two renderings still differ. Every one
+ * of them is an export-side defect (`autolinks/02` has the mechanisms):
+ *
+ * ```
+ * source                 view                 export
+ * ~~example.com~~        link                 no link — pretest false negative
+ * \https://x.dev         link                 no link — back-scan window
+ * https://x.dev`c`       link + a code span   one link containing c
+ * https://x.dev/a**b**   link + bold b        one link containing a**b
+ * ```
+ *
+ * Chasing those four means importing warts into the editor: a code span that
+ * stops rendering as code, an href the user cannot read back
+ * (`https://x.dev%60c%60`), and link text that is neither what was typed nor
+ * valid Markdown. The editor stays structure-first. The one export rule that is
+ * deliberate — markdown-it's trailing-`*` trim — IS reproduced, in `autolinksIn`.
  */
-function textRegions(from: number, to: number, tokens: readonly Token[]): Array<[number, number]> {
-  const regions: Array<[number, number]> = []
+function textRegions(from: number, to: number, tokens: readonly Token[]): SourceRange[] {
+  const regions: SourceRange[] = []
   const inside = tokens
     .filter((token) => token.start >= from && token.end <= to)
     .sort((a, b) => a.start - b.start)
@@ -328,7 +368,7 @@ function textRegions(from: number, to: number, tokens: readonly Token[]): Array<
   let cursor = from
   for (const token of inside) {
     if (token.end <= cursor) continue
-    if (token.start > cursor) regions.push([cursor, token.start])
+    if (token.start > cursor) regions.push({ start: cursor, end: token.start })
     // Emphasis holds text, so a URL inside one is a link; the other constructs
     // hold literal or already-structured content and are left alone.
     if (token.kind === 'bold' || token.kind === 'italic' || token.kind === 'strike') {
@@ -336,7 +376,7 @@ function textRegions(from: number, to: number, tokens: readonly Token[]): Array<
     }
     cursor = token.end
   }
-  if (cursor < to) regions.push([cursor, to])
+  if (cursor < to) regions.push({ start: cursor, end: to })
   return regions
 }
 
@@ -351,15 +391,15 @@ function textRegions(from: number, to: number, tokens: readonly Token[]): Array<
 function withAutolinks(text: string, syntax: Token[]): Token[] {
   const links: Token[] = []
 
-  for (const [from, to] of textRegions(0, text.length, syntax)) {
-    for (const found of autolinksIn(text.slice(from, to))) {
+  for (const region of textRegions(0, text.length, syntax)) {
+    for (const found of autolinksIn(text.slice(region.start, region.end))) {
       const url = md.normalizeLink(found.url)
       // markdown-it skips a link it will not export, so the view must not show
       // one either: a link here that the export refuses would be the same
       // two-truths bug in the other direction.
       if (!md.validateLink(url)) continue
-      const start = from + found.start
-      const end = from + found.end
+      const start = region.start + found.start
+      const end = region.start + found.end
       links.push({ kind: 'link', start, end, innerStart: start, innerEnd: end, url })
     }
   }

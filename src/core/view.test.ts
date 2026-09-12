@@ -235,13 +235,14 @@ describe('软换行把两行源码合成一个视觉行', () => {
  * asserts the two renderings against each other directly.
  */
 describe('裸 URL：编辑器与导出同一套规则', () => {
+  // Two forms only: what is pinned HERE is the run's SHAPE — one run, no markers,
+  // carrying the href. One plain scheme and one the recogniser rewrites (`www.`
+  // gains its scheme) cover that. The full seven-form corpus lives in
+  // `platform/autolinks.test.ts`, where the two renderings are compared; copying
+  // its href list here would be a second copy of one expectation.
   it.each([
     ['https://example.com', 'https://example.com'],
-    ['http://example.org', 'http://example.org'],
     ['www.example.net', 'http://www.example.net'],
-    ['user@example.com', 'mailto:user@example.com'],
-    ['ftp://example.io', 'ftp://example.io'],
-    ['example.com', 'http://example.com'],
   ])('%s 是一个带 href 的链接 run', (raw, href) => {
     expect(runs(view(`${raw} 后面`))).toEqual([
       { text: raw, marker: false, dim: false, link: href },
