@@ -18,6 +18,19 @@
 import type { BlockView } from '../core/view'
 
 /**
+ * Where a source offset lands on screen: which line box holds it, which run
+ * inside that box, and how far into the run's text.
+ *
+ * The three travel together through every mapping rule here, and a caret is only
+ * meaningful as all three at once — a run index without its line means nothing.
+ */
+export interface CaretAnchor {
+  lineIndex: number
+  runIndex: number
+  offsetInRun: number
+}
+
+/**
  * Where to draw a caret whose source offset is `source`.
  *
  * Walks the view tracking a **visible cursor** — the number of laid-out cells
@@ -34,7 +47,7 @@ export function anchorForSource(
   view: BlockView,
   blockStart: number,
   source: number,
-): { lineIndex: number; runIndex: number; offsetInRun: number } | null {
+): CaretAnchor | null {
   const local = source - blockStart
 
   // Which line holds the caret: the LAST line whose start is at or before it.
@@ -99,7 +112,7 @@ function runIndexAtCursor(
   line: BlockView['lines'][number],
   cursor: number,
   lineIndex: number,
-): { lineIndex: number; runIndex: number; offsetInRun: number } {
+): CaretAnchor {
   let seen = 0
   for (let ri = 0; ri < line.runs.length; ri++) {
     const run = line.runs[ri]
@@ -184,28 +197,8 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   for (let i = 0; i < lineIndex; i++) base += view.lines[i].sourceToVisible.length + 1
 
   const runs = [...lineEl.querySelectorAll<HTMLElement>('[data-run]')]
-  const srcOf = (el: HTMLElement): number | null => {
-    const raw = el.dataset.src
-    return raw === undefined ? null : Number(raw)
-  }
-
-  // Find the run that holds the caret.
-  for (const el of runs) {
-    const width = getComputedStyle(el).display === 'none' ? 0 : (el.textContent?.length ?? 0)
-    const holds = el === node || el.contains(node)
-
-    if (holds) {
-      const within = node.nodeType === Node.TEXT_NODE ? offset : 0
-      const src = srcOf(el)
-      if (src === null) break
-      if (width === 0) {
-        // The caret is anchored inside a collapsed marker: snap to its start.
-        return src
-      }
-      // Only laid-out characters inside this run count towards the offset.
-      return src + Math.min(within, el.textContent?.length ?? 0)
-    }
-  }
+  const inside = offsetInsideRuns(runs, node, offset)
+  if (inside !== null) return inside
 
   // The caret sits in a DIRECT text node of the line box. That is what typing
   // into an empty line produces: the line renders no run span of its own, so the
@@ -228,8 +221,11 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   // Caret anchored on the line element itself (empty line, or past the end).
   const last = runs[runs.length - 1]
   if (last) {
-    const src = srcOf(last)
-    if (src !== null) return src + (last.textContent?.length ?? 0)
+    // The end of the last run is the end of the line's source. A trailing
+    // COLLAPSED marker still counts in full: its characters occupy no width, but
+    // they are source characters the line owns (`**加粗**` ends at 6, not 4).
+    const src = last.dataset.src === undefined ? NaN : Number(last.dataset.src)
+    if (!Number.isNaN(src)) return src + (last.textContent?.length ?? 0)
   }
   return base
 }
@@ -288,16 +284,8 @@ export function sourceOffsetAtPoint(
   const runs = [...lineEl.querySelectorAll<HTMLElement>('[data-run]')]
 
   if (node) {
-    for (const el of runs) {
-      if (el === node || el.contains(node)) {
-        const src = Number(el.dataset.src)
-        if (Number.isNaN(src)) break
-        // A collapsed marker has no width; snap to its start.
-        if (getComputedStyle(el).display === 'none') return { block, local: src }
-        const within = node.nodeType === Node.TEXT_NODE ? offset : 0
-        return { block, local: src + Math.min(within, el.textContent?.length ?? 0) }
-      }
-    }
+    const inside = offsetInsideRuns(runs, node, offset)
+    if (inside !== null) return { block, local: inside }
   }
 
   // Fallback: measure horizontally against the line's runs.
@@ -320,6 +308,33 @@ export function sourceOffsetAtPoint(
   return { block, local: src === undefined ? 0 : Number(src) }
 }
 
+/**
+ * Block-local source offset of a DOM position, or null when `node` sits in none
+ * of `runs`.
+ *
+ * This is the rule the whole mapping rests on, and it used to be written twice
+ * (once for the caret read-back, once for the click hit test) — the kind of
+ * duplication where the two copies drift and only one of them gets fixed:
+ *
+ * - a run's `data-src` is the source offset of its FIRST character, so a position
+ *   inside it is that offset plus however many characters precede it;
+ * - a position inside a COLLAPSED marker has no laid-out cell of its own, so it
+ *   snaps to the marker's start rather than to an offset nobody can see.
+ */
+function offsetInsideRuns(runs: HTMLElement[], node: Node, offset: number): number | null {
+  for (const el of runs) {
+    if (el !== node && !el.contains(node)) continue
+    const raw = el.dataset.src
+    if (raw === undefined) return null
+    const src = Number(raw)
+    if (Number.isNaN(src)) return null
+    if (getComputedStyle(el).display === 'none') return src
+    const within = node.nodeType === Node.TEXT_NODE ? offset : 0
+    return src + Math.min(within, el.textContent?.length ?? 0)
+  }
+  return null
+}
+
 /** Character index within an element's text nearest to a viewport x. */
 function glyphOffsetAtX(el: HTMLElement, clientX: number): number {
   const node = el.firstChild
@@ -338,29 +353,4 @@ function glyphOffsetAtX(el: HTMLElement, clientX: number): number {
     else high = mid
   }
   return low
-}
-
-/* -------------------------------------------------------------------------- */
-/* line arithmetic                                                            */
-/* -------------------------------------------------------------------------- */
-
-/** Character offset of the start of a 1-based line. */
-export function offsetForLine(text: string, line: number): number {
-  if (line <= 1) return 0
-  let seen = 1
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '\n') {
-      seen++
-      if (seen === line) return i + 1
-    }
-  }
-  return text.length
-}
-
-/** 1-based line number containing a character offset. */
-export function lineOfOffset(text: string, offset: number): number {
-  let line = 1
-  const end = Math.min(offset, text.length)
-  for (let i = 0; i < end; i++) if (text[i] === '\n') line++
-  return line
 }

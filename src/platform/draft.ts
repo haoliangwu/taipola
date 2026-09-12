@@ -27,25 +27,30 @@ export interface DraftStore {
   save(draft: Draft): void
 }
 
-export function createLocalStorageDraftStore(): DraftStore {
-  return {
-    load() {
-      try {
-        const raw = localStorage.getItem(DRAFT_KEY)
-        if (!raw) return null
-        const parsed = JSON.parse(raw) as Draft
-        if (typeof parsed?.content !== 'string') return null
-        return parsed
-      } catch {
-        return null
-      }
-    },
-    save(draft) {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
-      } catch {
-        /* quota exceeded or private mode — drafts are best-effort */
-      }
-    },
-  }
+/**
+ * The draft store, backed by localStorage.
+ *
+ * A plain object rather than a factory: there is one implementation and nothing
+ * varies across it, so a `create…()` with no injection point would only invite
+ * the reader to look for the second one.
+ */
+export const localStorageDraft: DraftStore = {
+  load() {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as Draft
+      if (typeof parsed?.content !== 'string') return null
+      return parsed
+    } catch {
+      return null
+    }
+  },
+  save(draft) {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    } catch {
+      /* quota exceeded or private mode — drafts are best-effort */
+    }
+  },
 }

@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Block } from '../core/markdown'
 import { buildBlockView, type BlockView } from '../core/view'
 import { renderDocument } from './render'
-import { anchorForSource, applyCaret, domToLocal, lineOfOffset, offsetForLine, sourceOffsetAtPoint } from './position'
+import { anchorForSource, applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 /**
  * One block, rendered into a real editable host.
@@ -122,6 +122,14 @@ describe('applyCaret + domToLocal：offset → anchor → offset 往返', () => 
     expect(caretOffset(view)).toBe(1)
   })
 
+  it('光标锚在行盒上（行尾之外）时，取该行的源码末尾', () => {
+    // 末尾是折叠标记的行：`**加粗**` 占 6 个源码字符、只排 2 个字。
+    // 锚在行盒本身＝行尾之外，读回来的必须是 6（行末），不是最后一个标记的起点 4。
+    const { host, view } = mount('**加粗**', null)
+    const lineEl = host.querySelector<HTMLElement>('[data-vline="0"]')!
+    expect(domToLocal(view, lineEl, 0)).toBe(6)
+  })
+
   it('行盒里的直接文本节点按字数计入偏移', () => {
     // 往空行里打字时，浏览器把字符插进行盒（而不是任何 run span）。
     // 不计这些字符，模型光标会停在刚打的字之前，输入逐字逆序（`二行第`）。
@@ -140,19 +148,5 @@ describe('sourceOffsetAtPoint', () => {
     const rect = lineEl.getBoundingClientRect()
     const hit = sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, lineEl)
     expect(hit).toEqual({ block: 0, local: 4 })
-  })
-})
-
-describe('line arithmetic', () => {
-  it('offsetForLine / lineOfOffset 互为反函数', () => {
-    const text = '第一行\n第二行\n第三行'
-    expect(offsetForLine(text, 1)).toBe(0)
-    expect(offsetForLine(text, 2)).toBe(4)
-    expect(offsetForLine(text, 3)).toBe(8)
-    expect(offsetForLine(text, 9)).toBe(text.length)
-    expect(lineOfOffset(text, 0)).toBe(1)
-    expect(lineOfOffset(text, 4)).toBe(2)
-    expect(lineOfOffset(text, 7)).toBe(2)
-    expect(lineOfOffset(text, 8)).toBe(3)
   })
 })
