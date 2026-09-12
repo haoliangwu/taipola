@@ -222,3 +222,84 @@ describe('软换行把两行源码合成一个视觉行', () => {
     expect(view.lines.map((line) => line.softBreak)).toEqual([false, false])
   })
 })
+
+/**
+ * Bare URLs are links in the exported HTML, and were plain text here — the same
+ * document with two truths, where the truth the user cannot see is the one that
+ * rewrites what they typed (`www.x.dev` gains `http://`, an address becomes a
+ * `mailto:`).
+ *
+ * The recogniser is markdown-it's own linkify-it, so what these pin is really
+ * WHERE markdown-it applies it: the two passes, and the text runs it visits. The
+ * hrefs are the ones the exported HTML carries, and `platform/autolinks.test.ts`
+ * asserts the two renderings against each other directly.
+ */
+describe('裸 URL：编辑器与导出同一套规则', () => {
+  it.each([
+    ['https://example.com', 'https://example.com'],
+    ['http://example.org', 'http://example.org'],
+    ['www.example.net', 'http://www.example.net'],
+    ['user@example.com', 'mailto:user@example.com'],
+    ['ftp://example.io', 'ftp://example.io'],
+    ['example.com', 'http://example.com'],
+  ])('%s 是一个带 href 的链接 run', (raw, href) => {
+    expect(runs(view(`${raw} 后面`))).toEqual([
+      { text: raw, marker: false, dim: false, link: href },
+      { text: ' 后面', marker: false, dim: false },
+    ])
+  })
+
+  it('紧贴中文也能切出来，且不含句末的句号', () => {
+    expect(runs(view('网址是https://example.com。结束'))).toEqual([
+      { text: '网址是', marker: false, dim: false },
+      { text: 'https://example.com', marker: false, dim: false, link: 'https://example.com' },
+      { text: '。结束', marker: false, dim: false },
+    ])
+  })
+
+  it('加粗里的网址照认；行内代码里与既有链接的文字里都不认（与导出同规则）', () => {
+    expect(runs(view('**https://example.com**'))).toEqual([
+      { text: '**', marker: true, dim: false },
+      {
+        text: 'https://example.com',
+        marker: false,
+        dim: false,
+        bold: true,
+        link: 'https://example.com',
+      },
+      { text: '**', marker: true, dim: false },
+    ])
+
+    expect(runs(view('`https://example.com`'))).toEqual([
+      { text: '`', marker: true, dim: false },
+      { text: 'https://example.com', marker: false, dim: false, code: true },
+      { text: '`', marker: true, dim: false },
+    ])
+
+    expect(runs(view('[https://example.com](https://other.com)'))).toEqual([
+      { text: '[', marker: true, dim: false },
+      {
+        text: 'https://example.com',
+        marker: false,
+        dim: false,
+        link: 'https://other.com',
+      },
+      { text: '](https://other.com)', marker: true, dim: false },
+    ])
+  })
+
+  it('跨软换行：切在换行处，点留在外面', () => {
+    const v = buildBlockView('see https://example.\ncom here', 0, [], 2)
+    expect(runs(v, 0)).toEqual([
+      { text: 'see ', marker: false, dim: false },
+      { text: 'https://example', marker: false, dim: false, link: 'https://example' },
+      { text: '.', marker: false, dim: false },
+    ])
+    expect(runs(v, 1)).toEqual([{ text: 'com here', marker: false, dim: false }])
+  })
+
+  it('只改样式不改字符：runs 仍然拼回原文', () => {
+    const raw = 'A https://example.com B user@example.com C 网址是www.example.net。'
+    expect(reconstruct(view(raw))).toBe(raw)
+  })
+})

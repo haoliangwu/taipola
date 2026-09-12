@@ -12,6 +12,7 @@
  */
 
 import { isThematicBreak } from './inline'
+import { md } from './markdownIt'
 
 interface MarkerCell {
   /** Source range of the opening marker, e.g. the `**` of `**bold**`. */
@@ -126,12 +127,24 @@ const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
 ]
 
 /**
- * Finds inline constructs in one line of source.
+ * Finds every inline construct in one line of source.
+ *
+ * Two scanners, and the order is the point: the syntax scan below claims what it
+ * recognises, and autolinks are then matched only in the text it did NOT claim.
+ * See `withAutolinks` for why that division is markdown-it's own rule rather than
+ * a convenience.
+ */
+function findTokens(text: string): Token[] {
+  return withAutolinks(text, findSyntaxTokens(text))
+}
+
+/**
+ * Finds the inline syntax this editor recognises in one line of source.
  *
  * A linear scan with balanced-pair matching, so nesting resolves into separate
  * non-overlapping tokens.
  */
-function findTokens(text: string): Token[] {
+function findSyntaxTokens(text: string): Token[] {
   const tokens: Token[] = []
   let i = 0
 
@@ -183,6 +196,175 @@ function findTokens(text: string): Token[] {
   }
 
   return tokens
+}
+
+/* -------------------------------------------------------------------------- */
+/* autolinks                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bare URLs are links in the exported HTML but were plain text here — the same
+ * document with two truths, and the one the user cannot see is the one that
+ * rewrites what they typed (`www.x.dev` gains `http://`, an address becomes a
+ * `mailto:`).
+ *
+ * The recogniser is linkify-it — the very instance markdown-it exports through,
+ * reached as `md.linkify`. Not a URL regex of our own: a second opinion about
+ * where a URL ends would diverge from the export, which is the bug being fixed.
+ * Where markdown-it *applies* that recogniser is reproduced below, and it is two
+ * passes, not one — see `autolinksIn`.
+ */
+
+/** How far markdown-it's inline rule scans back for a scheme when it meets a `://`. */
+const MAX_SCHEME_LENGTH = 10
+
+/** RFC3986: `scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`. */
+function isAsciiAlpha(code: number): boolean {
+  return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)
+}
+
+function isSchemeChar(code: number): boolean {
+  return (
+    isAsciiAlpha(code) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2b /* + */ ||
+    code === 0x2d /* - */ ||
+    code === 0x2e /* . */
+  )
+}
+
+/** An autolink found in a run of plain text, as offsets into it. */
+interface Autolink {
+  start: number
+  end: number
+  /** The href linkify-it means, before normalization (`www.x.dev` → `http://www.x.dev`). */
+  url: string
+}
+
+/**
+ * The autolinks linkify-it finds in one run of plain text.
+ *
+ * markdown-it finds them in TWO passes, and only the pair reproduces what it
+ * exports:
+ *
+ * 1. its inline rule fires at a literal `://`, scans BACKWARDS for the scheme
+ *    (at most ten characters, and it must start with a letter) and then asks
+ *    `matchAtStart`. Anchoring at the scheme is what lets a URL sit flush against
+ *    a CJK character: as measured, `linkify.match('网址是https://example.com。')`
+ *    finds NOTHING — `是` is not the word boundary `match()` insists on — while
+ *    markdown-it exports that very URL as a link. A single `match()` over the run
+ *    would therefore miss the case this editor sees most.
+ * 2. its core rule then asks `match()` on the text those matches did not claim.
+ *    That is where `www.example.net`, a bare `example.com` and `user@example.com`
+ *    come from: none of them has a scheme to anchor on.
+ */
+function autolinksIn(text: string): Autolink[] {
+  // Pass 1: anchored at every `://`.
+  const anchored: Autolink[] = []
+  for (let colon = text.indexOf('://'); colon !== -1; colon = text.indexOf('://', colon + 3)) {
+    const floor = Math.max(0, colon - MAX_SCHEME_LENGTH)
+    let schemeStart = colon
+    while (schemeStart > floor && isSchemeChar(text.charCodeAt(schemeStart - 1))) schemeStart--
+    if (schemeStart === colon || !isAsciiAlpha(text.charCodeAt(schemeStart))) continue
+    // The engine decides where the URL ENDS, which is the decision worth
+    // delegating: `https://example.` at the end of a line stops at `example` and
+    // leaves the dot outside, exactly as the export does.
+    const link = md.linkify.matchAtStart(text.slice(schemeStart))
+    // markdown-it's own guard against a "match" that consumed no more than the
+    // scheme it was anchored on.
+    if (!link || link.url.length <= colon - schemeStart) continue
+    anchored.push({ start: schemeStart, end: schemeStart + link.lastIndex, url: link.url })
+  }
+
+  // Two `://` inside one URL (`https://x.dev/a://b`): the parser reaches the
+  // first one first and consumes through the URL, so the first match owns it.
+  const kept: Autolink[] = []
+  for (const link of anchored.sort((a, b) => a.start - b.start)) {
+    const previous = kept[kept.length - 1]
+    if (previous && link.start < previous.end) continue
+    kept.push(link)
+  }
+
+  // Pass 2: everything pass 1 left over.
+  const found = [...kept]
+  let claimed = 0
+  const matchUnclaimedUpTo = (to: number) => {
+    if (to > claimed) {
+      const matches = md.linkify.match(text.slice(claimed, to))
+      for (const m of matches ?? []) {
+        found.push({ start: claimed + m.index, end: claimed + m.lastIndex, url: m.url })
+      }
+    }
+    claimed = Math.max(claimed, to)
+  }
+  for (const link of kept) {
+    matchUnclaimedUpTo(link.start)
+    claimed = Math.max(claimed, link.end)
+  }
+  matchUnclaimedUpTo(text.length)
+
+  return found.sort((a, b) => a.start - b.start)
+}
+
+/**
+ * The runs of PLAIN TEXT between the syntax tokens — the text markdown-it hands
+ * to linkify-it, and only that text.
+ *
+ * Its core rule walks `text` tokens and skips everything else: a code span, an
+ * existing link's own text and an image's alt text are not text tokens, so
+ * nothing inside them becomes a link, while emphasis does hold text and does.
+ * These gaps are that same set, so matching in them is not an approximation of
+ * markdown-it's rule — it is the rule. It is also why the traps in the ticket
+ * need no special cases: `` `https://x.dev` `` is a code token, whose inside is
+ * never a region, and the URL of `[文字](https://x.dev)` lives between an
+ * already-claimed token's `innerEnd` and `end`.
+ */
+function textRegions(from: number, to: number, tokens: readonly Token[]): Array<[number, number]> {
+  const regions: Array<[number, number]> = []
+  const inside = tokens
+    .filter((token) => token.start >= from && token.end <= to)
+    .sort((a, b) => a.start - b.start)
+
+  let cursor = from
+  for (const token of inside) {
+    if (token.end <= cursor) continue
+    if (token.start > cursor) regions.push([cursor, token.start])
+    // Emphasis holds text, so a URL inside one is a link; the other constructs
+    // hold literal or already-structured content and are left alone.
+    if (token.kind === 'bold' || token.kind === 'italic' || token.kind === 'strike') {
+      regions.push(...textRegions(token.innerStart, token.innerEnd, inside))
+    }
+    cursor = token.end
+  }
+  if (cursor < to) regions.push([cursor, to])
+  return regions
+}
+
+/**
+ * Adds an autolink token for every URL the syntax scan left in plain text.
+ *
+ * The token's inner range IS its whole range: an autolink has no markers, so
+ * `buildInlineLine` collapses nothing and the run comes out carrying the href and
+ * nothing else — the same shape a `[文字](url)` link produces, minus the syntax
+ * that a link has and an autolink does not.
+ */
+function withAutolinks(text: string, syntax: Token[]): Token[] {
+  const links: Token[] = []
+
+  for (const [from, to] of textRegions(0, text.length, syntax)) {
+    for (const found of autolinksIn(text.slice(from, to))) {
+      const url = md.normalizeLink(found.url)
+      // markdown-it skips a link it will not export, so the view must not show
+      // one either: a link here that the export refuses would be the same
+      // two-truths bug in the other direction.
+      if (!md.validateLink(url)) continue
+      const start = from + found.start
+      const end = from + found.end
+      links.push({ kind: 'link', start, end, innerStart: start, innerEnd: end, url })
+    }
+  }
+
+  return [...syntax, ...links].sort((a, b) => a.start - b.start)
 }
 
 /** Block-level prefixes that collapse when the caret is on another line. */

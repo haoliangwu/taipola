@@ -851,3 +851,63 @@ describe('段落内软换行', () => {
     await assertDomMatchesSource(r)
   })
 })
+
+/**
+ * The last hop of the autolink fix: the DOM.
+ *
+ * `core/view.test.ts` proves a bare URL becomes a run carrying an href, and
+ * `platform/autolinks.test.ts` proves the view and the export agree on WHICH
+ * links exist. Neither proves the run reaches the screen as a link, and nothing
+ * did: `[文字](url)` had no DOM-level coverage either, so `rn-link` + `title`
+ * was an untested claim on both paths.
+ *
+ * It stays a `span` with a `title` rather than becoming an `<a>` — clicking it in
+ * edit mode has to place the caret, not follow the link, and a real anchor would
+ * make the browser navigate. That is deliberate and asserted here so it is not
+ * "fixed" later.
+ */
+describe('链接在 DOM 里的样子', () => {
+  it('裸 URL 渲染成 rn-link，title 是最终的 href（含被改写的形式）', async () => {
+    const r = renderEditor('见 https://example.com 与 www.example.net 与 me@example.com\n')
+    await flush()
+    const links = [...r.container.querySelectorAll<HTMLElement>('.rn-link')]
+    expect(links.map((el) => el.textContent)).toEqual([
+      'https://example.com',
+      'www.example.net',
+      'me@example.com',
+    ])
+    // The href is what the EXPORT would carry: `www.` gains its scheme, the
+    // address becomes a mailto:. The visible text still reads as the source.
+    expect(links.map((el) => el.title)).toEqual([
+      'https://example.com',
+      'http://www.example.net',
+      'mailto:me@example.com',
+    ])
+    // Not anchors: in edit mode a click has to land the caret.
+    expect(r.container.querySelectorAll('.doc a')).toHaveLength(0)
+    await assertDomMatchesSource(r)
+  })
+
+  it('autolink 没有"另一副面孔"：光标进去还是同一个 run，而且改得动', async () => {
+    // Unlike `[文字](url)`, an autolink has no markers to reveal — its source form
+    // and its rendered form are the same characters — so the caret opening it
+    // changes nothing and the run stays a link. What matters is that it is still
+    // editable, and that recognition follows the source.
+    const r = renderEditor('见 https://example.com 结束\n')
+    await flush()
+    r.container.focus({ preventScroll: true })
+    const run = r.runEl(0, 0, 1)
+    if (!run?.firstChild) throw new Error('the link run has no text node')
+
+    placeCaretAt(run.firstChild, 4) // between `http` and `s`
+    await flush()
+    expect(r.container.querySelectorAll('.rn-link')).toHaveLength(1)
+
+    await r.user.keyboard('X')
+    expect(r.getDoc()).toBe('见 httpXs://example.com 结束\n')
+    await flush()
+    // `httpXs:` is not a scheme linkify knows, so the styling must go with it.
+    expect(r.container.querySelectorAll('.rn-link')).toHaveLength(0)
+    await assertDomMatchesSource(r)
+  })
+})
