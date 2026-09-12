@@ -62,7 +62,7 @@ React（重渲染时也写 DOM，再把光标"重放"回原处）
 
 **方案 C（采用第三方内核，如 CodeMirror 6 装饰器 / ProseMirror / Lexical）**：不采纳。理由：自研本身是本项目的目的之一。
 
-**结论（2026-09-11 修订）**：A1 **已执行**。实现落在 `src/editor/`（`dom.ts` 命令式 DOM 与映射、`kernel.ts` 状态与原生事件），`src/shell/components/Editor.tsx` 退化为薄壳：只渲染可编辑宿主 `<div>`，从不渲染它的子节点。
+**结论（2026-09-11 修订）**：A1 **已执行**。实现落在 `src/editor/`（`render.ts` 命令式 DOM 与 DOM→源码重建、`position.ts` 源码偏移 ↔ DOM 映射、`kernel.ts` 状态与原生事件），`src/shell/components/Editor.tsx` 退化为薄壳：只渲染可编辑宿主 `<div>`，从不渲染它的子节点。
 
 四类 bug 都要修。**路线不由重构决定**，执行后实测确认了这一点：调解层失效那一类（Backspace 静默损坏）随 A1 消失；光标算术与偏移映射两类原样存活（§7）。它们只能在现架构上独立修。测试加固与重写仍待做。
 

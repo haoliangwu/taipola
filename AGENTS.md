@@ -22,13 +22,13 @@ The browser layer needs Chromium; if it is not in `~/Library/Caches/ms-playwrigh
 
 ## Layout
 
-The three source directories are split by **dependency category**, not by topic — that is the
+The source directories are split by **dependency category**, not by topic — that is the
 point of the split, and the test projects in `vitest.config.ts` enforce it:
 
 - `src/core/` — in-process pure logic, no browser API: `markdown.ts` (parsing), `view.ts`
   (source → view mapping), `inline.ts` (per-line state), `lists.ts` (numbering, indent),
-  `editCommands.ts` (formatting commands), `welcome.ts` (the welcome document), `markdownIt.ts`
-  (the shared markdown-it instance)
+  `lines.ts` (line number ↔ character offset), `editCommands.ts` (formatting commands),
+  `welcome.ts` (the welcome document), `markdownIt.ts` (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
   interface), `draft.ts` (localStorage), `html.ts` (markdown → sanitized HTML)
 - `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Outline.tsx`, `useTheme.ts`
