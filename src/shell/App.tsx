@@ -106,6 +106,30 @@ export default function App() {
   }, [dirty])
 
   // --- file actions ----------------------------------------------------------
+  /**
+   * The one place that asks before unsaved work is thrown away.
+   *
+   * Every lossy operation goes through it; a call site says what it is about to
+   * do, and nothing else. That is the whole point: written at the call sites
+   * instead — `if (dirty && !confirm(...)) return`, copied next to the operation
+   * — 「新建」 asked and 「打开」 did not, and the user, educated by one prompt,
+   * trusted the operation that had none. The next lossy operation (drag-and-drop,
+   * a template, an import) will be added by someone reading this.
+   *
+   * `dirty` is `value !== savedValue`, the same truth the title-bar dot and the
+   * status bar read. A second "has it been edited?" flag would be a second answer
+   * to one question, and the two would drift.
+   *
+   * The *ordering* stays at the call sites, because it genuinely differs: an
+   * operation with a file picker must pick first and ask about THAT file, while
+   * one with no picker asks before it does anything. So this decides, and the
+   * caller decides when.
+   */
+  const confirmDiscard = useCallback(
+    (action: string): boolean => !dirty || window.confirm(`当前文档还没保存，确定${action}吗？`),
+    [dirty],
+  )
+
   const handleOpen = useCallback(async () => {
     const result = await documents.open()
     if (result.status === 'cancelled') return
@@ -114,13 +138,17 @@ export default function App() {
       return
     }
     const { document, content } = result
+    // Asked AFTER the picker, unlike 新建: the question is worth answering only
+    // about a file that exists, and it can then name both sides of the trade.
+    // A dismissed picker never gets here, so declining it costs no prompt.
+    if (!confirmDiscard(`丢弃改动并打开「${document.name}」`)) return
     editorRef.current?.setDocument(content)
     setSavedValue(content)
     setDoc(document)
     setFileName(document.name)
     setHeadings(extractHeadings(content))
     notify(`已打开 ${document.name}`)
-  }, [notify])
+  }, [confirmDiscard, notify])
 
   const handleSave = useCallback(
     async (forcePicker = false) => {
@@ -161,10 +189,12 @@ export default function App() {
   }, [])
 
   const handleNew = useCallback(() => {
-    if (dirty && !window.confirm('当前文档还没保存，确定新建吗？')) return
+    // No picker on this path, so there is nothing to pick before asking: the
+    // question comes first, and 新建 is the operation that has always asked.
+    if (!confirmDiscard('新建')) return
     adoptDocument(NEW_DOC.content, NEW_DOC.name)
     editorRef.current?.focus()
-  }, [adoptDocument, dirty])
+  }, [adoptDocument, confirmDiscard])
 
   const applyEdit = useCallback((mutate: Parameters<EditorHandle['applyEdit']>[0]) => {
     editorRef.current?.applyEdit(mutate)

@@ -203,3 +203,147 @@ describe('欢迎文档的名字', () => {
     view.unmount()
   })
 })
+
+/**
+ * Discarding unsaved work asks first — everywhere, from one place.
+ *
+ * Reported: 「打开」 replaced the whole document with no prompt at all, while
+ * 「新建」 asked. The replacement is unrecoverable: `setDocument` clears the undo
+ * stack and the debounced draft is overwritten half a second later. The
+ * operation that silently discarded your work was the one you had been taught to
+ * trust, because the app does prompt for the other one.
+ */
+describe('丢弃未保存内容前的确认', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  function setup() {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '原来的内容\n', name: '报告.md', savedAt: Date.now() }),
+    )
+    const view = render(<App />)
+    const doc = () => view.container.querySelector('.doc') as HTMLElement
+    const button = (label: string) =>
+      [...view.container.querySelectorAll('.text-button')].find(
+        (el) => el.textContent?.trim() === label,
+      ) as HTMLButtonElement
+    return { view, doc, button }
+  }
+
+  /** Type one character at the start, so the document is genuinely dirty. */
+  async function makeDirty(doc: HTMLElement) {
+    const user = userEvent.setup({ delay: null })
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+    if (!run?.firstChild) throw new Error('first run has no text node')
+    placeCaretAt(run.firstChild, 0)
+    await user.keyboard('X')
+    expect(readDocumentSource(doc)).toBe('X原来的内容\n')
+  }
+
+  /** The file the picker is about to hand back. */
+  const PICKED = {
+    status: 'opened' as const,
+    document: { name: '别的.md', handle: null },
+    content: '新文件的内容\n',
+  }
+
+  it('未保存 + 打开并选到文件：拒绝之后连撤销栈都没被动过', async () => {
+    const { view, doc, button } = setup()
+    await makeDirty(doc())
+
+    const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      await act(async () => {
+        button('打开').click()
+      })
+
+      // 顺序是"先选文件、再问"：问题里点得出文件名，用户才知道要丢弃哪一篇换来哪一篇。
+      expect(open, '应该先让用户选出要打开的文件').toHaveBeenCalled()
+      expect(confirm.mock.calls[0]?.[0]).toContain('别的.md')
+
+      // 内容、文件名都还在 —— 被拒绝的那一次「打开」整个没有发生。
+      expect(readDocumentSource(doc())).toBe('X原来的内容\n')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('报告.md')
+
+      // 撤销栈也没被清空。这是"整篇没被替换"的机器可验证形式：`setDocument`
+      // 会清空 undoStack，若它被调用过，这条 Ctrl+Z 就什么也撤不掉。
+      const user = userEvent.setup({ delay: null })
+      await user.keyboard('{Control>}z{/Control}')
+      expect(readDocumentSource(doc())).toBe('原来的内容\n')
+    } finally {
+      open.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('确认丢弃之后：内容换掉了，撤销栈也确实清了', async () => {
+    // 上一条断言"拒绝之后 Ctrl+Z 还能撤掉那个 X"，这条是它的对照组：
+    // 真正走完一次替换之后，同一个 Ctrl+Z 什么也撤不回来。两条一起，
+    // 才说明上一条不是因为按键没送到编辑器而通过的。
+    const { view, doc, button } = setup()
+    await makeDirty(doc())
+
+    const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      await act(async () => {
+        button('打开').click()
+      })
+
+      expect(readDocumentSource(doc())).toBe('新文件的内容\n')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('别的.md')
+
+      const user = userEvent.setup({ delay: null })
+      doc().focus({ preventScroll: true })
+      await user.keyboard('{Control>}z{/Control}')
+      expect(readDocumentSource(doc())).toBe('新文件的内容\n')
+    } finally {
+      open.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('没有未保存改动时不问，直接打开', async () => {
+    const { view, doc, button } = setup()
+    const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
+    const confirm = vi.spyOn(window, 'confirm')
+    try {
+      await act(async () => {
+        button('打开').click()
+      })
+
+      expect(confirm).not.toHaveBeenCalled()
+      expect(readDocumentSource(doc())).toBe('新文件的内容\n')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('别的.md')
+    } finally {
+      open.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('新建：仍然是动作之前问，措辞一个字没变', async () => {
+    const { view, doc, button } = setup()
+    await makeDirty(doc())
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      await act(async () => {
+        button('新建').click()
+      })
+
+      // 不经过系统选择器，所以只有"动作之前问"这一种可能；措辞与重构前一致。
+      expect(confirm.mock.calls[0]?.[0]).toBe('当前文档还没保存，确定新建吗？')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('untitled.md')
+    } finally {
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+})
