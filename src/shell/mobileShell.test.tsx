@@ -79,6 +79,29 @@ describe('窄屏外壳（390px）', () => {
     expect(el('.outline')).toBeNull()
   })
 
+  it('mini 组是手机上真正能用的那几个命令：新建 / 打开 / 保存 / 导出', async () => {
+    vi.spyOn(documents, 'open').mockResolvedValue({ status: 'cancelled' })
+    vi.spyOn(documents, 'save').mockImplementation(async (_doc, _value, options) => ({
+      status: 'saved',
+      document: { name: options?.name ?? 'welcome.md', handle: null },
+    }))
+
+    const { user, el } = renderApp()
+    const labels = [...el('.titlebar-mini')!.querySelectorAll('button')].map((b) =>
+      b.getAttribute('aria-label'),
+    )
+    // 顺序与桌面组一致（主题除外——它是偏好，`system` 跟手机自己的设置）。
+    expect(labels).toEqual(['新建', '打开', '保存', '导出'])
+
+    await user.click(el('.titlebar-mini [aria-label="新建"]')!)
+    expect(el('.doc-name')!.textContent).toBe('untitled.md')
+    expect(documents.open).not.toHaveBeenCalled()
+
+    // 打开走的是同一条 `documents.open`（手机上它回退到 <input type=file>）。
+    await user.click(el('.titlebar-mini [aria-label="打开"]')!)
+    expect(documents.open).toHaveBeenCalledTimes(1)
+  })
+
   it('格式工具条让位给 mini 组，保存与导出都点得通', async () => {
     // 回写成功之后就沿用同一个显示名——用 `x.md` 会让后面的导出断言测到假名字。
     const save = vi.spyOn(documents, 'save').mockImplementation(async (_doc, _value, options) => ({

@@ -432,10 +432,32 @@ export default function App() {
         </div>
 
         {/* Narrow screens only (`.titlebar-mini`): the format toolbar is desktop
-            furniture, and these two commands are the ones a phone cannot do
-            without. Export is a menu rather than two buttons — three icons plus
-            the file name do not fit on a 360px screen. */}
+            furniture, and these are the commands a phone cannot do without. New
+            and open belong here because they are the document's lifecycle, and
+            open genuinely works on a phone — with no File System Access API the
+            adapter falls back to `<input type="file">` for reading. Export is a
+            menu rather than two buttons: five icons beside a file name do not fit
+            on a 360px screen. The theme toggle stays desktop-only: it is a
+            preference, and `system` already follows the phone's own setting. */}
         <div className="titlebar-mini">
+          <button
+            type="button"
+            className="icon-button"
+            onClick={handleNew}
+            title="新建"
+            aria-label="新建"
+          >
+            <NewIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => void handleOpen()}
+            title="打开"
+            aria-label="打开"
+          >
+            <OpenIcon />
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -576,6 +598,26 @@ function ExportIcon() {
       <path d="M8 10.5V2.5" />
       <path d="M4.8 5.7 8 2.5l3.2 3.2" />
       <path d="M3 13.5h10" />
+    </Glyph>
+  )
+}
+
+/** A sheet with a plus on it: 新建. */
+function NewIcon() {
+  return (
+    <Glyph>
+      <path d="M9.5 2.5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6z" />
+      <path d="M9.5 2.5V6H13" />
+      <path d="M8 8.5v3.5M6.2 10.2h3.6" />
+    </Glyph>
+  )
+}
+
+/** A folder: 打开. */
+function OpenIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 4.2a1 1 0 0 1 1-1h2.7l1.2 1.6h5.1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" />
     </Glyph>
   )
 }
