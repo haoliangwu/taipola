@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>taipola</title>
+    <!--
+      Declaring the icon is what stops the browser's implicit request for
+      `/favicon.ico`. On a project page that probe leaves our subtree entirely —
+      it goes to the domain root, which belongs to the user site, not to us — so
+      it can only ever 404. Vite rewrites these to /taipola/… in the build.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body>
     <div id="root"></div>
