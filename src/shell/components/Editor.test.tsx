@@ -755,6 +755,75 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
+
+  /**
+   * 合并换行之后光标落在哪里。
+   *
+   * 同一段文字有**两条编辑路径**：光标在空行上、光标在下一行行首。两条路径产出的文本一字不差，
+   * 所以落点也必须一样——否则用户会遇到"同样是消掉一个空行，光标却一处落在上一段末尾、
+   * 一处落在下一行文字之前"，后者继续打字会插进下一段里。
+   */
+  it('合并之后光标落在上一段文字的末尾：两条编辑路径给同一个落点', async () => {
+    // 路径 C1：回车拆出一个空行，光标就在那个空行上。
+    const split = renderEditor('## 有序列表\n## 列表嵌套\n')
+    await clickInRun(split, 0, 0, 1, 'end')
+    await flush()
+    expect(caretFromDom()).toBe(7) // `## 有序列表` 末尾
+    await pressEnter(split)
+    await flush()
+    expect(split.getDoc()).toBe('## 有序列表\n\n## 列表嵌套\n')
+    await pressBackspace(split)
+    await flush()
+    expect(split.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
+    expect(caretFromDom()).toBe(7)
+
+    // 路径 C2：光标在下一行的行首（源码里的行首，`## ` 之前）。先把光标放进这一行，
+    // 让 `## ` 显现成可见源码，再移到行首——这就是真的按两次左箭头会到的地方。
+    // 空行是**自己的一个 block**，所以第二个标题是 block 2，不是 block 1。
+    const atLineStart = renderEditor('## 有序列表\n\n## 列表嵌套\n')
+    await flush()
+    atLineStart.container.focus({ preventScroll: true })
+    const text = atLineStart.blockEl(2)?.querySelector<HTMLElement>('[data-run="1"]')
+    if (!text?.firstChild) throw new Error('第二个标题没有文本 run')
+    placeCaretAt(text.firstChild, 0)
+    await flush()
+    const marker = atLineStart.blockEl(2)?.querySelector<HTMLElement>('[data-run="0"]')
+    if (!marker?.firstChild) throw new Error('第二个标题没有源码 run')
+    placeCaretAt(marker.firstChild, 0)
+    await flush()
+    expect(caretFromDom()).toBe(9)
+
+    await pressBackspace(atLineStart)
+    await flush()
+    expect(atLineStart.getDoc()).toBe(split.getDoc())
+    expect(caretFromDom()).toBe(7)
+  })
+
+  it('连续两个空行：一次 Backspace 只吃掉一个，光标落在上一段末尾', async () => {
+    const r = renderEditor('甲\n\n\n乙\n')
+    await flush()
+    // 两个空行是同一个 blank block 的两条视觉行；`乙` 是 block 2。
+    await clickInRun(r, 2, 0, 0, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(4)
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    // 光标在 `甲` 末尾，而不是"剩下的那个空行"上。
+    expect(caretFromDom()).toBe(1)
+    await assertDomMatchesSource(r)
+  })
+
+  it('光标在文档开头时不触发合并规则', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(0)
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+  })
 })
 
 /**

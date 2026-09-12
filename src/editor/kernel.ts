@@ -513,7 +513,19 @@ export class EditorKernel {
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        this.commit(this.doc.slice(0, live - 1) + this.doc.slice(live), live - 1)
+        const joined = this.doc.slice(0, live - 1) + this.doc.slice(live)
+        // Land the caret at the END of the content above, not at the start of the
+        // line below. When the line above is EMPTY — which is the case that brings
+        // the user here — `live - 1` is already the caret's own line start, so the
+        // caret read as "jumped in front of the next line's text" and typing glued
+        // itself to the following block. Both edit paths (caret on the empty line,
+        // caret at the start of the line below) produce the SAME text, so they must
+        // produce the same caret; this is the offset that describes what the user
+        // meant, and it is also where Enter's reverse lands (Enter then Backspace
+        // returns to the offset from before Enter).
+        let caret = live - 1
+        while (caret > 0 && joined[caret - 1] === '\n') caret--
+        this.commit(joined, caret)
         return
       }
     }
