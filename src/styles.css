@@ -211,6 +211,59 @@ body {
   margin-left: auto;
 }
 
+/* The narrow-screen command group: save plus an export menu, the only two
+   commands a phone can reach. Hidden on desktop, where `.titlebar-right` has
+   the whole set with words on it. */
+.titlebar-mini {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
+}
+
+.mini-export {
+  position: relative;
+}
+
+.mini-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 128px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+
+.mini-menu button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mini-menu button:hover {
+  background: var(--accent-soft);
+}
+
+/* The drawer's backdrop. Rendered only while the outline is open, and only ever
+   visible below the breakpoint — on desktop the outline is a permanent column
+   and there is nothing to cover. */
+.scrim {
+  display: none;
+}
+
 .doc-title {
   display: flex;
   align-items: center;
@@ -352,6 +405,9 @@ body {
   display: flex;
   flex: 1;
   min-height: 0;
+  /* The narrow-screen drawer and its scrim are positioned against the body, so
+     they start below the header without repeating its height. */
+  position: relative;
 }
 
 .workspace {
@@ -940,12 +996,68 @@ body {
   }
 }
 
+/* ==========================================================================
+   Narrow screens
+
+   The outline stops being a column and becomes a drawer, and the command
+   surface moves from the format toolbar into the header's mini group.
+
+   This block used to be three lines that hid the outline and the desktop
+   command group. Hiding the outline is what made the header's toggle button a
+   dead control: it flipped `sidebarOpen`, React re-rendered, and the stylesheet
+   kept the element invisible. The drawer rules below are what make the button
+   mean something again, so `.outline` keeps its permanent-column styling as the
+   base and is repositioned here rather than deleted.
+
+   The breakpoint is mirrored in `App.tsx` (`NARROW_QUERY`) because two
+   behaviours — jump closes the drawer, Escape closes it — cannot be expressed
+   in CSS. Media queries cannot read a custom property, so the number lives in
+   both files.
+   ========================================================================== */
+
 @media (max-width: 900px) {
   .outline {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    width: min(78vw, 300px);
+    box-shadow: 0 8px 32px rgb(0 0 0 / 0.18);
+    animation: drawer-in 160ms ease-out;
+  }
+
+  /* A backdrop that closes the drawer, covering the workspace but not the
+     header — the toggle button stays reachable to close it again. */
+  .scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 19;
+    background: rgb(0 0 0 / 0.28);
+  }
+
+  .toolbar,
+  .titlebar-right {
     display: none;
   }
 
-  .titlebar-right {
-    display: none;
+  .titlebar-mini {
+    display: flex;
+  }
+
+  /* Header budget. The left group is `flex: none` with a 180px floor and a
+     220px file name, which alone is 252px: enough on its own to push the mini
+     group off a 360px screen. Both caps come down here. */
+  .titlebar-left {
+    min-width: 0;
+  }
+
+  .doc-name {
+    max-width: 40vw;
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
   }
 }

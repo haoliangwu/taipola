@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
 import { Outline } from './components/Outline'
 import { computeStats, extractHeadings } from '../core/markdown'
@@ -18,6 +18,32 @@ import {
 } from '../core/editCommands'
 
 const OUTLINE_DEBOUNCE_MS = 200
+
+/**
+ * The narrow-screen breakpoint, mirrored in `styles.css`.
+ *
+ * Media queries cannot read a custom property, so the number lives in both
+ * files. It is needed here because two of the drawer's behaviours are not
+ * expressible in CSS: jumping to a heading closes it, and Escape closes it —
+ * the second one only on a narrow screen, since on desktop Escape is `blur`.
+ */
+const NARROW_QUERY = '(max-width: 900px)'
+
+function isNarrowScreen(): boolean {
+  return window.matchMedia(NARROW_QUERY).matches
+}
+
+/**
+ * The two export formats, written down once.
+ *
+ * The desktop group and the narrow screen's menu are different markup (text
+ * buttons versus `role="menuitem"`), but they must offer the same two formats
+ * under the same labels — that half lives here.
+ */
+const EXPORT_FORMATS = [
+  { label: '导出 HTML', write: (value: string, name: string) => documents.exportHtml(value, name) },
+  { label: '导出 MD', write: (value: string, name: string) => documents.exportMarkdown(value, name) },
+] as const
 
 /** What `新建` starts from: a document with no file behind it yet. */
 const NEW_DOC = { content: '# 未命名\n\n', name: 'untitled.md' }
@@ -40,7 +66,12 @@ export default function App() {
   const [savedValue, setSavedValue] = useState(initial.value)
   const [caretLine, setCaretLine] = useState(1)
   const [headings, setHeadings] = useState(() => extractHeadings(initial.value))
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  // Open by default on a desktop, where the outline is a column beside the
+  // document. On a narrow screen it is a drawer that covers the document, so it
+  // starts closed — the canvas is what the user came for.
+  const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrowScreen())
+  const [exportOpen, setExportOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const theme = useTheme()
 
@@ -206,6 +237,10 @@ export default function App() {
 
   const jumpToLine = useCallback((line: number) => {
     editorRef.current?.goToLine(line)
+    // On a narrow screen the outline is a drawer covering the document, so
+    // jumping has to get out of the way. On desktop it is a column beside the
+    // document and stays open.
+    if (isNarrowScreen()) setSidebarOpen(false)
   }, [])
 
   // --- formatting toolbar & shortcuts ---------------------------------------
@@ -281,6 +316,16 @@ export default function App() {
       // null means the shell has no binding: no `preventDefault()`, so the
       // browser keeps its own (Cmd+P must still print).
       if (!shortcut) return
+      // Escape goes to whatever is layered over the document first — the export
+      // menu, then a narrow screen's drawer. Both swallow the shell's `blur`:
+      // closing the layer is what the key means there. Dispatching through the
+      // table keeps `shortcuts.ts` the one place that says which key is which
+      // command.
+      if (shortcut === 'blur' && (exportOpen || (sidebarOpen && isNarrowScreen()))) {
+        if (exportOpen) setExportOpen(false)
+        else setSidebarOpen(false)
+        return
+      }
       // Escape is the exception: swallowing it takes the key away from the IME
       // and the browser, which use it to cancel a composition. Blurring is the
       // whole command, so it needs no default suppressed.
@@ -290,7 +335,33 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [shortcutActions])
+  }, [shortcutActions, sidebarOpen, exportOpen])
+
+  // Crossing the breakpoint mid-session (a rotation, a resized window) adopts
+  // that mode's default: a column that has just become a drawer must not sit on
+  // top of the document, and a drawer that has just become a column should be
+  // there. Only a crossing re-decides — inside one mode the user's own toggle
+  // stands.
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY)
+    const onCross = () => setSidebarOpen(!query.matches)
+    query.addEventListener('change', onCross)
+    return () => query.removeEventListener('change', onCross)
+  }, [])
+
+  // The export menu closes the way a menu does: a click anywhere outside it.
+  // Clicks inside are left alone — the items close it themselves, and the
+  // toggle has to be able to close it by being clicked again. (Escape is handled
+  // above, with the other keys.)
+  useEffect(() => {
+    if (!exportOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (target && !menuRef.current?.contains(target)) setExportOpen(false)
+    }
+    window.addEventListener('mousedown', onPointerDown)
+    return () => window.removeEventListener('mousedown', onPointerDown)
+  }, [exportOpen])
 
   return (
     <div className="app">
@@ -348,24 +419,69 @@ export default function App() {
           <button type="button" className="text-button" onClick={() => void handleSave(false)}>
             保存
           </button>
+          {EXPORT_FORMATS.map((format) => (
+            <button
+              key={format.label}
+              type="button"
+              className="text-button"
+              onClick={() => format.write(value, fileName)}
+            >
+              {format.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Narrow screens only (`.titlebar-mini`): the format toolbar is desktop
+            furniture, and these two commands are the ones a phone cannot do
+            without. Export is a menu rather than two buttons — three icons plus
+            the file name do not fit on a 360px screen. */}
+        <div className="titlebar-mini">
           <button
             type="button"
-            className="text-button"
-            onClick={() => documents.exportHtml(value, fileName)}
+            className="icon-button"
+            onClick={() => void handleSave(false)}
+            title="保存"
+            aria-label="保存"
           >
-            导出 HTML
+            <SaveIcon />
           </button>
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => documents.exportMarkdown(value, fileName)}
-          >
-            导出 MD
-          </button>
+          <div className="mini-export" ref={menuRef}>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setExportOpen((open) => !open)}
+              title="导出"
+              aria-label="导出"
+              aria-expanded={exportOpen}
+              aria-haspopup="menu"
+            >
+              <ExportIcon />
+            </button>
+            {exportOpen && (
+              <div className="mini-menu" role="menu">
+                {EXPORT_FORMATS.map((format) => (
+                  <button
+                    key={format.label}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setExportOpen(false)
+                      format.write(value, fileName)
+                    }}
+                  >
+                    {format.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
       <div className="body">
+        {sidebarOpen && (
+          <div className="scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+        )}
         {sidebarOpen && <Outline headings={headings} activeLine={caretLine} onJump={jumpToLine} />}
         <main className="workspace">
           <Editor
@@ -416,5 +532,50 @@ function ToolButton({ label, title, className = '', onClick }: ToolButtonProps) 
     >
       {label}
     </button>
+  )
+}
+
+/**
+ * The mini group's two icons, inline rather than from a font or a package.
+ *
+ * On a phone these are the only command entry points, and the glyphs the desktop
+ * buttons use (`☀ ☾ ◐ ‹› 🔗`) render differently per platform and per font. Two
+ * `<svg>` elements cost nothing and cannot fall back to a tofu box.
+ */
+function Glyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  )
+}
+
+function SaveIcon() {
+  return (
+    <Glyph>
+      <path d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5Z" />
+      <path d="M5.5 2.5v4h5v-4" />
+      <path d="M5.5 13.5v-3h5v3" />
+    </Glyph>
+  )
+}
+
+function ExportIcon() {
+  return (
+    <Glyph>
+      <path d="M8 10.5V2.5" />
+      <path d="M4.8 5.7 8 2.5l3.2 3.2" />
+      <path d="M3 13.5h10" />
+    </Glyph>
   )
 }
