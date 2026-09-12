@@ -618,6 +618,41 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(plain)
   })
 
+  it('Tab 缩进带子列表的项：子列表留在原缩进（行级操作，不跟着走）', async () => {
+    const r = renderEditor('1. 甲\n2. 乙\n   - 子一\n3. 丙\n')
+    await clickInRun(r, 0, 1, 1, 'end')
+    await flush()
+    await r.user.keyboard('{Tab}')
+    await flush()
+    // 只动那一行，然后同步编号：子列表被上一项接管是设计，不是缺陷。
+    expect(r.getDoc()).toBe('1. 甲\n   1. 乙\n   - 子一\n2. 丙\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('Shift+Tab 在最外层：该项变正文，列表断成两个', async () => {
+    const r = renderEditor('1. 甲\n2. 乙\n3. 丙\n')
+    await clickInRun(r, 0, 1, 1, 'end')
+    await flush()
+    await r.user.keyboard('{Shift>}{Tab}{/Shift}')
+    await flush()
+    expect(r.getDoc()).toBe('1. 甲\n\n乙\n\n1. 丙\n')
+    // 光标原本在行末：标记消失之后它仍在正文末尾（`乙` 在偏移 6，末尾是 7）。
+    expect(caretFromDom()).toBe(7)
+    await assertDomMatchesSource(r)
+  })
+
+  it('Tab 在列表首项：只是一次普通按键，在光标处插两个空格', async () => {
+    const r = renderEditor('- 甲乙\n- 丙\n')
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    expect(caretFromDom()).toBe(3)
+    await r.user.keyboard('{Tab}')
+    await flush()
+    expect(r.getDoc()).toBe('- 甲  乙\n- 丙\n')
+    expect(caretFromDom()).toBe(5)
+    await assertDomMatchesSource(r)
+  })
+
   it('图片在渲染态是真的 <img>，源码一字不丢', async () => {
     const url = 'https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1'
     const r = renderEditor(`看图：\n\n![示例图片](${url})\n`)

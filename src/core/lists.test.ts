@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { indentListItem, parseListItem, renumberLists } from './lists'
+import { md } from './markdownIt'
+
+/** markdown-it's own structure for `source`, with whitespace folded away. */
+const structure = (source: string) => md.render(source).replace(/\s*\n\s*/g, '')
 
 describe('renumberLists', () => {
   it('把回车后重复的编号顺延', () => {
@@ -57,15 +61,59 @@ describe('indentListItem', () => {
     expect(indentListItem(doc, doc.length - 1, 'in')?.doc).toBe('- 甲\n  - 乙\n')
   })
 
-  it('Tab 在首项上无效（没有上一项可依附）', () => {
-    expect(indentListItem('- 甲\n- 乙\n', 1, 'in')).toBeNull()
+  it('Tab 在列表首项上不是列表操作：在光标处插入两个空格', () => {
+    const doc = '- 甲\n- 乙\n'
+    // 没有上一项可依附，Tab 退化成一次普通按键：两个空格落在光标处。
+    expect(indentListItem(doc, 2, 'in')).toEqual({ doc: '-   甲\n- 乙\n', caret: 4 })
   })
 
-  it('Shift+Tab 退回上一层，回到最外层后无效', () => {
+  it('Tab 在列表首项：插在光标处，不是把整行右移', () => {
+    const doc = '- 甲乙\n'
+    const result = indentListItem(doc, 3, 'in')
+    expect(result).toEqual({ doc: '- 甲  乙\n', caret: 5 })
+    // 列表结构不变：还是同一个列表。
+    expect(structure(result!.doc)).toBe('<ul><li>甲  乙</li></ul>')
+  })
+
+  it('Tab 在首项时不重新编号（它不是列表层级的变化）', () => {
+    const doc = '1. 甲\n2. 乙\n'
+    // 若这条路径顺手跑了 renumberLists，`2. 乙`（顶格、被当成另一层）会被改写成 `1. 乙`，
+    // 而画面上它还是第 2 项。
+    expect(indentListItem(doc, 3, 'in')).toEqual({ doc: '1.   甲\n2. 乙\n', caret: 5 })
+  })
+
+  it('Tab 只动那一行：子列表留在原缩进，不跟着走', () => {
+    const doc = '1. 甲\n2. 乙\n   - 子一\n3. 丙\n'
+    const result = indentListItem(doc, doc.indexOf('乙'), 'in')
+    expect(result?.doc).toBe('1. 甲\n   1. 乙\n   - 子一\n2. 丙\n')
+    // 子列表被上一项接管 —— 这是设计（Typora 的缩进是行级的），不是缺陷。
+    // 编号照样同步：`3. 丙` 变成新序列的 `2. 丙`。
+    expect(structure(result!.doc)).toContain('<li>甲<ol><li>乙</li></ol><ul><li>子一</li></ul></li>')
+  })
+
+  it('Tab 的上一项可以跳过空行与续行（松列表、续行之后都不算"首行"）', () => {
+    // 空行不结束列表：`2. 乙` 仍是这一列表的第二项，Tab 应该缩进它。
+    const loose = '1. 甲\n\n2. 乙\n'
+    expect(indentListItem(loose, loose.indexOf('乙'), 'in')?.doc).toBe('1. 甲\n\n   1. 乙\n')
+    // 续行也一样：上一行是甲的续行，不等于"上面没有项"。
+    const continued = '1. 甲\n   甲的续行\n2. 乙\n'
+    expect(indentListItem(continued, continued.indexOf('乙'), 'in')?.doc).toBe(
+      '1. 甲\n   甲的续行\n   1. 乙\n',
+    )
+  })
+
+  it('围栏里的"列表行"不是列表项：Tab / Shift+Tab 都不碰它', () => {
+    const doc = '```\n1. 甲\n- 乙\n```\n'
+    expect(indentListItem(doc, doc.indexOf('甲'), 'in')).toBeNull()
+    expect(indentListItem(doc, doc.indexOf('甲'), 'out')).toBeNull()
+    expect(indentListItem(doc, doc.indexOf('乙'), 'in')).toBeNull()
+  })
+
+  it('Shift+Tab 退回上一层', () => {
     const doc = '1. 甲\n   1. 乙\n'
     const out = indentListItem(doc, doc.length - 1, 'out')
     expect(out?.doc).toBe('1. 甲\n2. 乙\n')
-    expect(indentListItem('1. 甲\n2. 乙\n', 5, 'out')).toBeNull()
+    // 已经在最外层时不是"无效"，而是变正文：见下面 T3 那一组。
   })
 
   it('缩进后重新编号：新层级从 1 开始，原层级顺延', () => {
@@ -73,5 +121,60 @@ describe('indentListItem', () => {
     const result = indentListItem(doc, doc.indexOf('丙'), 'in')
     // 丙 缩到 乙 之下，成为新层级的第 1 项；甲乙仍在原层级顺延。
     expect(result?.doc).toBe('1. 甲\n2. 乙\n   1. 丙\n')
+  })
+})
+
+/**
+ * T3：最外层的项按 Shift+Tab —— 不是"无效"，而是**离开列表变正文**。
+ *
+ * 正文两侧要各补一个空行：紧接着列表项的正文行只是 lazy continuation，
+ * 会被并进上一项（`1. 甲\n乙\n3. 丙` 渲染成 `<li>甲乙</li>`），
+ * 补了空行才是真的"两个列表"。
+ */
+describe('Shift+Tab 在最外层：该项变正文，列表断成两个', () => {
+  it('列表中间的项：两侧各补一个空行，后面的列表从 1 开始', () => {
+    const doc = '1. 甲\n2. 乙\n3. 丙\n'
+    const result = indentListItem(doc, doc.indexOf('乙'), 'out')
+    expect(result?.doc).toBe('1. 甲\n\n乙\n\n1. 丙\n')
+    expect(result?.caret).toBe(6) // 正文 `乙` 的行首
+    expect(structure(result!.doc)).toBe('<ol><li>甲</li></ol><p>乙</p><ol><li>丙</li></ol>')
+  })
+
+  it('列表首项：上方不凭空多出空行', () => {
+    const doc = '- 甲\n- 乙\n'
+    const result = indentListItem(doc, 2, 'out')
+    expect(result?.doc).toBe('甲\n\n- 乙\n')
+    expect(result?.caret).toBe(0)
+    expect(structure(result!.doc)).toBe('<p>甲</p><ul><li>乙</li></ul>')
+  })
+
+  it('只有一个项：不留空行，也不留空列表', () => {
+    const doc = '1. 甲\n'
+    expect(indentListItem(doc, doc.indexOf('甲'), 'out')).toEqual({ doc: '甲\n', caret: 0 })
+  })
+
+  it('末项：只在前面补空行，后面不凭空多出空行', () => {
+    const doc = '1. 甲\n2. 乙\n'
+    const result = indentListItem(doc, doc.indexOf('乙'), 'out')
+    expect(result?.doc).toBe('1. 甲\n\n乙\n')
+    expect(result?.caret).toBe(6)
+    expect(structure(result!.doc)).toBe('<ol><li>甲</li></ol><p>乙</p>')
+  })
+
+  it('光标按重排之后的文本算：上方的 `10.` 变成 `1.` 会挪动偏移', () => {
+    const doc = '9. 甲\n10. 乙\n11. 丙\n'
+    const result = indentListItem(doc, doc.indexOf('丙'), 'out')
+    expect(result?.doc).toBe('1. 甲\n2. 乙\n\n丙\n')
+    // 正文 `丙` 在重排后的文档里行首是 11（旧算法按重排前的文本算，给 12）。
+    expect(result?.caret).toBe(11)
+  })
+
+  it('任务项：标记（含复选框）一起消失', () => {
+    const doc = '- [ ] 待办\n- 乙\n'
+    expect(indentListItem(doc, doc.indexOf('待办'), 'out')?.doc).toBe('待办\n\n- 乙\n')
+  })
+
+  it('正文上 Shift+Tab 什么也不做（不是列表项）', () => {
+    expect(indentListItem('正文\n', 0, 'out')).toBeNull()
   })
 })

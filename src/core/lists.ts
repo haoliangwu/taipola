@@ -5,6 +5,8 @@
  * a browser. The kernel calls them after structural edits (Enter, Tab, Shift+Tab).
  */
 
+import { offsetForLine } from './lines'
+
 export interface ListItem {
   /** Line index, 0-based. */
   line: number
@@ -72,6 +74,26 @@ export function renumberLists(text: string): string {
   return out.join('\n')
 }
 
+/** Width of a line's leading whitespace, in characters. */
+function leadingSpaces(line: string): number {
+  return /^\s*/.exec(line)?.[0].length ?? 0
+}
+
+/**
+ * Whether line `index` sits inside a fenced code block.
+ *
+ * A fence's contents are text, not Markdown: `1. 甲` inside one is not a list
+ * item, so Tab must not renumber it and Shift+Tab must not take it out of a list
+ * it was never in (that would rewrite the code block). `renumberLists` already
+ * refuses to touch fences — this is the same rule, asked before the move instead
+ * of during it.
+ */
+function inFence(lines: string[], index: number): boolean {
+  let open = false
+  for (let i = 0; i < index; i++) if (FENCE_RE.test(lines[i])) open = !open
+  return open
+}
+
 export interface IndentResult {
   /** The new document source. */
   doc: string
@@ -96,12 +118,22 @@ function locate(doc: string, offset: number) {
   return item ? { lines, index, item } : null
 }
 
-/** The nearest list item above `index`; a non-item line ends the search. */
-function itemAbove(lines: string[], index: number): ListItem | null {
-  for (let i = index - 1; i >= 0; i--) {
-    const item = parseListItem(lines[i], i)
-    if (!item) return null
-    return item
+/** The nearest list item above `item`.
+ *
+ * Blank lines and lines indented DEEPER than the item do not end the search: a
+ * loose item (`1. 甲 / (blank) / 2. 乙`) and an item that follows another item's
+ * continuation line are both still "somewhere below the first line of their
+ * list", so Tab has an item to nest under. Only a line at or above the item's own
+ * indent that is not itself a list item ends the list — a paragraph, a heading, a
+ * fence — and means this item is where the list starts.
+ */
+function itemAbove(lines: string[], item: ListItem): ListItem | null {
+  for (let i = item.line - 1; i >= 0; i--) {
+    if (lines[i].trim() === '') continue
+    const found = parseListItem(lines[i], i)
+    if (found) return found
+    if (leadingSpaces(lines[i]) > item.indent.length) continue
+    return null
   }
   return null
 }
@@ -116,15 +148,78 @@ function shallowestAbove(lines: string[], index: number, depth: number): ListIte
   return null
 }
 
+/** What a Tab with nothing to nest under inserts — an ordinary keystroke. */
+const PLAIN_INDENT = '  '
+
+/** Tab on the list's first line: two spaces at the caret, no list operation. */
+function plainIndent(doc: string, offset: number): IndentResult {
+  return {
+    doc: doc.slice(0, offset) + PLAIN_INDENT + doc.slice(offset),
+    caret: offset + PLAIN_INDENT.length,
+  }
+}
+
 /**
- * Indents (`in`) or outdents (`out`) the list item at `offset`.
+ * Takes the item out of its list: the marker goes away, the body stays as a
+ * paragraph. Called only for an item at the OUTERMOST level — that is the rule,
+ * since there is no shallower level left to move out to.
  *
- * Tab nests the item under the item above it, stepping by that item's own marker
- * width — exactly the indentation Markdown needs for a nested list to be a child
- * rather than a sibling. Shift+Tab moves the item out to the level of the nearest
- * shallower item above it. Returns null when the move is impossible (no item
- * above, nothing to deepen, or already at the outermost level), which leaves the
- * key to the browser.
+ * Blank lines are written around it on purpose. A paragraph line directly under a
+ * list item is only a lazy continuation — `1. 甲\n乙\n3. 丙` renders as
+ * `<li>甲乙</li>` — so without them the item would be swallowed by the item above
+ * instead of leaving the list. With them the list above and the list below are
+ * two lists, and the one below starts again at 1.
+ *
+ * The item's own line is all that changes; a nested list below it stays where it
+ * is, exactly like the level moves above.
+ */
+function unlistItem(lines: string[], item: ListItem, caretColumn: number): IndentResult {
+  const blankBefore = item.line > 0 && lines[item.line - 1].trim() !== ''
+  const blankAfter = item.line + 1 < lines.length && lines[item.line + 1].trim() !== ''
+  const next = [
+    ...lines.slice(0, item.line),
+    ...(blankBefore ? [''] : []),
+    item.body,
+    ...(blankAfter ? [''] : []),
+    ...lines.slice(item.line + 1),
+  ]
+  const paragraphLine = item.line + (blankBefore ? 1 : 0)
+  const doc = renumberLists(next.join('\n'))
+  return {
+    doc,
+    // Line numbers survive renumbering, offsets do not (a `10.` above can become
+    // `1.`), so the caret is read off the FINAL text. The marker is gone, so a
+    // caret that sat inside it lands at the line start.
+    caret:
+      offsetForLine(doc, paragraphLine + 1) + Math.max(0, caretColumn - item.marker.length),
+  }
+}
+
+/**
+ * The list keys: what Tab and Shift+Tab do on the list item holding `offset`.
+ *
+ * - Tab nests the item under the item above it, stepping by that item's own
+ *   marker width — exactly the indentation Markdown needs for a nested list to be
+ *   a child rather than a sibling. On the list's FIRST line there is nothing above
+ *   to nest under, so Tab is not a list operation at all: two spaces at the caret,
+ *   the ordinary keystroke. The level does not change, so nothing is renumbered.
+ * - Shift+Tab moves the item out to the level of the nearest shallower item above
+ *   it. At the OUTERMOST level there is nowhere left to go, so the item leaves the
+ *   list and becomes a paragraph (`unlistItem`), which is what splits the list in
+ *   two.
+ *
+ * ONLY THE ITEM'S OWN LINE MOVES. Its nested list and the continuation lines of a
+ * multi-line item stay where they are, and `renumberLists` then re-synchronises
+ * the numbering. That is Typora's model, measured against it: the operation is
+ * line-level, so the parent/child relationship stays out of this arithmetic and
+ * the only promise is that the final index sequence comes out right. Moving the
+ * sub-tree along was tried and reverted (`78707ee`); leaving the children behind
+ * can hand them to the item above, and that is the intended outcome, not a defect.
+ *
+ * Returns null when the caret is not on a list item, when it is inside a fenced
+ * code block (a code block's text is not a list), or when the move is impossible
+ * (nesting under a DEEPER item would be a jump, not a step), which leaves the key
+ * to the browser.
  */
 export function indentListItem(
   doc: string,
@@ -134,16 +229,19 @@ export function indentListItem(
   const found = locate(doc, offset)
   if (!found) return null
   const { lines, index, item } = found
+  if (inFence(lines, index)) return null
+  const caretColumn = offset - offsetForLine(doc, index + 1)
 
   let indent: string
   if (direction === 'in') {
-    const above = itemAbove(lines, index)
+    const above = itemAbove(lines, item)
+    if (!above) return plainIndent(doc, offset)
     // Nesting under a DEEPER item would be a jump, not a step.
-    if (!above || above.indent.length > item.indent.length) return null
+    if (above.indent.length > item.indent.length) return null
     indent = above.indent + ' '.repeat(above.marker.length)
     if (indent.length <= item.indent.length) return null
   } else {
-    if (item.indent.length === 0) return null
+    if (item.indent.length === 0) return unlistItem(lines, item, caretColumn)
     const parent = shallowestAbove(lines, index, item.indent.length)
     indent = parent ? parent.indent : ''
   }

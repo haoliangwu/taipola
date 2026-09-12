@@ -490,14 +490,17 @@ export class EditorKernel {
     if (event.key === 'Tab') {
       // Tab ALWAYS stops here. Letting it through moves focus out of the page —
       // with nothing focusable left, the browser hands it to its own chrome (the
-      // address bar), which is jarring mid-edit. On a list item it nests the item
-      // (Shift+Tab lifts it back out); anywhere else it does nothing.
+      // address bar), which is jarring mid-edit. What it DOES is the list-key
+      // rule: nest the item, lift it back out, turn it into a paragraph at the
+      // outermost level, or — on the list's first line, where there is nothing to
+      // nest under — plain spaces at the caret (`indentListItem`). Anywhere else
+      // it does nothing.
       event.preventDefault()
       if (live === null) return
-      const indented = indentListItem(this.doc, live, event.shiftKey ? 'out' : 'in')
-      if (!indented) return
+      const edited = indentListItem(this.doc, live, event.shiftKey ? 'out' : 'in')
+      if (!edited) return
       this.pushUndo({ value: this.doc, caret: this.caret })
-      this.commit(indented.doc, indented.caret)
+      this.commit(edited.doc, edited.caret)
       return
     }
 
