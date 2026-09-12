@@ -61,6 +61,10 @@ interface BuildOptions {
   inCode?: boolean
   /** True when this content is a table cell (skip block prefixes). */
   cell?: boolean
+  /** True when this line's trailing newline is a soft break. */
+  softBreak?: boolean
+  /** True when the PREVIOUS line ended in a soft break. */
+  continues?: boolean
 }
 
 interface ViewLine {
@@ -88,6 +92,15 @@ interface ViewLine {
   markers: MarkerCell[]
   /** Laid-out text of this line, collapsed markers excluded. */
   text: string
+  /**
+   * True when the newline after this line is a SOFT break, i.e. the next source
+   * line continues this line's paragraph.
+   *
+   * The line boxes stay one per source line (the caret arithmetic is built on
+   * that), so the renderer joins the run by making the boxes inline — see
+   * `vl-soft` / `vl-continues` in `styles.css`.
+   */
+  softBreak: boolean
 }
 
 export interface BlockView {
@@ -235,6 +248,7 @@ function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts
 function emptyLine(length: number, sourceStart = 0): ViewLine {
   return {
     sourceStart,
+    softBreak: false,
     runs: [],
     visibleToSource: [],
     sourceToVisible: new Array(length).fill(-1) as number[],
@@ -323,6 +337,7 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0,
 
   return {
     sourceStart,
+    softBreak: opts.softBreak === true,
     runs,
     cellRuns,
     visibleToSource,
@@ -395,6 +410,14 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
       blockMarker = { start: 0, end: raw.length }
     } else {
       blockMarker = blockPrefixRange(raw)
+      // A soft-continuation line's leading whitespace is container indentation,
+      // not content — it must not land in the middle of a line that now flows on
+      // from the previous one. Collapsed like any other prefix, so the source
+      // still comes back out of the DOM.
+      if (blockMarker === null && opts.continues === true) {
+        const indent = /^\s+/.exec(raw)?.[0]
+        if (indent) blockMarker = { start: 0, end: indent.length }
+      }
     }
   }
   const markerShown = blockMarker !== null && revealInBlock
@@ -498,6 +521,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
 
   return {
     sourceStart,
+    softBreak: opts.softBreak === true,
     runs,
     visibleToSource,
     sourceToVisible,
@@ -549,7 +573,9 @@ export function buildBlockView(
   blockStart: number,
   revealAt: number[],
   lineCount?: number,
+  softBreakAfter: number[] = [],
 ): BlockView {
+  const softBreaks = new Set(softBreakAfter)
   const reveals = revealAt.map((r) => r - blockStart)
   const revealInBlock = reveals.length > 0
   const lines: ViewLine[] = []
@@ -570,6 +596,8 @@ export function buildBlockView(
       buildLine(line, local.length ? local[0] - base : null, base, {
         revealInBlock,
         inCode,
+        softBreak: softBreaks.has(li),
+        continues: softBreaks.has(li - 1),
       }),
     )
     // A matching marker closes the open fence; with nothing open, this line opens one.

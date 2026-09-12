@@ -23,8 +23,8 @@ import { anchorForSource, applyCaret, domToLocal, sourceOffsetAtPoint } from './
  * `caret` is the document offset the view treats as "in edit mode" (which
  * reveals block-level markers); `null` means the caret is outside the block.
  */
-function mount(raw: string, caret: number | null, lineCount?: number) {
-  const view = buildBlockView(raw, 0, caret === null ? [] : [caret], lineCount)
+function mount(raw: string, caret: number | null, lineCount?: number, softBreakAfter: number[] = []) {
+  const view = buildBlockView(raw, 0, caret === null ? [] : [caret], lineCount, softBreakAfter)
   const host = document.createElement('div')
   host.contentEditable = 'true'
   host.dataset.testHost = ''
@@ -36,6 +36,7 @@ function mount(raw: string, caret: number | null, lineCount?: number) {
     raw,
     headingLevel: 0,
     headingText: '',
+    softBreakAfter: [],
   }
   renderDocument(host, [block], [view], [], [0])
   return { host, view }
@@ -148,5 +149,17 @@ describe('sourceOffsetAtPoint', () => {
     const rect = lineEl.getBoundingClientRect()
     const hit = sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, lineEl)
     expect(hit).toEqual({ block: 0, local: 4 })
+  })
+})
+
+describe('软换行后的命中测试', () => {
+  it('两个源码行排在同一视觉行时，点第二个源码行仍给出它自己的偏移', () => {
+    // 软换行把两行变成 inline，视觉上同排一行；命中测试不能因此把点击算到第一行去。
+    const { host } = mount('alpha beta\ngamma delta', null, 2, [0])
+    const second = host.querySelector<HTMLElement>('[data-vline="1"]')!
+    const rect = second.getBoundingClientRect()
+    const hit = sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, second)
+    // 第二个源码行在块内起始于 11（`alpha beta` 10 字 + 换行符）。
+    expect(hit).toEqual({ block: 0, local: 11 })
   })
 })

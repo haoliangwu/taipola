@@ -779,3 +779,75 @@ describe('内核只认自己的 DOM', () => {
     expect(firstLine?.classList.contains('revealed')).toBe(true)
   })
 })
+
+/**
+ * Soft line breaks, rendered the way the exporter renders them.
+ *
+ * A lone newline inside a paragraph is a space in Markdown, and the export
+ * (`breaks: false`) has always joined those lines. The view used to hard-break at
+ * them, so the same document read one way on screen and another way in the file
+ * it exported. An English paragraph wrapped at 80 columns came out looking like
+ * several sentences.
+ */
+describe('段落内软换行', () => {
+  it('一个段落写成两行源码，屏幕上排在同一视觉行，由列宽决定折行', async () => {
+    const r = renderEditor('alpha beta\ngamma delta\n')
+    await flush()
+
+    const first = r.blockEl(0)!.querySelector('[data-vline="0"]') as HTMLElement
+    const second = r.blockEl(0)!.querySelector('[data-vline="1"]') as HTMLElement
+
+    // 同一视觉行：两行的 top 相同。它们合起来约 20 个字符，列宽放得下。
+    expect(Math.round(second.getBoundingClientRect().top)).toBe(
+      Math.round(first.getBoundingClientRect().top),
+    )
+    // 机制：软换行的两端都是 inline，于是形成一个匿名块，由浏览器换行。
+    expect(getComputedStyle(first).display).toBe('inline')
+    expect(getComputedStyle(second).display).toBe('inline')
+    // 段落的实际高度就是一行，不再是两行。
+    expect(r.blockEl(0)!.getBoundingClientRect().height).toBeLessThan(2 * first.getBoundingClientRect().height)
+  })
+
+  it('软换行两侧都能落光标，且编辑后源码里的换行还在', async () => {
+    const r = renderEditor('alpha beta\ngamma delta\n')
+    await flush()
+
+    // 软换行之前（第一行行尾）
+    await clickInRun(r, 0, 0, 0, 'end')
+    expect(caretFromDom()).toBe(10)
+    await r.user.keyboard('X')
+    await flush()
+    // 关键：软换行不是"可以丢掉的排版"——它必须原样回到源码里。
+    expect(r.getDoc()).toBe('alpha betaX\ngamma delta\n')
+    await assertDomMatchesSource(r)
+
+    // 软换行之后（第二行内部）。第二行起始于 12（`alpha betaX` 11 字 + 换行），
+    // 11 字的 run 取 middle = 6，所以落在 18。
+    await clickInRun(r, 0, 1, 0, 'middle')
+    expect(caretFromDom()).toBe(18)
+    await r.user.keyboard('Y')
+    await flush()
+    expect(r.getDoc()).toBe('alpha betaX\ngamma Ydelta\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('列表项的续行：缩进是容器缩进，光标在块外时折叠掉', async () => {
+    const r = renderEditor('- a\n  b\n\nzz\n')
+    await flush()
+    // 块级标记只在光标位于块内时显现，所以先把光标放到别的块里。
+    const elsewhere = [...r.container.querySelectorAll<HTMLElement>('[data-run]')].find(
+      (el) => el.textContent === 'zz',
+    )
+    if (!elsewhere?.firstChild) throw new Error('the zz block has no text node')
+    placeCaretAt(elsewhere.firstChild, 0)
+    await flush()
+
+    const continuation = r.blockEl(0)!.querySelector('[data-vline="1"]') as HTMLElement
+    const runs = [...continuation.querySelectorAll<HTMLElement>('[data-run]')]
+    // 续行的两格缩进折叠成 marker run，可见文本从 `b` 开始（不跑到行中间）。
+    expect(runs[0].textContent).toBe('  ')
+    expect(getComputedStyle(runs[0]).display).toBe('none')
+    expect(runs[1].textContent).toBe('b')
+    await assertDomMatchesSource(r)
+  })
+})

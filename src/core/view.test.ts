@@ -197,3 +197,28 @@ describe('嵌套与表格结构', () => {
     expect(v.lines.every((l) => l.runs.length === 0)).toBe(true)
   })
 })
+
+describe('软换行把两行源码合成一个视觉行', () => {
+  it('行盒仍按源码行切分，runs 拼回源码一字不差', () => {
+    const view = buildBlockView('alpha beta\ngamma delta', 0, [], 2, [0])
+    // 行盒不能合并：光标的定位算术按源码行建索引、按行累加基线。
+    expect(view.lines).toHaveLength(2)
+    expect(view.lines[0].softBreak).toBe(true)
+    expect(view.lines[1].softBreak).toBe(false)
+    expect(view.lines.map((line) => line.runs.map((r) => r.text).join('')).join('\n')).toBe(
+      'alpha beta\ngamma delta',
+    )
+  })
+
+  it('续行的容器缩进折叠成 marker run，行内文本不带缩进', () => {
+    const view = buildBlockView('- a\n  b', 0, [], 2, [0])
+    const continuation = view.lines[1]
+    expect(continuation.runs[0]).toMatchObject({ text: '  ', marker: true })
+    expect(continuation.text).toBe('b')
+  })
+
+  it('没有软换行时一切照旧（行盒各自独占一行）', () => {
+    const view = buildBlockView('alpha beta\ngamma delta', 0, [], 2)
+    expect(view.lines.map((line) => line.softBreak)).toEqual([false, false])
+  })
+})

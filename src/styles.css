@@ -1,12 +1,13 @@
 /* ==========================================================================
    taipola — instant-rendering markdown editor
    Design notes:
-   - The editing surface is two stacked layers that MUST share identical text
-     metrics (font, size, line-height, padding, wrapping). Any divergence breaks
-     caret alignment, so all shared values live in the variables below and are
-     applied to both a source line and its rendered counterpart.
-   - Body text is monospace on purpose: it is the only way to guarantee the
-     source layer and the rendered layer wrap at exactly the same glyph.
+   - The editing surface is ONE container of line boxes, one per source line
+     (`[data-vline]`), with the caret mapped onto it. The two-layer design that
+     had to keep two layers wrapping at the same glyph is gone (ADR-0001); these
+     values are shared now simply because every text context — body, headings,
+     code, tables — should sit on the same rhythm.
+   - Body text is monospace as a deliberate look. It is no longer load-bearing
+     for caret alignment, which is what the old comment here claimed.
    ========================================================================== */
 
 @import 'highlight.js/styles/github.css';
@@ -492,6 +493,28 @@ body {
   font-size: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* A paragraph the author wrapped across several source lines is ONE visual line.
+   Markdown says a lone newline inside a paragraph is a space, and the exporter has
+   always rendered it that way (`breaks: false` in `core/markdownIt.ts`), so the
+   view renders it that way too — before this, the two disagreed about the same
+   document.
+
+   The line BOXES stay one per source line: the caret arithmetic maps offsets to
+   line boxes, and `domToLocal` accumulates one line box per source line. What
+   changes is only layout — both ends of a soft break are inline-level, so a run of
+   them forms ONE anonymous block that the browser wraps by column width, exactly
+   as the exported `<p>` does. The break itself comes back as the space it means,
+   from a pseudo-element: pseudo content is not in the DOM, so rebuilding the
+   source from the DOM still sees the newline. */
+.vl-soft,
+.vl-continues {
+  display: inline;
+}
+
+.vl-soft::after {
+  content: ' ';
 }
 
 /* Collapsed syntax markers contribute no width but keep their text in the DOM,

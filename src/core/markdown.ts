@@ -30,6 +30,17 @@ export interface Block {
   headingLevel: number
   /** Plain-text heading content, for the outline. */
   headingText: string
+  /**
+   * Block-local line indices whose trailing newline is a SOFT break.
+   *
+   * A single newline inside a paragraph means a space, not a line ending: the
+   * renderer has always treated it that way (`breaks: false` in `markdownIt.ts`)
+   * and the view must too, or the same document reads one way on screen and
+   * another way in the export. Which newlines are soft is block structure —
+   * `- a\n- b` is two items, `- a\n  b` is one item on two lines — so it is read
+   * from markdown-it's own tokens rather than re-derived.
+   */
+  softBreakAfter: number[]
 }
 
 export interface ParsedDocument {
@@ -82,6 +93,8 @@ interface RawRange {
   endLine: number
   headingLevel: number
   headingText: string
+  /** Absolute source lines whose trailing newline is a soft break. */
+  softBreakLines: number[]
 }
 
 /**
@@ -112,6 +125,30 @@ function findRelocatedLines(tokens: MarkdownToken[]): Set<number> {
 }
 
 /**
+ * Every absolute source line whose trailing newline is a soft break.
+ *
+ * Read from markdown-it's own inline children, which is the only thing that can
+ * answer this: whether a newline is soft depends on block structure. The position
+ * is exact without any bookkeeping, because an inline token's content is built
+ * from its lines in order, so the k-th break token belongs to the k-th newline of
+ * the token's line span. Hard breaks (`two trailing spaces`) consume a newline
+ * too, so they advance the counter without being reported.
+ */
+function softBreakLines(tokens: MarkdownToken[]): Set<number> {
+  const soft = new Set<number>()
+  for (const token of tokens) {
+    if (token.type !== 'inline' || !token.map || !token.children) continue
+    const firstLine = token.map[0]
+    let offset = 0
+    for (const child of token.children) {
+      if (child.type === 'softbreak') soft.add(firstLine + offset)
+      if (child.type === 'softbreak' || child.type === 'hardbreak') offset += 1
+    }
+  }
+  return soft
+}
+
+/**
  * Collects the top-level source ranges that make up the document body.
  *
  * Depth is tracked with markdown-it's own `nesting` field rather than by pairing
@@ -127,6 +164,7 @@ function collectRanges(tokens: MarkdownToken[]): {
 } {
   const ranges: RawRange[] = []
   const relocated = findRelocatedLines(tokens)
+  const soft = softBreakLines(tokens)
   let depth = 0
 
   for (let i = 0; i < tokens.length; i++) {
@@ -141,6 +179,7 @@ function collectRanges(tokens: MarkdownToken[]): {
         endLine: span[1],
         headingLevel: token.type === 'heading_open' ? Number(token.tag.slice(1)) : 0,
         headingText: token.type === 'heading_open' ? toPlainText(inline) : '',
+        softBreakLines: [...soft].filter((line) => line >= span[0] && line < span[1]),
       })
     }
 
@@ -155,7 +194,7 @@ function collectRanges(tokens: MarkdownToken[]): {
   }
   for (const line of relocated) {
     if (!claimed.has(line)) {
-      ranges.push({ startLine: line, endLine: line + 1, headingLevel: 0, headingText: '' })
+      ranges.push({ startLine: line, endLine: line + 1, headingLevel: 0, headingText: '', softBreakLines: [] })
     }
   }
 
@@ -190,7 +229,7 @@ export function parseDocument(source: string): ParsedDocument {
     if (claimedLines.has(line) || !FOOTNOTE_DEFINITION.test(lines[line])) continue
     let end = line + 1
     while (end < lines.length && /^\s+\S/.test(lines[end])) end++
-    ranges.push({ startLine: line, endLine: end, headingLevel: 0, headingText: '' })
+    ranges.push({ startLine: line, endLine: end, headingLevel: 0, headingText: '', softBreakLines: [] })
     for (let l = line; l < end; l++) {
       claimedLines.add(l)
       relocated.add(l)
@@ -207,7 +246,13 @@ export function parseDocument(source: string): ParsedDocument {
     lineStarts.push(lineStarts[line] + (lines[line]?.length ?? 0) + 1)
   }
 
-  const pushBlock = (startLine: number, endLine: number, headingLevel = 0, headingText = '') => {
+  const pushBlock = (
+    startLine: number,
+    endLine: number,
+    headingLevel = 0,
+    headingText = '',
+    softBreakLines: number[] = [],
+  ) => {
     if (endLine <= startLine) return
     let raw = ''
     for (let line = startLine; line < endLine; line++) {
@@ -226,6 +271,10 @@ export function parseDocument(source: string): ParsedDocument {
       raw: text,
       headingLevel,
       headingText,
+      // Block-local, and only the ones this block actually renders as lines.
+      softBreakAfter: softBreakLines
+        .filter((line) => line >= startLine && line < endLine)
+        .map((line) => line - startLine),
     })
     lineCursor = endLine
   }
@@ -239,6 +288,7 @@ export function parseDocument(source: string): ParsedDocument {
       raw: '',
       headingLevel: 0,
       headingText: '',
+      softBreakAfter: [],
     })
     lineCursor = endLine
   }
@@ -247,7 +297,13 @@ export function parseDocument(source: string): ParsedDocument {
     // Gap lines between two rendered blocks: keep them as blank blocks so the
     // caret can always be addressed to a block.
     if (range.startLine > lineCursor) pushBlank(lineCursor, range.startLine)
-    pushBlock(range.startLine, range.endLine, range.headingLevel, range.headingText)
+    pushBlock(
+      range.startLine,
+      range.endLine,
+      range.headingLevel,
+      range.headingText,
+      range.softBreakLines,
+    )
   }
 
   // Trailing lines after the last rendered block.

@@ -166,3 +166,17 @@ describe('computeStats', () => {
     expect(computeStats('').lines).toBe(1)
   })
 })
+
+describe('软换行（段落内单换行）', () => {
+  it('标出哪一行的行尾换行是软换行，用块内行号', () => {
+    expect(parseDocument('alpha beta\ngamma delta\n').blocks[0].softBreakAfter).toEqual([0])
+    // 同一个列表项的续行是软换行……
+    expect(parseDocument('- a\n  b\n').blocks[0].softBreakAfter).toEqual([0])
+    // ……两个列表项之间不是
+    expect(parseDocument('- a\n- b\n').blocks[0].softBreakAfter).toEqual([])
+    // 硬换行（行尾两个空格）不是软换行
+    expect(parseDocument('a  \nb\n').blocks[0].softBreakAfter).toEqual([])
+    // 围栏里的换行是字面内容
+    expect(parseDocument('```\na\nb\n```\n').blocks[0].softBreakAfter).toEqual([])
+  })
+})

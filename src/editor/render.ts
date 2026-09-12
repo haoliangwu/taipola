@@ -147,12 +147,20 @@ function lineElement(
   index: number,
   state: LineState | undefined,
   raw: string,
+  continuesPrevious: boolean,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-vline') ? existing : document.createElement('div')
   setAttr(el, 'data-vline', String(index))
   setAttr(el, 'data-src', String(line.sourceStart))
-  const revealed = line.runs.some((run) => run.dim)
-  const className = revealed ? `${lineClass(state)} revealed` : lineClass(state)
+  const classes = [lineClass(state)]
+  if (line.runs.some((run) => run.dim)) classes.push('revealed')
+  // A paragraph written across several source lines is ONE visual line: markdown
+  // says a lone newline there is a space (the export has always rendered it that
+  // way). Both ends of a soft break go inline, which is what makes the browser
+  // lay them out on one line and wrap by column width.
+  if (line.softBreak) classes.push('vl-soft')
+  if (continuesPrevious) classes.push('vl-continues')
+  const className = classes.join(' ')
   if (el.className !== className) el.className = className
   const indent = String(state?.indent ?? 0)
   if (el.style.getPropertyValue('--vl-indent') !== indent) {
@@ -227,7 +235,14 @@ function blockElement(
   syncChildren(el, view.lines.length, (index, current) => {
     const line = view.lines[index]
     const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
-    return lineElement(current, line, index, lineStates[block.startLine + index], raw)
+    return lineElement(
+      current,
+      line,
+      index,
+      lineStates[block.startLine + index],
+      raw,
+      view.lines[index - 1]?.softBreak === true,
+    )
   })
   return el
 }
@@ -299,7 +314,8 @@ export function markupSignature(
       const line = view.lines[li]
       const state = lineStates[block.startLine + li]
       const revealed = line.runs.some((run) => run.dim) ? '!' : ''
-      parts.push(`${lineClass(state)}${revealed}:${state?.indent ?? 0}:${line.sourceStart}`)
+      const soft = `${line.softBreak ? 's' : ''}${view.lines[li - 1]?.softBreak ? 'c' : ''}`
+      parts.push(`${lineClass(state)}${revealed}${soft}:${state?.indent ?? 0}:${line.sourceStart}`)
       for (const run of line.runs) {
         const flags =
           `${run.marker ? 'm' : ''}${run.dim ? 'd' : ''}${run.mark.bold ? 'b' : ''}` +

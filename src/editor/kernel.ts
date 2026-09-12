@@ -209,7 +209,13 @@ export class EditorKernel {
       // A blank block's span covers possibly several source lines (raw is
       // empty); render one line box per blank line so the view mirrors the
       // document exactly.
-      return buildBlockView(block.raw, start, revealed, block.endLine - block.startLine)
+      return buildBlockView(
+        block.raw,
+        start,
+        revealed,
+        block.endLine - block.startLine,
+        block.softBreakAfter,
+      )
     })
   }
 
