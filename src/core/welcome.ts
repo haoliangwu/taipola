@@ -112,7 +112,9 @@ echo "hello, taipola"
 
 ## 图片与链接
 
-![示例图片](https://pic1.zhimg.com/v2-11005a90e751b84eb1e2a0bb33c1c142_l.jpg?source=32738c0c&needBackground=1)
+图片也是支持的啦：下面这张是我的自拍——黑白配，还翘着一根呆毛。
+
+![taipola 的自拍](https://raw.githubusercontent.com/haoliangwu/taipola/main/docs/logo.webp){width=160}
 
 你随手打出来的网址我也认：https://example.com 就像这样，夹在句子里的 https://example.net 也跑不掉。
 
