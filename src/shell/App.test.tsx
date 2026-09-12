@@ -194,7 +194,7 @@ describe('欢迎文档的名字', () => {
     expect(view.container.querySelector('.doc-name')?.textContent).toBe('报告.md')
 
     const scope = window as typeof window & { __welcome__?: () => string }
-    expect(scope.__welcome__, 'DEV-only helper missing').toBeTypeOf('function')
+    expect(scope.__welcome__, 'console helper missing').toBeTypeOf('function')
     await act(async () => {
       scope.__welcome__?.()
     })

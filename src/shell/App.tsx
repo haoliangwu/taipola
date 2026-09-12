@@ -227,11 +227,16 @@ export default function App() {
     [applyEdit],
   )
 
-  // Development helper: put the welcome document back after it has been
-  // overwritten by whatever you were poking at. From the browser console:
+  // Put the welcome document back after it has been overwritten by whatever you
+  // were poking at. From the browser console:
   //   __welcome__()
+  //
+  // Deliberately in the PRODUCTION bundle too, not behind `import.meta.env.DEV`:
+  // the deployed demo is where poking at the welcome document actually loses it,
+  // and there is nothing here to protect — it resets the caller's own draft and
+  // touches no server. The plan is to remove the helper outright rather than to
+  // gate it, so gating it now would only be work thrown away.
   useEffect(() => {
-    if (!import.meta.env.DEV) return
     const scope = window as typeof window & { __welcome__?: () => string }
     scope.__welcome__ = () => {
       // Restores the whole welcome document, not just its text: the title bar
