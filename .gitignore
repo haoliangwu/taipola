@@ -7,3 +7,7 @@ dist-ssr
 *.tsbuildinfo
 .dsh-vision-toolkit
 .pw-browsers
+
+# The issue tracker (see docs/agents/issue-tracker.md). Local working state for
+# this checkout, deliberately absent from the repository's history.
+.scratch/

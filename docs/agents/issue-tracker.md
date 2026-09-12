@@ -1,8 +1,11 @@
 # Issue tracker: Local Markdown
 
 Issues and specs for this repo live as markdown files in `.scratch/`. There is no
-`git remote`, so nothing is published anywhere: these files ARE the tracker, and
-they are committed like any other source of truth.
+`git remote`, so nothing is published anywhere: these files ARE the tracker.
+
+`.scratch/` is listed in `.gitignore` and is deliberately absent from the repository's
+history. It is working state for this checkout, not source: keep the files on disk,
+because losing them loses the tracker.
 
 ## Conventions
 
