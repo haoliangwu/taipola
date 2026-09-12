@@ -65,11 +65,15 @@ export default function App() {
     () =>
       createAutosave({
         write: (draft) => documents.draft.save(draft),
+        // The draft is ONE record shared by every tab (see `core/autosave.ts`), so
+        // this read is how the policy tells its own last write from another tab's.
+        peek: () => documents.draft.load(),
+        onForeignDraft: () => notify('另一个标签页也改过这份草稿，已被当前内容覆盖'),
         setTimer: (run, delayMs) => window.setTimeout(run, delayMs),
         clearTimer: (handle) => window.clearTimeout(handle),
         now: () => Date.now(),
       }),
-    [],
+    [notify],
   )
 
   useEffect(() => {

@@ -24,9 +24,24 @@ export interface Draft {
   savedAt: number
 }
 
-/** Everything the policy needs from the outside world. */
+/**
+ * A draft is ONE global record, not one per tab — deliberately, so two tabs are
+ * two views of the same draft rather than two documents. The cost is that a write
+ * from either tab destroys whatever the other left there, and the tab it happens
+ * to has no way to see it. `peek` is what lets the policy notice.
+ */
 export interface AutosaveDeps {
   write(draft: Draft): void
+  /** The draft currently in storage, or null. Read before every write. */
+  peek(): Draft | null
+  /**
+   * Fired once, just before a draft that some other tab wrote is overwritten.
+   *
+   * The write still happens: a global draft is last-write-wins by definition, and
+   * refusing to write would break the autosave that the rest of this module
+   * exists to provide. What is worth removing is the SILENCE.
+   */
+  onForeignDraft(): void
   /** Schedules `run` and returns a handle for `clearTimer`. */
   setTimer(run: () => void, delayMs: number): number
   clearTimer(handle: number): void
@@ -53,6 +68,22 @@ export const DRAFT_DEBOUNCE_MS = 500
 export function createAutosave(deps: AutosaveDeps): Autosave {
   let pending: Draft | null = null
   let timer: number | null = null
+  /**
+   * The newest `savedAt` this session has either seen or written.
+   *
+   * `savedAt` is when the DOCUMENT changed, not when the write happened, so a
+   * stored record newer than this baseline belongs to a document this session has
+   * never seen — i.e. another tab's.
+   *
+   * Established at CONSTRUCTION rather than at the first write. What the session
+   * loaded on startup is the baseline, and the two-tab ordering that matters is
+   * the other tab writing BEFORE this one's first write: taking the baseline
+   * lazily at that write would adopt the foreign record as our own and never
+   * notice.
+   */
+  let baseline = deps.peek()?.savedAt ?? 0
+  /** Announced already. See `writePending` for why only once. */
+  let announced = false
 
   const stopTimer = () => {
     if (timer === null) return
@@ -67,7 +98,19 @@ export function createAutosave(deps: AutosaveDeps): Autosave {
     // Cleared BEFORE the write: one unload fires both `pagehide` and a hidden
     // `visibilitychange`, and the second one must not write the same draft again.
     pending = null
+
+    const stored = deps.peek()
+    if (!announced && stored !== null && stored.savedAt > baseline) {
+      // Announced at most ONCE per session. The other tab keeps typing, so every
+      // later write would find a newer record again and re-announce it every
+      // debounce window; a toast that never stops is worse than the information
+      // it carries. One is enough to say "there is another tab".
+      announced = true
+      deps.onForeignDraft()
+    }
+
     deps.write(draft)
+    baseline = Math.max(baseline, draft.savedAt)
   }
 
   return {

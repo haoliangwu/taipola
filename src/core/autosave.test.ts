@@ -10,9 +10,17 @@ function fakeBackend() {
   let nextHandle = 1
   const timers = new Map<number, { at: number; run: () => void }>()
   const writes: Draft[] = []
+  const foreign: number[] = []
+  /** What is "in storage": a write goes here too, exactly as localStorage would. */
+  let stored: Draft | null = null
 
   const deps: AutosaveDeps = {
-    write: (draft) => writes.push(draft),
+    write: (draft) => {
+      writes.push(draft)
+      stored = draft
+    },
+    peek: () => stored,
+    onForeignDraft: () => foreign.push(clock),
     setTimer: (run, delayMs) => {
       const handle = nextHandle++
       timers.set(handle, { at: clock + delayMs, run })
@@ -27,6 +35,11 @@ function fakeBackend() {
   return {
     deps,
     writes,
+    foreign,
+    /** Another tab's write: newer record, written behind this session's back. */
+    foreignWrite(draft: Draft) {
+      stored = draft
+    },
     pending: () => timers.size,
     advance(ms: number) {
       clock += ms
@@ -134,5 +147,59 @@ describe('createAutosave', () => {
     autosave.flush()
 
     expect(backend.writes).toEqual([])
+  })
+})
+
+/**
+ * One global draft slot: two tabs are two views of ONE draft, so the second tab's
+ * write really does destroy the first's. Kept as-is, but no longer in silence.
+ */
+describe('另一个标签页写过的草稿', () => {
+  it('自己写的草稿不算冲突', () => {
+    const backend = fakeBackend()
+    const autosave = createAutosave(backend.deps)
+    autosave.schedule({ content: 'a', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    autosave.schedule({ content: 'b', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    expect(backend.writes).toHaveLength(2)
+    expect(backend.foreign).toEqual([])
+  })
+
+  it('盘上是别的标签页写的更新草稿时报一次', () => {
+    const backend = fakeBackend()
+    const autosave = createAutosave(backend.deps)
+    autosave.schedule({ content: 'mine', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    // 另一个标签页在更晚的时间写了它自己那一份。
+    backend.foreignWrite({ content: 'theirs', name: 'x.md', savedAt: 9_999 })
+    autosave.schedule({ content: 'mine again', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    expect(backend.foreign).toHaveLength(1)
+    // 覆盖照旧发生：全局一份就是后写者赢，去掉的是"悄悄"。
+    expect(backend.writes.at(-1)?.content).toBe('mine again')
+  })
+
+  it('只报一次：对方还在写，不能每个防抖窗口都弹一次', () => {
+    const backend = fakeBackend()
+    const autosave = createAutosave(backend.deps)
+    autosave.schedule({ content: 'a', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    for (const savedAt of [9_999, 10_000, 10_001]) {
+      backend.foreignWrite({ content: 'theirs', name: 'x.md', savedAt })
+      autosave.schedule({ content: `mine ${savedAt}`, name: 'x.md' })
+      backend.advance(DRAFT_DEBOUNCE_MS)
+    }
+    expect(backend.foreign).toHaveLength(1)
+  })
+
+  it('启动时加载到的那份是基线，不是冲突', () => {
+    const backend = fakeBackend()
+    // 启动时加载到的草稿（时间在过去）：它是"我们自己的"，不是冲突。
+    backend.foreignWrite({ content: 'loaded', name: 'x.md', savedAt: -1_000 })
+    const autosave = createAutosave(backend.deps)
+    autosave.schedule({ content: 'typed', name: 'x.md' })
+    backend.advance(DRAFT_DEBOUNCE_MS)
+    expect(backend.foreign).toEqual([])
   })
 })

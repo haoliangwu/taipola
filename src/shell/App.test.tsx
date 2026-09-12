@@ -347,3 +347,66 @@ describe('丢弃未保存内容前的确认', () => {
     }
   })
 })
+
+/**
+ * The draft is ONE global record, shared by every tab — decided, not accidental.
+ *
+ * So a write from either tab destroys whatever the other put there, and that part
+ * stays: a global draft is last-write-wins by definition, and refusing to write
+ * would break the autosave the rest of the module exists for. What is removed is
+ * the SILENCE, and this is the only test that reaches the wiring — the policy
+ * itself is unit-tested in `core/autosave.test.ts`.
+ */
+describe('草稿是全局一份', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('另一个标签页写过更新的草稿时提示一次，并且仍然覆盖', async () => {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '原来的\n', name: '报告.md', savedAt: 1_000 }),
+    )
+    const view = render(<App />)
+    // The other tab wrote after this one loaded its draft — and, importantly,
+    // BEFORE this tab's first write, which is the ordering that actually happens.
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '别的标签页写的\n', name: '报告.md', savedAt: 9_999 }),
+    )
+
+    const user = userEvent.setup({ delay: null })
+    const doc = view.container.querySelector('.doc') as HTMLElement
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+    if (!run?.firstChild) throw new Error('first run has no text node')
+    placeCaretAt(run.firstChild, 0)
+    await user.keyboard('X')
+    // 越过防抖窗口。
+    await new Promise((resolve) => setTimeout(resolve, 700))
+
+    expect(view.container.querySelector('.toast')?.textContent).toContain('另一个标签页')
+    // 后写者赢：这话说得出口，前提是它真的发生了。
+    expect(JSON.parse(localStorage.getItem('taipola:draft') ?? '{}').content).toBe('X原来的\n')
+    view.unmount()
+  })
+
+  it('只有一个标签页时不提示', async () => {
+    localStorage.setItem(
+      'taipola:draft',
+      JSON.stringify({ content: '原来的\n', name: '报告.md', savedAt: 1_000 }),
+    )
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    const doc = view.container.querySelector('.doc') as HTMLElement
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+    if (!run?.firstChild) throw new Error('first run has no text node')
+    placeCaretAt(run.firstChild, 0)
+    await user.keyboard('X')
+    await new Promise((resolve) => setTimeout(resolve, 700))
+
+    expect(view.container.querySelector('.toast')?.textContent ?? '').not.toContain('另一个标签页')
+    view.unmount()
+  })
+})
