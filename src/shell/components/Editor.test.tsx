@@ -5,6 +5,8 @@ import {
   pressBackspace,
   pressEnter,
   pressShiftEnter,
+  pressUndo,
+  pressRedo,
   clickInRun,
   clickAtLine,
   assertDomMatchesSource,
@@ -178,6 +180,75 @@ describe('撤销 / 数据完整性（回归）', () => {
     expect(doc).toContain('标')
     await assertDomMatchesSource(r)
   })
+
+  it('撤销之后的第一次编辑仍然可以撤销', async () => {
+    const r = renderEditor('一段文字\n\n第二段\n')
+    await clickInRun(r, 0, 0, 0, 'end')
+    await r.user.keyboard('A')
+    await flush()
+    expect(r.getDoc()).toBe('一段文字A\n\n第二段\n')
+
+    await pressUndo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字\n\n第二段\n')
+
+    await r.user.keyboard('B')
+    await flush()
+    expect(r.getDoc()).toBe('一段文字B\n\n第二段\n')
+
+    // 撤销之后的第一笔编辑同样要进撤销栈。修复前 pushUndo 拿 lastSnapshot 去重，
+    // 而 undo 刚把 lastSnapshot 写成"恢复后的状态"＝当前文档，于是这次编辑的
+    // pre-state 被当成重复丢掉；栈已空，Ctrl+Z 静默无反应，文档停在 `一段文字B`。
+    await pressUndo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字\n\n第二段\n')
+  })
+
+  it('撤销后再编辑再撤销：只退一步，不多吃一层历史', async () => {
+    const r = renderEditor('一段文字\n\n第二段\n')
+    await clickInRun(r, 0, 0, 0, 'end')
+    await r.user.keyboard('A')
+    await flush()
+    await r.user.keyboard('B')
+    await flush()
+    expect(r.getDoc()).toBe('一段文字AB\n\n第二段\n')
+
+    await pressUndo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字A\n\n第二段\n')
+
+    await r.user.keyboard('C')
+    await flush()
+    expect(r.getDoc()).toBe('一段文字AC\n\n第二段\n')
+
+    // 必须只退这一步。修复前上面那一笔的 pre-state 被丢掉，栈顶还是更早的快照，
+    // 一次撤销吃掉两层历史，直接回到 `一段文字`。
+    await pressUndo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字A\n\n第二段\n')
+  })
+
+  it('重做之后的第一次编辑也只退一步（同一规则的另一半）', async () => {
+    const r = renderEditor('一段文字\n\n第二段\n')
+    await clickInRun(r, 0, 0, 0, 'end')
+    await r.user.keyboard('A')
+    await flush()
+    await pressUndo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字\n\n第二段\n')
+
+    await pressRedo(r)
+    await flush()
+    expect(r.getDoc()).toBe('一段文字A\n\n第二段\n')
+
+    await r.user.keyboard('B')
+    await flush()
+    await pressUndo(r)
+    await flush()
+    // 退掉的应该是刚打的 B；修复前 redo 也写 lastSnapshot，B 的 pre-state 被丢，
+    // 这一次撤销连重做一起退回空文档。
+    expect(r.getDoc()).toBe('一段文字A\n\n第二段\n')
+  })
 })
 
 describe('跨块编辑（回归：DOM 与模型必须同步）', () => {
@@ -346,7 +417,10 @@ describe('NotFoundError 回归（换行时不应该有 React removeChild 异常�
     await r.user.pointer({
       target: r.container,
       keys: '[MouseLeft]',
-      coords: { x: 8, y: box.height - 4 },
+      // Viewport coordinates, which is what `coords` means (see clickInRun).
+      // The point is inside the container's bottom-left padding: below the last
+      // line and outside every block, which is the case this test is about.
+      coords: { x: box.left + 4, y: box.bottom - 4 },
     })
     await pressEnter(r)
     await flush()

@@ -124,8 +124,14 @@ function characterBox(node: Node | null, index: number): DOMRect | null {
  * Puts the caret at an offset inside a node and announces it with
  * `selectionchange` — the only signal through which the editor learns where the
  * caret went.
+ *
+ * Exported for tests whose subject is NOT the click: `userEvent`'s pointer
+ * events are untrusted, so the browser runs no default action for them and a
+ * caret that merely has to BE somewhere has to be placed. A test that aims a
+ * synthetic click at a coordinate and then asserts where the caret ended up is
+ * asserting its own fallback, not the browser's hit test.
  */
-function applyCaretAt(node: Node, offset: number): void {
+export function placeCaretAt(node: Node, offset: number): void {
   const range = document.createRange()
   range.setStart(node, offset)
   range.collapse(true)
@@ -182,7 +188,7 @@ export async function clickInRun(
   const y = elRect.top + elRect.height / 2
 
   await r.user.pointer({ target: el, keys: '[MouseLeft]', coords: { x, y } })
-  if (node) applyCaretAt(node, index)
+  if (node) placeCaretAt(node, index)
 }
 
 /**
@@ -207,7 +213,7 @@ export async function clickAtLine(
     coords: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
   })
   const text = [...line.childNodes].find((child) => child.nodeType === Node.TEXT_NODE)
-  applyCaretAt(text ?? line, 0)
+  placeCaretAt(text ?? line, 0)
 }
 
 /** Type text at the current caret — a REAL keystroke sequence. */
@@ -228,6 +234,21 @@ export async function pressEnter(r: Rendering): Promise<void> {
 /** Press Shift+Enter (soft break) — REAL key. */
 export async function pressShiftEnter(r: Rendering): Promise<void> {
   await r.user.keyboard('{Shift>}{Enter}{/Shift}')
+}
+
+/**
+ * Press Ctrl+Z — the editor's own snapshot stack, not the browser's.
+ *
+ * Control rather than Meta: the kernel accepts either (`metaKey || ctrlKey`), and
+ * Control is the one the test runner can send portably.
+ */
+export async function pressUndo(r: Rendering): Promise<void> {
+  await r.user.keyboard('{Control>}z{/Control}')
+}
+
+/** Press Ctrl+Shift+Z — redo on the same snapshot stack. */
+export async function pressRedo(r: Rendering): Promise<void> {
+  await r.user.keyboard('{Control>}{Shift>}z{/Shift}{/Control}')
 }
 
 /** Flush pending React work. */

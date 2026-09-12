@@ -32,13 +32,8 @@ import {
   renderDocument,
   sanitizeDom,
 } from './render'
-import {
-  applyCaret,
-  domToLocal,
-  lineOfOffset,
-  offsetForLine,
-  sourceOffsetAtPoint,
-} from './position'
+import { lineOfOffset, offsetForLine } from '../core/lines'
+import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
 
@@ -85,7 +80,6 @@ export class EditorKernel {
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
-  private lastSnapshot: Snapshot | null = null
 
   constructor(options: EditorKernelOptions) {
     this.hooks = { onChange: options.onChange, onCaretLineChange: options.onCaretLineChange }
@@ -146,7 +140,6 @@ export class EditorKernel {
   setDocument(text: string): void {
     this.undoStack = []
     this.redoStack = []
-    this.lastSnapshot = null
     this.pendingCaret = null
     this.doc = text
     this.caret = 0
@@ -537,14 +530,22 @@ export class EditorKernel {
   }
 
   private pushUndo(snapshot: Snapshot): void {
-    // Skip only when this exact state was already the last pushed snapshot. A
-    // seeded placeholder value would silently eat the first edit's pre-state and
-    // make that edit impossible to undo.
-    if (this.lastSnapshot && this.lastSnapshot.value === snapshot.value) return
+    // Skip only when this exact state is already on TOP of the stack (which would
+    // make an undo step a no-op). A seeded placeholder value would silently eat
+    // the first edit's pre-state and make that edit impossible to undo, so the
+    // comparison has to be against a real pushed snapshot.
+    //
+    // The top of the stack, NOT a separate "last pushed" field: after an undo the
+    // stack has moved, so the top is an older state and the incoming snapshot is
+    // right to be pushed. A separate field that `undo()` also wrote would still
+    // name the state just restored — i.e. the current document — and swallow the
+    // first edit after every undo: Ctrl+Z then did nothing (empty stack) or
+    // jumped an extra step back (non-empty stack).
+    const top = this.undoStack[this.undoStack.length - 1]
+    if (top && top.value === snapshot.value) return
     this.undoStack.push(snapshot)
     if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift()
     this.redoStack = []
-    this.lastSnapshot = snapshot
   }
 
   private undo(redo: boolean): void {
@@ -553,7 +554,6 @@ export class EditorKernel {
     const snapshot = from.pop()
     if (!snapshot) return
     to.push({ value: this.doc, caret: this.caret })
-    this.lastSnapshot = snapshot
     this.commit(snapshot.value, snapshot.caret)
   }
 }
