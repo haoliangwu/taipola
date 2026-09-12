@@ -345,12 +345,12 @@ export default function App() {
         <span className="statusbar-spacer" />
         <span>约 {stats.readingMinutes} 分钟读完</span>
         <span>行 {caretLine}</span>
-        <span className={dirty ? 'status-dirty' : 'status-clean'}>
-          {dirty ? '未保存' : '已同步'}
-        </span>
-        <span className="status-hint">
-          {documents.supportsWriteBack() ? '支持写回原文件' : '浏览器不支持写回，保存即下载'}
-        </span>
+        {/* Only the warning is stated. "已同步" claimed a synchronisation that does
+            not exist here — `savedValue` tracks the last write to a FILE, while the
+            draft is written to localStorage continuously, so the word described
+            neither. Nothing is lost by saying nothing when all is well: a save still
+            announces itself with a toast, and the title bar carries the dirty dot. */}
+        {dirty && <span className="status-dirty">未保存</span>}
       </footer>
 
       {toast && <div className="toast">{toast}</div>}

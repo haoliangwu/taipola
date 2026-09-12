@@ -13,9 +13,11 @@
  * used to learn it from `supportsFileSystemAccess()` and branch three times —
  * open, save, status-bar sentence — and had to catch a `UserCancelled`
  * exception to tell "the user declined" apart from a real failure. Neither
- * survives this interface: declining is a returned result, and the capability
- * question is asked exactly once, as `supportsWriteBack()`, to pick one sentence
- * of status-bar text.
+ * survives this interface: declining is a returned result, and the shell no
+ * longer asks which adapter it is talking to at all. (It briefly did, through a
+ * `supportsWriteBack()` used to pick one sentence of status-bar text. The
+ * sentence is gone, and so is the last way for the capability to leak out of
+ * here — which is what this seam was for.)
  *
  * The save policy itself (write back when we hold a file; pick a destination on
  * "save as" or for a new document; download otherwise) is shared and lives here,
@@ -96,8 +98,6 @@ export interface Documents {
   exportHtml(source: string, name: string): void
   /** Downloads the markdown source as a `.md` file named after `name`. */
   exportMarkdown(text: string, name: string): void
-  /** Whether a save can reach the same file again — for the status-bar sentence. */
-  supportsWriteBack(): boolean
   draft: DraftStore
 }
 
@@ -198,8 +198,6 @@ export function createDocuments(adapter: StorageAdapter): Documents {
     exportMarkdown(text, name) {
       adapter.download(text, markdownFileName(name), MARKDOWN_MIME)
     },
-
-    supportsWriteBack: () => adapter.writeBack,
 
     draft: localStorageDraft,
   }

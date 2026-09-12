@@ -121,11 +121,6 @@ describe('save：不支持写回时走下载', () => {
 
     expect(downloads[0].filename).toBe('report.md')
   })
-
-  it('supportsWriteBack 只反映适配器的能力', () => {
-    expect(createDocuments(downloadOnly([])).supportsWriteBack()).toBe(false)
-    expect(createDocuments(writeBack([], [])).supportsWriteBack()).toBe(true)
-  })
 })
 
 describe('save：支持写回时写回原文件', () => {
