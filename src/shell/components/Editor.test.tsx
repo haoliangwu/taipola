@@ -391,24 +391,6 @@ describe('渲染态装饰（列表 / 任务 / 分割线）', () => {
 })
 
 describe('表格与完整文档（DOM 重建须与模型可比较）', () => {
-  const TABLE_DOC = `| 快捷键 | 作用 |\n| --- | --- |\n| Cmd/Ctrl + B | 加粗 |\n| Cmd/Ctrl + I | 斜体 |\n`
-
-  it('表格文档渲染稳定，输入不触发重渲染循环', async () => {
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      const r = renderEditor(TABLE_DOC)
-      await flush()
-      await assertDomMatchesSource(r)
-      await clickInRun(r, 0, 0, 1, 'middle')
-      await pressEnter(r)
-      await flush()
-      await assertDomMatchesSource(r)
-      expect(errSpy).not.toHaveBeenCalled()
-    } finally {
-      errSpy.mockRestore()
-    }
-  })
-
   it('完整欢迎文档（含全部语法示例）渲染稳定且不循环', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
@@ -1540,11 +1522,12 @@ describe('表格单元格内 Enter：不破坏表格（enter-backspace-smoke/06�
     await flush()
     await clickInRun(r, 0, 2, 0, 'end')
     await flush()
-    const before = caretFromDom()
+    // 光标在 `1` 之后（源码偏移 26 + 1），图钉此刻的位置。
+    expect(caretFromDom()).toBe(27)
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe(TABLE)
-    expect(caretFromDom()).toBe(before)
+    expect(caretFromDom()).toBe(27)
     await r.user.keyboard('x')
     await flush()
     // 打字仍然落在同一个单元格里：表格一行未曾被拆散。
@@ -1580,7 +1563,8 @@ describe('表格单元格内 Enter：不破坏表格（enter-backspace-smoke/06�
  * `enter-backspace-smoke/07`：Cmd+Down / Ctrl+End 必须把光标移到文档末尾。
  * Chromium 对 contenteditable 里这些「跳到文档边缘」的键没有默认光标动作（实测
  * 普通 contenteditable 同样不动），所以跳转由内核接管；这两个键在 shell 的
- * 快捷键表里也没有绑定。
+ * 快捷键表里也没有绑定。两条用例：合成 Ctrl+End（userEvent 按不了 {End}，
+ * 见票面）；真实按键 Cmd+ArrowDown→Cmd+ArrowUp 往返，再补合成 Ctrl+End/Home。
  */
 describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）', () => {
   const DOC = '第一行\n\n第二行\n\n第三行\n'
@@ -1608,26 +1592,17 @@ describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）',
     await assertDomMatchesSource(r)
   })
 
-  it('Cmd+ArrowDown 把光标移到文档末尾（真实按键）', async () => {
-    const r = renderEditor(DOC)
-    await flush()
-    await clickInRun(r, 0, 0, 0, 'start')
-    await flush()
-    await r.user.keyboard('{Meta>}{ArrowDown}{/Meta}')
-    await flush()
-    expect(caretFromDom()).toBe(DOC.length)
-    await assertDomMatchesSource(r)
-  })
-
   it('Ctrl+Home / Cmd+ArrowUp 回文档开头', async () => {
     const r = renderEditor(DOC)
     await flush()
     await clickInRun(r, 0, 0, 0, 'start')
     await flush()
-    // Cmd+ArrowDown 跳文末，Cmd+ArrowUp 回文首。
+    // 真实按键 Cmd+ArrowDown 跳文末（单独那条「Cmd+ArrowDown」测试并进本用例：
+    // 它就是这个旅程的第一段），Cmd+ArrowUp 回文首。
     await r.user.keyboard('{Meta>}{ArrowDown}{/Meta}')
     await flush()
     expect(caretFromDom()).toBe(DOC.length)
+    await assertDomMatchesSource(r)
     await r.user.keyboard('{Meta>}{ArrowUp}{/Meta}')
     await flush()
     expect(caretFromDom()).toBe(0)

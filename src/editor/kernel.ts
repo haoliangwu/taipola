@@ -469,15 +469,15 @@ export class EditorKernel {
     // selection the kernel does not model; they stay untouched
     // (`.scratch/enter-backspace-smoke/issues/07`).
     if (mod && !event.shiftKey && !this.composing && !this.readOnly) {
-      const edge =
-        event.key === 'ArrowDown' || event.key === 'End'
-          ? this.doc.length
-          : event.key === 'ArrowUp' || event.key === 'Home'
-            ? 0
-            : null
-      if (edge !== null) {
+      // The key set for each edge, like every other branch in this handler.
+      if (event.key === 'ArrowDown' || event.key === 'End') {
         event.preventDefault()
-        this.moveCaretToEdge(edge)
+        this.moveCaretToEdge(this.doc.length)
+        return
+      }
+      if (event.key === 'ArrowUp' || event.key === 'Home') {
+        event.preventDefault()
+        this.moveCaretToEdge(0)
         return
       }
     }
