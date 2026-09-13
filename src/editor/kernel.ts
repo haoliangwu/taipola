@@ -600,6 +600,41 @@ export class EditorKernel {
           this.commit(left.doc, left.caret)
           return
         }
+
+        // At a source LINE START that still carries block markup in front (list
+        // marker, task box, quote), Backspace steps OUT of the block — the same
+        // unlist as at the content start — rather than joining the marker onto
+        // the line above (`.scratch/enter-backspace-smoke/issues/03`). Reaching
+        // "the start" via Home lands here (including the document's first
+        // line); clicking lands at the content start, which
+        // `backspaceAtContentStart` already handled. Hop the caret to the same
+        // place so both paths produce the same edit.
+        const line = this.lineBounds(live)
+        if (line.start === live) {
+          const parts = parseLine(line.text)
+          const contentStart = line.start + parts.prefix.length
+          if (contentStart > line.start) {
+            const unlist = backspaceAtContentStart(this.doc, contentStart)
+            if (unlist) {
+              event.preventDefault()
+              this.pushUndo({ value: this.doc, caret: this.caret })
+              this.commit(unlist.doc, unlist.caret)
+              return
+            }
+          }
+        }
+
+        // The first FENCED line's own start: the line above is the fence
+        // marker, and joining would glue code onto the fence
+        // (`.scratch/enter-backspace-smoke/issues/05`). Do nothing rather than
+        // damage the block; other code lines still join the code line above.
+        if (line.start === live) {
+          const lineNumber = lineOfOffset(this.doc, line.start)
+          if (this.lineStates[lineNumber - 2]?.kind === 'fence') {
+            event.preventDefault()
+            return
+          }
+        }
       }
     }
 

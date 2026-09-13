@@ -1525,6 +1525,86 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
 })
 
 /**
+ * 行首退格 vs 结构行（`enter-backspace-smoke/03`、`05`）：
+ * Home 到达的是源码行首（标记之前），点击到达的是内容开头；两条路都必须先退出
+ * 块结构（unlist / unquote），而不是把标记当文本拼进上一行。
+ */
+describe('行首退格对结构行的处理', () => {
+  it('列表项行首（Home 落点）退格：先取消列表，不把上一行拼进来', async () => {
+    const r = renderEditor('1. aaa\n2. b\n3. ccc\n')
+    await flush()
+    // 让第三项 revealed（标记显现），光标放到标记开头 = Home 的落点。
+    await clickInRun(r, 0, 2, 0, 'start')
+    await flush()
+    const marker = r.blockEl(0)?.querySelector<HTMLElement>('[data-vline="2"] [data-run="0"]')
+    if (!marker?.firstChild) throw new Error('没有列表标记 run')
+    placeCaretAt(marker.firstChild, 0)
+    await flush()
+    expect(caretFromDom()).toBe(12) // `1. aaa\n2. b\n` = 12 字符，`3. ` 之前
+    await pressBackspace(r)
+    await flush()
+    // 与内容开头退格同一产物（backspace-unlist/01）：正文落在上一项的内容列。
+    expect(r.getDoc()).toBe('1. aaa\n2. b\n   ccc\n')
+    expect(caretFromDom()).toBe(15)
+    await assertDomMatchesSource(r)
+  })
+
+  it('任务项行首退格同样取消列表', async () => {
+    const r = renderEditor('- [x] aaa\n- bbb\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    const marker = r.blockEl(0)?.querySelector<HTMLElement>('[data-vline="0"] [data-run="0"]')
+    if (!marker?.firstChild) throw new Error('没有任务标记 run')
+    placeCaretAt(marker.firstChild, 0)
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    // 第一项：退化成普通段落（没有上一项的内容列可继承）。
+    expect(r.getDoc()).toBe('aaa\n- bbb\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('引用行行首退格：退出引用，不把上一行吞进来', async () => {
+    const r = renderEditor('> 甲\n> 乙\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'start')
+    await flush()
+    const marker = r.blockEl(0)?.querySelector<HTMLElement>('[data-vline="1"] [data-run="0"]')
+    if (!marker?.firstChild) throw new Error('没有引用标记 run')
+    placeCaretAt(marker.firstChild, 0)
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    // 与"正文开头退格"同样的产物：正文落在引用的内容列（2 个空位）。
+    expect(r.getDoc()).toBe('> 甲\n  乙\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('代码块第一行行首退格：不把代码粘进围栏（no-op）', async () => {
+    const r = renderEditor('```\ncode\n```\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'start')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\ncode\n```\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('代码块第二行行首退格：仍合并上一行代码', async () => {
+    const r = renderEditor('```\n甲\n乙\n```\n')
+    await flush()
+    await clickInRun(r, 0, 2, 0, 'start')
+    await flush()
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\n甲乙\n```\n')
+    await assertDomMatchesSource(r)
+  })
+})
+
+/**
  * The last hop of the autolink fix: the DOM.
  *
  * `core/view.test.ts` proves a bare URL becomes a run carrying an href, and
