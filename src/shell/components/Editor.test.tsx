@@ -36,7 +36,7 @@ describe('标题（block 级标记）', () => {
     r = renderEditor(WELCOME)
   })
 
-  it('点击标题文本中间后按 Enter，标题按光标位置拆成两行', async () => {
+  it('点击标题文本中间后按 Enter，标题从光标处拆成两段', async () => {
     await clickInRun(r, 0, 0, 1, 'middle')
     const heading = WELCOME.split('\n')[0]
     // 这次点击真的落在文字中间（修复前助手一律落行尾，用例名不副实）：
@@ -47,22 +47,25 @@ describe('标题（block 级标记）', () => {
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    expect(doc.split('\n').length).toBeGreaterThan(1)
-    // 标题在光标处断成两行：两半拼回去正好还是原来那一行标题。
-    const [first, second] = doc.split('\n')
-    expect(first + second).toBe(heading)
+    const lines = doc.split('\n')
+    expect(lines.length).toBeGreaterThan(3)
+    // 硬换行（Enter）在光标处拆段：两半之间隔一个空行，拼回去正好还是那行标题
+    // （`enter-backspace-smoke/01`）。
+    expect(lines[1]).toBe('')
+    expect(lines[0] + lines[2]).toBe(heading)
     await assertDomMatchesSource(r)
   })
 
-  it('点击标题行末按 Enter，标题下新增一个空行', async () => {
+  it('点击标题行末按 Enter，标题下开出两个空行（硬换行）', async () => {
     await clickInRun(r, 0, 0, 1, 'end')
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    expect(doc).toMatch(/^# 欢迎使用 taipola\n\n\n/)
-    // 光标必须落在新开的那一行行首，而不是插入点之后一行（ADR §7 第 1 条）。
-    // 手工推算：标题 14 字，行尾偏移 14；新行起始于 15。旧算术 `at + 1` 给 16。
-    expect(caretFromDom()).toBe(15)
+    // Enter 是硬换行：比软换行（Shift+Enter）多一个空行。标题 14 字 + 4 个换行
+    // （原段尾 1 个 + Enter 插入两个 + 原分隔换行 1 个）。
+    expect(doc).toMatch(/^# 欢迎使用 taipola\n\n\n\n/)
+    // 光标落在第一个新换行之后（插入点 at=15，偏移 16 = 第 1 个新空行行首）。
+    expect(caretFromDom()).toBe(16)
     await assertDomMatchesSource(r)
   })
 
@@ -71,9 +74,9 @@ describe('标题（block 级标记）', () => {
     await clickInRun(p, 0, 0, 0, 'end')
     await pressEnter(p)
     await flush()
-    expect(p.getDoc()).toBe('一段文字\n\n\n第二段\n')
-    // 同上：段落 4 字，行尾偏移 4，新行起始于 5。
-    expect(caretFromDom()).toBe(5)
+    expect(p.getDoc()).toBe('一段文字\n\n\n\n第二段\n')
+    // 同上：段落 4 字，行尾偏移 4，新行起始于 6（Enter 插入两个换行）。
+    expect(caretFromDom()).toBe(6)
     await assertDomMatchesSource(p)
   })
 
@@ -482,19 +485,20 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await pressEnter(r)
-    await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
-    // 两次回车都要把光标带到新开的空行上（ADR §7 S5：修复前光标停在下一段行首）。
-    // 手工推算：段 5 字，第一次回车后新行起始于 6，第二次回车后起始于 7。
+    // 硬换行（`enter-backspace-smoke/01`）：Enter 插入两个换行，光标在第一个新空行。
     expect(caretFromDom()).toBe(7)
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('第一段文字\n\n\n\n\n第二段\n')
+    expect(caretFromDom()).toBe(8)
     // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
     await r.user.keyboard('X')
     await flush()
     // 每次回车都在光标所在行"下方"开新行，光标跟着新行走：X 独占一行，
-    // 上下各留一个空行（上行来自第一次回车，下行是第二段前原有的空行）。
-    // 关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
-    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n第二段\n')
+    // 上下各留空行。关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
+    expect(r.getDoc()).toBe('第一段文字\n\n\nX\n\n第二段\n')
     await assertDomMatchesSource(r)
   })
 
@@ -523,14 +527,15 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).toBe('标题行测试\n\n\n')
+    // Enter 是硬换行：行尾（文末）插两个换行，光标落在它们之后（偏移 7），
+    // 再打字就是新段第一行、与标题行隔一个空行。
+    expect(r.getDoc()).toBe('标题行测试\n\n\n\n')
     await r.user.keyboard('第二行')
     await flush()
-    // 打字只插这三个字符：`标题行测试\n第二行\n\n`。这两行在源码里是同一个段落（软换行），
-    // 而现在屏幕上一行对一行，所以"不并回上一行"是真的（`blank-line-typing/01`）。
-    expect(r.getDoc()).toBe('标题行测试\n第二行\n\n')
-    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 换行 1 + `第二行` 3 字 = 9。
-    expect(caretFromDom()).toBe(9)
+    // 第二行落在新空行上，与标题行隔一个空行（`enter-backspace-smoke/01`：硬换行拆段）。
+    expect(r.getDoc()).toBe('标题行测试\n\n第二行\n\n')
+    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 换行 2 + `第二行` 3 字 = 10。
+    expect(caretFromDom()).toBe(10)
     const tops = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
       .filter((el) => (el.textContent ?? '') !== '')
       .map((el) => Math.round(el.getBoundingClientRect().top))
@@ -813,18 +818,18 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('标题行末回车后按退格：只并回一行，不吃掉标题字符', async () => {
+  it('标题行末回车后按退格：只并回一个空行，不吃掉标题字符', async () => {
     const r = renderEditor('# 标题\n\n正文\n')
     await clickInRun(r, 0, 0, 1, 'end')
     await flush()
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).toBe('# 标题\n\n\n正文\n')
+    expect(r.getDoc()).toBe('# 标题\n\n\n\n正文\n')
     await pressBackspace(r)
     await flush()
-    expect(r.getDoc()).toBe('# 标题\n\n正文\n')
-    // 并回一行之后，光标停在接缝上：标题 4 字，接缝就是偏移 4。
-    // （修复前那条路会先被浏览器吃掉一个字符、再让光标脱离所有块。）
+    expect(r.getDoc()).toBe('# 标题\n\n\n正文\n')
+    // 行首合并的既有落点规则：光标停在上一段内容末尾（backspace-join/01）——
+    // `# 标题` 4 字，合并后光标就在偏移 4。
     expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
@@ -844,10 +849,12 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(caretFromDom()).toBe(7) // `## 有序列表` 末尾
     await pressEnter(split)
     await flush()
-    expect(split.getDoc()).toBe('## 有序列表\n\n## 列表嵌套\n')
+    // Enter 是硬换行：多一个空行（`enter-backspace-smoke/01`）。
+    expect(split.getDoc()).toBe('## 有序列表\n\n\n## 列表嵌套\n')
     await pressBackspace(split)
     await flush()
-    expect(split.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
+    expect(split.getDoc()).toBe('## 有序列表\n\n## 列表嵌套\n')
+    // 行首合并的既有落点规则：光标停在上一段内容末尾（`## 有序列表` 7 字 = 偏移 7）。
     expect(caretFromDom()).toBe(7)
 
     // 路径 C2：光标在下一行的行首（源码里的行首，`## ` 之前）。先把光标放进这一行，
@@ -868,7 +875,10 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
     await pressBackspace(atLineStart)
     await flush()
-    expect(atLineStart.getDoc()).toBe(split.getDoc())
+    // 落点规则一致（都停在上一段内容末尾 = 偏移 7），但删掉的 \n 不同：
+    // Enter（硬换行）现在拆出两个空行，C1 一次 Backspace 只收回一个（3 \n → 2 \n），
+    // C2 的起点本来就只有一个空行（2 \n → 1 \n），所以文本必然不同。
+    expect(atLineStart.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
     expect(caretFromDom()).toBe(7)
   })
 
@@ -1295,39 +1305,43 @@ describe('空行上打字只插一个字符', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('回车之后打字：源码 `甲\nx`，两行各自成行', async () => {
+  it('回车之后打字：源码 `甲\n\nx`，两行各自成行', async () => {
     const r = renderEditor('甲')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).toBe('甲\n')
-    expect(caretFromDom()).toBe(2)
+    // Enter 是硬换行：文档末尾行尾回车 = 两个新换行、光标在它们之后（偏移 3），
+    // 打字即新段第一行、与文本隔一个空行（`enter-backspace-smoke/01`）。
+    expect(r.getDoc()).toBe('甲\n\n')
+    expect(caretFromDom()).toBe(3)
 
     await r.user.keyboard('x')
     await flush()
-    // Typora 实测（用户给的例子）：`a` + 回车 + `b` → `a\nb`，两行，不是 `a b`。
-    expect(r.getDoc()).toBe('甲\nx')
+    // Typora 实测（用户给的例子）：Enter 是硬换行，`甲` + 回车 + `x` → 两段两行，
+    // 中间隔着段落间距（源码一个空行），不是并排的 `甲 x`。
+    expect(r.getDoc()).toBe('甲\n\nx')
     expect(contentRows(r).texts).toEqual(['甲', 'x'])
     expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
-  it('段中回车再打字：字符落在光标那一行，空行一个都不多', async () => {
+  it('行尾回车再打字：字符落在光标那一行，空行不多不少', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
+    // 行尾硬换行：原来 1 个空行，回车后 3 个空行、光标在第一个新空行（偏移 3）。
+    expect(r.getDoc()).toBe('甲\n\n\n\n乙\n')
+    expect(caretFromDom()).toBe(3)
 
     await r.user.keyboard('x')
     await flush()
-    // 回车插的那个换行还在原处；打字只补上一个字符。
-    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
+    // 回车插的那两个换行还在原处；打字只补上一个字符。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
@@ -1402,6 +1416,110 @@ describe('空行上打字只插一个字符', () => {
     expect(r.getDoc()).toBe('甲\n写\n乙\n')
     expect(contentRows(r).texts).toEqual(['甲', '写', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
+    await assertDomMatchesSource(r)
+  })
+})
+
+/**
+ * Enter / Shift+Enter 的语义判据来自用户对 Typora 的实测（`enter-backspace-smoke/01、02`）：
+ * Enter 是硬换行、Shift+Enter 是软换行，换行距离前者大、后者小。
+ * 源码表达：段中/行尾 Enter 插两个换行（拆段、多一个空行），Shift+Enter 插一个；
+ * 行首与空行上两键都只插一个换行（维持既有行为），距离差主要体现在段中与行尾。
+ */
+describe('Enter 硬换行 / Shift+Enter 软换行', () => {
+  it('段落中间 Enter：源码插入一个空行，把段落拆成两段', async () => {
+    const r = renderEditor('甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'middle')
+    await flush()
+    const caret = caretFromDom() ?? -1
+    expect(caret).toBe(1) // 甲|乙
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    // 光标在新的后一段行首（`甲\n\n` 之后 = 偏移 3）。
+    expect(caretFromDom()).toBe(caret + 2)
+    const tops = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
+      .filter((el) => (el.textContent ?? '') !== '')
+      .map((el) => Math.round(el.getBoundingClientRect().top))
+    expect(new Set(tops).size).toBe(2)
+    await assertDomMatchesSource(r)
+  })
+
+  it('行尾 Enter 比 Shift+Enter 多留一个空行（换行距离判据）', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n\n\n乙\n')
+    expect(caretFromDom()).toBe(3)
+    await assertDomMatchesSource(r)
+
+    // 同一位置走 Shift+Enter：软换行只加一个空行。
+    const s = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(s, 0, 0, 0, 'end')
+    await flush()
+    await pressShiftEnter(s)
+    await flush()
+    expect(s.getDoc()).toBe('甲\n\n\n乙\n')
+    expect(caretFromDom()).toBe(2)
+    await assertDomMatchesSource(s)
+  })
+
+  it('代码块内 Enter 仍是普通换行（围栏里没有段落可拆）', async () => {
+    const r = renderEditor('```\n甲乙\n```\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\n甲\n乙\n```\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('带尾换行的文末行尾 Enter 再打字：新段隔一个空行', async () => {
+    const r = renderEditor('甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // 行尾已有 \n 可借：Enter 加两个新换行（共三个）、光标在第一个新空行（偏移 3）。
+    expect(r.getDoc()).toBe('甲\n\n\n')
+    expect(caretFromDom()).toBe(3)
+    await r.user.keyboard('x')
+    await flush()
+    // x 占据那个新空行：与甲隔一个空行（`enter-backspace-smoke/01` 的距离判据）。
+    expect(r.getDoc()).toBe('甲\n\nx\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('表格行上 Enter 仍是普通换行（不插入段落边界）', async () => {
+    const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
+    await flush()
+    await clickInRun(r, 0, 2, 0, 'start')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    const doc = r.getDoc()
+    // 表格行没有段落可拆：Enter 只插一个 `\n`，绝不出 `\n\n`（表格单元格
+    // 换行的修法另见 `enter-backspace-smoke/06`）。
+    expect(doc).not.toContain('\n\n')
+    expect(doc.split('\n').length).toBe(5) // 3 行源码 + 尾换行 → 拆行后各 +1
+    await assertDomMatchesSource(r)
+  })
+
+  it('表格分隔行上 Enter 也不插入段落边界', async () => {
+    const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'start')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).not.toContain('\n\n')
     await assertDomMatchesSource(r)
   })
 })

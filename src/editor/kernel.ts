@@ -456,22 +456,26 @@ export class EditorKernel {
       event.preventDefault()
       this.pushUndo({ value: this.doc, caret: this.caret })
       if (event.shiftKey) {
+        // Shift+Enter is the SOFT break: one plain newline, wherever the caret
+        // is. Typora tells the two keys apart by the gap they leave — a soft
+        // break stays inside the paragraph, so its line gap is the small one
+        // (`.scratch/enter-backspace-smoke/issues/02`).
         const at = live ?? this.doc.length
-        this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), at + 1)
+        this.insertNewlines(at, 1, at + 1)
         return
       }
       if (live === null) {
         // Outside the blocks (a click below the last line): append a newline.
-        this.commit(this.doc + '\n', this.doc.length + 1)
+        this.insertNewlines(this.doc.length, 1, this.doc.length + 1)
         return
       }
       const index = this.blockAt(live)
       const block = this.blocks[index]
       if (!block) {
-        this.commit(this.doc + '\n', this.doc.length + 1)
+        this.insertNewlines(this.doc.length, 1, this.doc.length + 1)
         return
       }
-      const { end: lineEnd, text: currentLine } = this.lineBounds(live)
+      const { start: lineStart, end: lineEnd, text: currentLine } = this.lineBounds(live)
       // What a line carries in front of its content — a list marker (`- `, `2. `, a
       // task checkbox), a quote marker (`> `), or several nested (`> - `) — has ONE
       // owner: `parseLine`, which the line-kind pass reads too. Enter repeats that
@@ -481,6 +485,17 @@ export class EditorKernel {
       // code line.
       const parts = parseLine(currentLine)
       const prefix = parts.isFence ? '' : parts.prefix
+
+      // Fenced code (marker or body line), table rows and the `| --- |` delimiter
+      // line have no paragraphs to split: Enter stays a plain newline there.
+      // The table's cell-Enter is its own ticket
+      // (`.scratch/enter-backspace-smoke/issues/06`).
+      const lineNumber = lineOfOffset(this.doc, lineStart)
+      const kind = this.lineStates[lineNumber - 1]?.kind
+      if (kind === 'code' || kind === 'fence' || kind === 'table' || kind === 'table-delim') {
+        this.insertNewlines(live, 1, live + 1)
+        return
+      }
 
       const left = this.leavingEmptyItem(live)
       if (left) {
@@ -507,16 +522,34 @@ export class EditorKernel {
       // the existing '\n') produces the SAME string and made Enter a silent no-op
       // at the end of any line.
       if (live >= lineEnd) {
-        // Insert AFTER the line's own newline so the fresh line opens below it,
-        // but put the caret at the START of that new line (`live + 1`). Using
-        // the insertion point (`at + 1`) overshot by one line whenever the
-        // current line was empty: the caret landed on the start of the NEXT
-        // line's text, so typing glued onto the following paragraph.
+        if (currentLine === '') {
+          // Blank line: one more blank line, exactly as before.
+          const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
+          this.insertNewlines(at, 1, live + 1)
+          return
+        }
+        // Enter is the HARD break: it leaves a paragraph gap, i.e. one blank
+        // line MORE than Shift+Enter's plain newline — the source-level
+        // difference Typora shows as "Enter 的换行距离比 Shift+Enter 大"
+        // (`.scratch/enter-backspace-smoke/issues/01`). The caret lands at the
+        // start of the FIRST fresh line (`at + 1`), so typing right after Enter
+        // opens a paragraph of its own, an empty line above and below it. At
+        // the very END of the document, when the line has NO trailing newline
+        // (`lineEnd === doc.length`), both fresh lines trail the text and the
+        // caret goes past them (`at + 2`): typing then starts the new paragraph
+        // one blank line below.
         const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
-        this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), live + 1)
+        this.insertNewlines(at, 2, lineEnd === this.doc.length ? at + 2 : at + 1)
         return
       }
-      this.commit(this.doc.slice(0, live) + '\n' + this.doc.slice(live), live + 1)
+      // Line START: an empty line opens above (unchanged).
+      if (live === lineStart) {
+        this.insertNewlines(live, 1, live + 1)
+        return
+      }
+      // MID-line: the hard break splits the paragraph here — one blank line
+      // between the two halves, caret on the second half's first character.
+      this.insertNewlines(live, 2, live + 2)
       return
     }
 
@@ -649,6 +682,16 @@ export class EditorKernel {
     // number survives, offsets do not.
     const doc = renumberLists(withoutMarker)
     return { doc, caret: offsetForLine(doc, lineNumber) }
+  }
+
+  /**
+   * Insert `n` newlines at `at` and commit, caret given explicitly. Every Enter
+   * branch reduces to this one shape: `n = 2` is the hard break (one blank line
+   * more than the soft single newline), `n = 1` the soft one or a plain line
+   * append. The caller pushes the undo snapshot first.
+   */
+  private insertNewlines(at: number, n: 1 | 2, caret: number): void {
+    this.commit(this.doc.slice(0, at) + '\n'.repeat(n) + this.doc.slice(at), caret)
   }
 
   /**
