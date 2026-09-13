@@ -7,9 +7,11 @@ codebase.
 
 - **`CONTEXT.md`** at the repo root — the glossary. It does not exist yet; see "Lazy creation"
   below.
-- **`docs/adr/`**: read the ADRs that touch the area you are about to work in. Today there is
-  one: `docs/adr/0001-editor-core-native.md` (the editor core is a native kernel; React renders
-  only the shell).
+- **`docs/adr/`**: read the ADRs that touch the area you are about to work in. Today there are
+  three: `docs/adr/0001-editor-core-native.md` (the editor core is a native kernel; React renders
+  only the shell), `0002-caret-invariants-and-pitfalls.md` (caret arithmetic invariants —
+  required before touching block collection or caret code), `0003-image-size-syntax.md` (the
+  `{width=…}` inline syntax).
 
 If any of these files do not exist, **proceed silently**. Do not flag their absence and do not
 suggest creating them upfront.
@@ -28,8 +30,10 @@ Single-context repo:
 /
 ├── CONTEXT.md              ← glossary, once it exists
 ├── docs/
-│   ├── adr/
-│   │   └── 0001-editor-core-native.md
+│   ├── adr/               ← one file per decision
+│   │   ├── 0001-editor-core-native.md
+│   │   ├── 0002-caret-invariants-and-pitfalls.md
+│   │   └── 0003-image-size-syntax.md
 │   └── agents/             ← configuration for these skills
 └── src/
     ├── core/               ← in-process pure logic: markdown parsing, view mapping, inline state
