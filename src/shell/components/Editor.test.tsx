@@ -1497,7 +1497,7 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('表格行上 Enter 仍是普通换行（不插入段落边界）', async () => {
+  it('表格行上 Enter 是 no-op，行语法保持（不再插裸换行）', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
     await clickInRun(r, 0, 2, 0, 'start')
@@ -1505,21 +1505,151 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    // 表格行没有段落可拆：Enter 只插一个 `\n`，绝不出 `\n\n`（表格单元格
-    // 换行的修法另见 `enter-backspace-smoke/06`）。
+    // 表格行没有段落可拆，这个编辑器也没有单元格内换行的表达：Enter 在行内
+    // 是 no-op，绝不出 `\n\n`，也绝不在行中间留裸 `\n`（enter-backspace-smoke/06）。
     expect(doc).not.toContain('\n\n')
-    expect(doc.split('\n').length).toBe(5) // 3 行源码 + 尾换行 → 拆行后各 +1
+    expect(doc).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
+    expect(doc.split('\n').length).toBe(4) // 行数不变
     await assertDomMatchesSource(r)
   })
 
-  it('表格分隔行上 Enter 也不插入段落边界', async () => {
+  it('表格分隔行上 Enter 不插入段落边界，也不动规则行', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
     await clickInRun(r, 0, 1, 0, 'start')
     await flush()
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).not.toContain('\n\n')
+    // 分隔行不可见且不能容纳软换行：Enter 是 no-op，源码一字不动。
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
+    await assertDomMatchesSource(r)
+  })
+})
+
+/**
+ * `enter-backspace-smoke/06`：表格单元格内 Enter 绝不破坏表格行。这个编辑器没有
+ * 单元格内换行的表达（内联 HTML 一律按文本渲染、表格一行 = 一条源码行），所以
+ * Enter / Shift+Enter 在行内是 no-op —— 源码一字不动，选中的「至少不允许破坏
+ * 表格行的语法结构」。决策记录在票的 Comments 里。
+ */
+describe('表格单元格内 Enter：不破坏表格（enter-backspace-smoke/06）', () => {
+  const TABLE = '| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n'
+
+  it('单元格末尾 Enter：源码一字不动，光标原地', async () => {
+    const r = renderEditor(TABLE)
+    await flush()
+    await clickInRun(r, 0, 2, 0, 'end')
+    await flush()
+    const before = caretFromDom()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe(TABLE)
+    expect(caretFromDom()).toBe(before)
+    await r.user.keyboard('x')
+    await flush()
+    // 打字仍然落在同一个单元格里：表格一行未曾被拆散。
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1x | 2 |\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('单元格中间 Enter 同样 no-op，表格行不拆散', async () => {
+    const r = renderEditor(TABLE)
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe(TABLE)
+    expect(r.getDoc().split('\n').length).toBe(4)
+    await assertDomMatchesSource(r)
+  })
+
+  it('单元格内 Shift+Enter 同样 no-op，不落裸换行', async () => {
+    const r = renderEditor(TABLE)
+    await flush()
+    await clickInRun(r, 0, 2, 0, 'end')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe(TABLE)
+    await assertDomMatchesSource(r)
+  })
+})
+
+/**
+ * `enter-backspace-smoke/07`：Cmd+Down / Ctrl+End 必须把光标移到文档末尾。
+ * Chromium 对 contenteditable 里这些「跳到文档边缘」的键没有默认光标动作（实测
+ * 普通 contenteditable 同样不动），所以跳转由内核接管；这两个键在 shell 的
+ * 快捷键表里也没有绑定。
+ */
+describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）', () => {
+  const DOC = '第一行\n\n第二行\n\n第三行\n'
+
+  it('Ctrl+End 把光标移到文档末尾', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(0)
+    // userEvent 按不了 {End}（“Not implemented”，见 enter-backspace-smoke/07），
+    // 这里合成一个真实形状的 keydown：内核读的是 event.key / ctrlKey，
+    // 与真实按键走同一条 handleKeyDown。
+    const event = new KeyboardEvent('keydown', {
+      key: 'End',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    r.container.dispatchEvent(event)
+    await flush()
+    // 文档末尾 = 最后一个块（第三行）末尾之后的空续行：内核的 domToLocal 把它
+    // 读作 doc.length（= 14），在那里打字就是追加在文末。
+    expect(caretFromDom()).toBe(DOC.length)
+    await assertDomMatchesSource(r)
+  })
+
+  it('Cmd+ArrowDown 把光标移到文档末尾（真实按键）', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    await r.user.keyboard('{Meta>}{ArrowDown}{/Meta}')
+    await flush()
+    expect(caretFromDom()).toBe(DOC.length)
+    await assertDomMatchesSource(r)
+  })
+
+  it('Ctrl+Home / Cmd+ArrowUp 回文档开头', async () => {
+    const r = renderEditor(DOC)
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    // Cmd+ArrowDown 跳文末，Cmd+ArrowUp 回文首。
+    await r.user.keyboard('{Meta>}{ArrowDown}{/Meta}')
+    await flush()
+    expect(caretFromDom()).toBe(DOC.length)
+    await r.user.keyboard('{Meta>}{ArrowUp}{/Meta}')
+    await flush()
+    expect(caretFromDom()).toBe(0)
+    // Ctrl+End 再去文末，Ctrl+Home 回文首（合成 keydown，见上一个用例）。
+    const end = new KeyboardEvent('keydown', {
+      key: 'End',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    r.container.dispatchEvent(end)
+    await flush()
+    expect(caretFromDom()).toBe(DOC.length)
+    const home = new KeyboardEvent('keydown', {
+      key: 'Home',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    r.container.dispatchEvent(home)
+    await flush()
+    expect(caretFromDom()).toBe(0)
     await assertDomMatchesSource(r)
   })
 })

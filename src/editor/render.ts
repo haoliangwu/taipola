@@ -135,10 +135,15 @@ function imageElement(
 }
 
 /** A run that carries source text without occupying any space. */
-function hiddenRun(text: string): HTMLElement {
+function hiddenRun(text: string, src: number): HTMLElement {
   const span = document.createElement('span')
   span.setAttribute('data-run', '0')
-  span.setAttribute('data-src', '0')
+  // Block-local source offset of the run's first character — the same contract
+  // every visible run keeps. The delimiter row's single hidden run spans the
+  // whole `| --- |` line, so the line's own start is the honest value; a
+  // hardcoded 0 made every caret readback on the row land at the header row's
+  // first cell instead.
+  span.setAttribute('data-src', String(src))
   span.className = 'rn rn-marker'
   span.textContent = text
   return span
@@ -193,7 +198,7 @@ function lineElement(
       // being a table. `normalizeTables` blanked the row on BOTH sides of the
       // comparison, which is why nothing caught it.
       syncChildren(el, 1, (_index, current) =>
-        current && current.hasAttribute('data-run') ? current : hiddenRun(raw),
+        current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart),
       )
       return el
     }

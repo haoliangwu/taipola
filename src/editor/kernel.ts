@@ -189,6 +189,27 @@ export class EditorKernel {
     })
   }
 
+  /**
+   * The document-edge caret move behind Cmd+Down / Ctrl+End and their start-side
+   * mirrors: caret at the edge source offset, DOM rebuilt and caret placed in
+   * the same frame, then the target block scrolled into view (native motion
+   * scrolls too). It is a caret move, not an edit: no undo snapshot, no
+   * `onChange`.
+   */
+  private moveCaretToEdge(edge: number): void {
+    this.caret = edge
+    this.recompute()
+    this.render()
+    this.placeCaret(edge)
+    const index = this.blockAt(edge)
+    window.requestAnimationFrame(() => {
+      this.host
+        ?.querySelector<HTMLElement>(`[data-block="${index}"]`)
+        ?.scrollIntoView({ block: 'nearest' })
+    })
+    this.reportLine()
+  }
+
   /** Applies a source-level edit at the current DOM selection. */
   applyEdit(mutate: (buffer: EditBuffers) => void): void {
     const index = this.blockAt(this.caret)
@@ -442,6 +463,24 @@ export class EditorKernel {
       this.undo(event.shiftKey)
       return
     }
+    // Document-edge jumps (Cmd+Down / Ctrl+End, Cmd+Up / Ctrl+Home). Chromium
+    // gives these keys NO default caret motion in a contenteditable — the caret
+    // stays put — so the kernel owns the jump. Shifted variants extend a
+    // selection the kernel does not model; they stay untouched
+    // (`.scratch/enter-backspace-smoke/issues/07`).
+    if (mod && !event.shiftKey && !this.composing && !this.readOnly) {
+      const edge =
+        event.key === 'ArrowDown' || event.key === 'End'
+          ? this.doc.length
+          : event.key === 'ArrowUp' || event.key === 'Home'
+            ? 0
+            : null
+      if (edge !== null) {
+        event.preventDefault()
+        this.moveCaretToEdge(edge)
+        return
+      }
+    }
     if (mod || this.composing || this.readOnly) return
 
     // Keyed edits derive the caret from the DOM: a click or a selection the
@@ -454,48 +493,61 @@ export class EditorKernel {
       // Enter is ALWAYS intercepted: the browser's native contenteditable Enter
       // would inject a `<br>`/`<div>` into the DOM behind our back.
       event.preventDefault()
-      this.pushUndo({ value: this.doc, caret: this.caret })
-      if (event.shiftKey) {
-        // Shift+Enter is the SOFT break: one plain newline, wherever the caret
-        // is. Typora tells the two keys apart by the gap they leave — a soft
-        // break stays inside the paragraph, so its line gap is the small one
-        // (`.scratch/enter-backspace-smoke/issues/02`).
-        const at = live ?? this.doc.length
-        this.insertNewlines(at, 1, at + 1)
-        return
-      }
       if (live === null) {
         // Outside the blocks (a click below the last line): append a newline.
+        this.pushUndo({ value: this.doc, caret: this.caret })
         this.insertNewlines(this.doc.length, 1, this.doc.length + 1)
         return
       }
       const index = this.blockAt(live)
       const block = this.blocks[index]
       if (!block) {
+        this.pushUndo({ value: this.doc, caret: this.caret })
         this.insertNewlines(this.doc.length, 1, this.doc.length + 1)
         return
       }
       const { start: lineStart, end: lineEnd, text: currentLine } = this.lineBounds(live)
+      const lineNumber = lineOfOffset(this.doc, lineStart)
+      const kind = this.lineStates[lineNumber - 1]?.kind
+      // A table ROW cannot take a bare newline: it would split the row into two
+      // lines that no longer read as a table row, and the table falls apart.
+      // There is no in-cell soft break to offer instead — the editor renders
+      // inline HTML as text and the table model is one source line per row, so
+      // a `<br>` would show as literal text and still not grow the cell — so
+      // Enter (and its soft sibling Shift+Enter) do NOTHING inside a row or on
+      // the `| --- |` rule line rather than corrupt the structure
+      // (`.scratch/enter-backspace-smoke/issues/06`, decision recorded there).
+      // A no-op takes no undo snapshot, exactly like the other guarded no-ops
+      // (Backspace on a fence's first line): the stack stays a list of real
+      // edits, so Cmd+Z never dead-steps.
+      if (kind === 'table' || kind === 'table-delim') return
+      this.pushUndo({ value: this.doc, caret: this.caret })
+      if (event.shiftKey) {
+        // Shift+Enter is the SOFT break: one plain newline, wherever the caret
+        // is. Typora tells the two keys apart by the gap they leave — a soft
+        // break stays inside the paragraph, so its line gap is the small one
+        // (`.scratch/enter-backspace-smoke/issues/02`).
+        const at = live
+        this.insertNewlines(at, 1, at + 1)
+        return
+      }
+      // Fenced code (marker or body line) has no paragraphs to split. A fence
+      // line's own prefix IS the fence marker: repeating it would open a second
+      // fence instead of a code line, so the fence marker stays a plain newline
+      // here, exactly like a code line.
+      if (kind === 'code' || kind === 'fence') {
+        this.insertNewlines(live, 1, live + 1)
+        return
+      }
       // What a line carries in front of its content — a list marker (`- `, `2. `, a
       // task checkbox), a quote marker (`> `), or several nested (`> - `) — has ONE
       // owner: `parseLine`, which the line-kind pass reads too. Enter repeats that
       // markup on the new line, which is what makes `> ` continue a quote and a task
-      // item keep its checkbox. Fences are the exception: a fence line's `prefix` IS
-      // the fence marker, and repeating it would open a second fence instead of a
-      // code line.
+      // item keep its checkbox. Fence lines never reach this point: the fence
+      // branch above returns first, because a fence line's `prefix` IS the fence
+      // marker and repeating it would open a second fence.
       const parts = parseLine(currentLine)
-      const prefix = parts.isFence ? '' : parts.prefix
-
-      // Fenced code (marker or body line), table rows and the `| --- |` delimiter
-      // line have no paragraphs to split: Enter stays a plain newline there.
-      // The table's cell-Enter is its own ticket
-      // (`.scratch/enter-backspace-smoke/issues/06`).
-      const lineNumber = lineOfOffset(this.doc, lineStart)
-      const kind = this.lineStates[lineNumber - 1]?.kind
-      if (kind === 'code' || kind === 'fence' || kind === 'table' || kind === 'table-delim') {
-        this.insertNewlines(live, 1, live + 1)
-        return
-      }
+      const prefix = parts.prefix
 
       const left = this.leavingEmptyItem(live)
       if (left) {
