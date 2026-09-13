@@ -65,6 +65,21 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(value, high))
 }
 
+/** Length of the longest common prefix of two sources. */
+function sharedPrefix(a: string, b: string): number {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return i
+}
+
+/** Length of the longest common suffix, never overlapping the prefix. */
+function sharedSuffix(a: string, b: string, prefix: number): number {
+  const max = Math.min(a.length, b.length) - prefix
+  let i = 0
+  while (i < max && a[a.length - 1 - i] === b[b.length - 1 - i]) i++
+  return i
+}
+
 export class EditorKernel {
   private host: HTMLElement | null = null
   private hooks: EditorKernelHooks
@@ -385,20 +400,31 @@ export class EditorKernel {
     // browser had already touched several blocks' DOM.
     const next = readDocumentSource(host) + readLooseText(host)
     if (next === this.doc) return
+    const delta = next.length - this.doc.length
+
+    // A PURE deletion leaves no inserted text: the browser is free to park the
+    // caret anywhere after collapsing the deleted range — deleting a line's only
+    // character often lands it at the end of the next line. The honest caret is
+    // where the deleted text began, so the caret is decided from the diff instead
+    // of the DOM on exactly this path.
+    const prefix = sharedPrefix(this.doc, next)
+    const insertedEnd = next.length - sharedSuffix(this.doc, next, prefix)
+    const caretNext =
+      insertedEnd <= prefix
+        ? prefix
+        : this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length)
 
     // An IME composition is mid-flight: the DOM holds provisional text. Record
     // the model (undo snapshots are suppressed) but leave the DOM untouched so
     // the composition is not destroyed under the user.
     if (!this.composing) {
       this.pushUndo({ value: this.doc, caret: this.caret })
-      const delta = next.length - this.doc.length
-      this.commit(next, this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length))
+      this.commit(next, caretNext)
       return
     }
 
-    const delta = next.length - this.doc.length
     this.doc = next
-    this.caret = clamp(this.caretFromDom() ?? this.caret + delta, 0, next.length)
+    this.caret = caretNext
     this.recompute()
     this.reportLine()
     this.hooks.onChange(next)

@@ -1113,6 +1113,46 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     expect(r.getDoc()).toBe('1. aaa\n2. cc\n')
   })
+
+  it('删掉一行里唯一的字符（真实按键）：光标留在那条空行上，不跳到结尾', async () => {
+    const r = renderEditor('甲\nx\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    expect(caretFromDom()).toBe(3)
+
+    await pressBackspace(r)
+    await flush()
+    // 文档对了：`x` 删掉，留下那条空行。光标也必须留在它的行首（偏移 2），
+    // 而不是跟着浏览器跳到别处——用户实测：`甲\nx\n乙` 退格后变 `甲\n\n乙<cur>`，
+    // 理想是 `甲\n<cur>\n乙`。
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    expect(caretFromDom()).toBe(2)
+    await assertDomMatchesSource(r)
+  })
+
+  it('浏览器把光标丢去别处也要掰回来：删除后的光标由差分决定，不采信 DOM 读数', async () => {
+    const r = renderEditor('甲\nx\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    expect(caretFromDom()).toBe(3)
+
+    // 模拟真实 Chrome 的退格行为：删掉 `x`（行被清空）之后，把光标丢到
+    // 下一段末尾（实测就是 `乙<cur>`）。此时 DOM 源码已经是对的，只有光标错位。
+    const xRun = r.runEl(0, 1, 0)!
+    xRun.firstChild!.textContent = ''
+    const yiRun = r.runEl(0, 2, 0)!
+    placeCaretAt(yiRun.firstChild!, 1)
+    r.container.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    r.container.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    await flush()
+
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    // 纯删除（差分里没有插入文本）：光标 = 被删文本的起点，不信 DOM 的落点。
+    expect(caretFromDom()).toBe(2)
+    await assertDomMatchesSource(r)
+  })
 })
 
 /**
