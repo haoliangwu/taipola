@@ -4,15 +4,30 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      PWA: single theme_color for both themes, the light background — the repo
+      has dark mode too, colour-scheme above covers it. The manifest carries the
+      same value (vite.config.ts); keep the two in step.
+    -->
+    <meta name="theme-color" content="#ffffff" />
     <title>taipola</title>
     <!--
       Declaring the icon is what stops the browser's implicit request for
       `/favicon.ico`. On a project page that probe leaves our subtree entirely —
       it goes to the domain root, which belongs to the user site, not to us — so
       it can only ever 404. Vite rewrites these to /taipola/… in the build.
+      The manifest link itself is injected by vite-plugin-pwa at build time.
     -->
-    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      iOS "Add to Home Screen" (`.scratch/pwa/issues/01`, item 7): no install
+      prompt there, this meta opens the standalone window. `mobile-web-app-capable`
+      is the current name (iOS 16.4+); the apple- prefixed form is the legacy
+      spelling, still honoured by older iOS, kept alongside.
+    -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
   </head>
   <body>
     <div id="root"></div>
