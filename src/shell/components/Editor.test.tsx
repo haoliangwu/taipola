@@ -526,13 +526,15 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(r.getDoc()).toBe('标题行测试\n\n\n')
     await r.user.keyboard('第二行')
     await flush()
-    // 打字前那一行是空行：它要在上下各留一个空行才能自己成段（`blank-line-typing/01`）。
-    // 这里只有上面有内容，所以补一个空行。修复前源码是 `标题行测试\n第二行\n\n`——一个软换行，
-    // 屏幕上两行并排成一行，正是用户报的"换行符消失"。
-    expect(r.getDoc()).toBe('标题行测试\n\n第二行\n\n')
-    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 补出来的空行 1 + 换行 1 +
-    // `第二行` 3 字 = 10。
-    expect(caretFromDom()).toBe(10)
+    // 打字只插这三个字符：`标题行测试\n第二行\n\n`。这两行在源码里是同一个段落（软换行），
+    // 而现在屏幕上一行对一行，所以"不并回上一行"是真的（`blank-line-typing/01`）。
+    expect(r.getDoc()).toBe('标题行测试\n第二行\n\n')
+    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 换行 1 + `第二行` 3 字 = 9。
+    expect(caretFromDom()).toBe(9)
+    const tops = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
+      .filter((el) => (el.textContent ?? '') !== '')
+      .map((el) => Math.round(el.getBoundingClientRect().top))
+    expect(new Set(tops).size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
@@ -1147,31 +1149,31 @@ describe('内核只认自己的 DOM', () => {
 })
 
 /**
- * Soft line breaks, rendered the way the exporter renders them.
+ * 段落里的单换行（软换行）在屏幕上也换行——Typora 就是这么显示的。
  *
- * A lone newline inside a paragraph is a space in Markdown, and the export
- * (`breaks: false`) has always joined those lines. The view used to hard-break at
- * them, so the same document read one way on screen and another way in the file
- * it exported. An English paragraph wrapped at 80 columns came out looking like
- * several sentences.
+ * `soft-line-breaks/01` 一度反着做（把段内源码行并成一个视觉行，理由是导出
+ * `breaks: false` 会把它折成一个空格）。对着 Typora 实测是错的：`axb` 里在 a、b
+ * 之间回车，Typora 是 `a\nb` 两行，编辑器并成一行 `a b`；而且空行那条路还得靠
+ * "打字时补空行"去兜（`blank-line-typing/01`）。源码一行＝屏幕一行，打字只插一个
+ * 字符，两条都简单了。导出没变：Markdown 里段内单换行就是一个空格。
  */
-describe('段落内软换行', () => {
-  it('一个段落写成两行源码，屏幕上排在同一视觉行，由列宽决定折行', async () => {
+describe('段落里的软换行也是换行', () => {
+  it('一个段落写成两行源码，屏幕上是两行（各占一行，不并排）', async () => {
     const r = renderEditor('alpha beta\ngamma delta\n')
     await flush()
 
     const first = r.blockEl(0)!.querySelector('[data-vline="0"]') as HTMLElement
     const second = r.blockEl(0)!.querySelector('[data-vline="1"]') as HTMLElement
 
-    // 同一视觉行：两行的 top 相同。它们合起来约 20 个字符，列宽放得下。
-    expect(Math.round(second.getBoundingClientRect().top)).toBe(
+    // 两行各自一个视觉行：top 不同，且各是块级。
+    expect(Math.round(second.getBoundingClientRect().top)).not.toBe(
       Math.round(first.getBoundingClientRect().top),
     )
-    // 机制：软换行的两端都是 inline，于是形成一个匿名块，由浏览器换行。
-    expect(getComputedStyle(first).display).toBe('inline')
-    expect(getComputedStyle(second).display).toBe('inline')
-    // 段落的实际高度就是一行，不再是两行。
-    expect(r.blockEl(0)!.getBoundingClientRect().height).toBeLessThan(2 * first.getBoundingClientRect().height)
+    expect(getComputedStyle(first).display).toBe('block')
+    expect(getComputedStyle(second).display).toBe('block')
+    // 行盒仍然是一源码行一个（光标算术按源码行建索引）。
+    expect(r.blockEl(0)!.querySelectorAll('[data-vline]')).toHaveLength(2)
+    await assertDomMatchesSource(r)
   })
 
   it('软换行两侧都能落光标，且编辑后源码里的换行还在', async () => {
@@ -1219,27 +1221,23 @@ describe('段落内软换行', () => {
 })
 
 /**
- * 空行上打字：块的分隔不能跟着消失（`.scratch/blank-line-typing/issues/01`）。
+ * 空行上打字：源码只多这一个字符（`.scratch/blank-line-typing/issues/01`）。
  *
- * 源码层面打字就是"原地插一个字符"，谁都没丢；丢的是**块的划分**——空行是分隔，它一被
- * 写满，Markdown 就把这一行读成邻居的软换行续行（段内单换行＝一个空格），屏幕上两行并成
- * 一行。所以每条用例都同时钉源码和**行盒的 y**：修复前源码是对的，只有排版在骗人。
+ * 空行是两段之间的**分隔**：写满它，Markdown 就把这一行读成邻居的软换行续行。以前
+ * 段内单换行在屏幕上是并排显示的，所以那一步看起来像"两段粘成一行"；现在源码一行＝
+ * 屏幕一行（见 `段落里的软换行也是换行`），字符落在光标那一行就够了——不需要补空行，
+ * 也不需要改任何结构。每条用例因此同时钉**源码只多一个字符**和**屏幕上行行分明**。
  */
-describe('空行上打字保住段落分隔', () => {
-  /** 每个行盒的 (文本, y)：「同一视觉行」就是 y 相同。 */
-  const rows = (r: Rendering) =>
-    [...r.container.querySelectorAll<HTMLElement>('[data-vline]')].map((el) => ({
-      text: el.textContent ?? '',
-      top: Math.round(el.getBoundingClientRect().top),
-    }))
-
-  /** 非空行的 y 集合：它们互不相同才说明各自成段。 */
+describe('空行上打字只插一个字符', () => {
+  /** 非空行的 (文本, y)：各自一个 y 才叫行行分明。 */
   const contentRows = (r: Rendering) => {
-    const content = rows(r).filter((row) => row.text !== '')
+    const content = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
+      .map((el) => ({ text: el.textContent ?? '', top: Math.round(el.getBoundingClientRect().top) }))
+      .filter((row) => row.text !== '')
     return { texts: content.map((row) => row.text), tops: new Set(content.map((row) => row.top)) }
   }
 
-  it('两段之间的空行：一次按键，这一行自己成段（用户报的那条）', async () => {
+  it('两段之间的空行：写进去的字符就落在那一行（用户报的那条）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
@@ -1248,36 +1246,35 @@ describe('空行上打字保住段落分隔', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 上下都是非空行，所以两侧各补一个空行；光标留在刚写的字后面。
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
-    expect(caretFromDom()).toBe(4)
+    // 理想结果：`甲\nx\n乙`——只多这一个字符，一个换行都不加。
+    expect(r.getDoc()).toBe('甲\nx\n乙\n')
+    expect(caretFromDom()).toBe(3)
+    // 屏幕上三行各自成行：并排才是"换行符消失"。
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
   })
 
-  it('回车之后打字：新段落不并回上一段（最普通的那条路径）', async () => {
+  it('回车之后打字：源码 `甲\nx`，两行各自成行', async () => {
     const r = renderEditor('甲')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
     await flush()
     await pressEnter(r)
     await flush()
-    // 回车自己不改分隔：它只插一个换行，光标落在紧挨 `甲` 的空行上。
     expect(r.getDoc()).toBe('甲\n')
     expect(caretFromDom()).toBe(2)
 
     await r.user.keyboard('x')
     await flush()
-    // 只有上面有内容，所以只补上面：`甲` 与 `x` 各自成段。
-    expect(r.getDoc()).toBe('甲\n\nx')
-    expect(caretFromDom()).toBe(4)
+    // Typora 实测（用户给的例子）：`a` + 回车 + `b` → `a\nb`，两行，不是 `a b`。
+    expect(r.getDoc()).toBe('甲\nx')
     expect(contentRows(r).texts).toEqual(['甲', 'x'])
     expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
-  it('段中回车再打字：上面补一个空行，下面原有的空行照旧', async () => {
+  it('段中回车再打字：字符落在光标那一行，空行一个都不多', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
@@ -1289,13 +1286,14 @@ describe('空行上打字保住段落分隔', () => {
 
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    // 回车插的那个换行还在原处；打字只补上一个字符。
+    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
   })
 
-  it('文档开头的空行：下面有内容，只在下面补', async () => {
+  it('文档开头的空行：字符就落在那一行', async () => {
     const r = renderEditor('\n甲\n')
     await flush()
     await clickAtLine(r, 0, 0)
@@ -1304,24 +1302,13 @@ describe('空行上打字保住段落分隔', () => {
 
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('x\n\n甲\n')
+    expect(r.getDoc()).toBe('x\n甲\n')
     expect(contentRows(r).texts).toEqual(['x', '甲'])
     expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
-  it('邻居本来就是空行：不补（空行串里的第一行）', async () => {
-    const r = renderEditor('\n\n甲\n')
-    await flush()
-    await clickAtLine(r, 0, 0)
-    await flush()
-    await r.user.keyboard('x')
-    await flush()
-    expect(r.getDoc()).toBe('x\n\n甲\n')
-    await assertDomMatchesSource(r)
-  })
-
-  it('围栏里的空行是代码，不是分隔：一个空行都不补', async () => {
+  it('围栏里的空行是代码：字符留在原处，围栏不受影响', async () => {
     const r = renderEditor('```\na\n\nb\n```\n')
     await flush()
     // 围栏块自己收着里面的每一行，空行是 vline 2。
@@ -1333,72 +1320,24 @@ describe('空行上打字保住段落分隔', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('本来就有内容的行中间打字：不补（段内软换行是正文）', async () => {
-    const r = renderEditor('甲乙\n\n丙\n')
-    await flush()
-    await clickInRun(r, 0, 0, 0, 'middle')
-    await flush()
-    await r.user.keyboard('x')
-    await flush()
-    expect(r.getDoc()).toBe('甲x乙\n\n丙\n')
-    await assertDomMatchesSource(r)
-  })
-
-  it('Shift+Enter 之后打字：软换行还是软换行（不补空行）', async () => {
-    const r = renderEditor('甲\n\n乙\n')
-    await flush()
-    await clickInRun(r, 0, 0, 0, 'end')
-    await flush()
-    await pressShiftEnter(r)
-    await flush()
-    expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-
-    await r.user.keyboard('x')
-    await flush()
-    // 这一行是**软换行**开出来的：它是上一段的续行，补空行就等于把用户的软换行
-    // 改成段落分隔。源码只有一个换行，两行渲染在同一行上。
-    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
-    const content = rows(r).filter((row) => row.text !== '')
-    expect(content.map((row) => row.text)).toEqual(['甲', 'x', '乙'])
-    expect(content[0].top).toBe(content[1].top)
-    expect(content[2].top).not.toBe(content[1].top)
-    await assertDomMatchesSource(r)
-  })
-
-  it('引用之间的空行：字自成一段，引用两边都不受影响', async () => {
-    const r = renderEditor('> 甲\n\n> 乙\n')
-    await flush()
-    // 块 1 是两条引用中间那条空行。
-    await clickAtLine(r, 1, 0)
-    await flush()
-    await r.user.keyboard('x')
-    await flush()
-    // 修复前 `> 甲\nx\n\n> 乙`：`x` 成了引用的惰性续行（并进引用里去了）。
-    expect(r.getDoc()).toBe('> 甲\n\nx\n\n> 乙\n')
-    expect(contentRows(r).texts).toEqual(['> 甲', 'x', '> 乙'])
-    expect(contentRows(r).tops.size).toBe(3)
-    await assertDomMatchesSource(r)
-  })
-
-  it('一次撤销把写的字和补出来的空行一起收走', async () => {
+  it('一次撤销只收走这一个字符', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
     await flush()
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    expect(r.getDoc()).toBe('甲\nx\n乙\n')
 
     await pressUndo(r)
     await flush()
-    // 补空行和写字是同一次提交：撤销不该把空行留在文档里。
     expect(r.getDoc()).toBe('甲\n\n乙\n')
     await assertDomMatchesSource(r)
   })
 
-  it('IME：合成期间不补（DOM 不动），拼音换成汉字那一次补上', async () => {
-    // 合成期间的 DOM 一个节点都不能换（既有不变量），所以补齐只能发生在提交那一次
-    // `input` 上——判定"原本是空行"要靠合成开始前的源码，合成中途模型里已经是拼音了。
+  it('IME：合成期间 DOM 不动，提交后字符落在光标那一行', async () => {
+    // 合成期间的 DOM 一个节点都不能换（既有不变量），所以字符落点由提交那一次
+    // `input` 决定——模型与 DOM 都是"原地插一个字符"，没有别的结构改动。
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
@@ -1411,7 +1350,6 @@ describe('空行上打字保住段落分隔', () => {
     line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     line.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'x' }))
     await flush()
-    // 合成期间：DOM 与节点原样，模型吸收临时字母，分隔还没补。
     expect(line.isConnected).toBe(true)
     expect(line.lastChild).toBe(composing)
     expect(r.getDoc()).toBe('甲\nx\n乙\n')
@@ -1421,33 +1359,9 @@ describe('空行上打字保住段落分隔', () => {
     line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     line.dispatchEvent(new InputEvent('input', { bubbles: true, data: '写' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\n\n写\n\n乙\n')
-    await assertDomMatchesSource(r)
-  })
-
-  it('IME：提交的字面量和拼音相同时也要补（DOM 与模型恰好相等那次）', async () => {
-    // 输入法把字母原样提交（或联想词与临时字母凑巧相同）时，提交那一次 `input` 的
-    // DOM 源码与模型**相等**。合成期间模型已经收下了临时字母，所以"少一个字符"这条
-    // 早退不能把补空行一起吞掉。
-    const r = renderEditor('甲\n\n乙\n')
-    await flush()
-    await clickAtLine(r, 1, 0)
-    await flush()
-    const line = r.container.querySelector('[data-block="1"] [data-vline="0"]') as HTMLElement
-
-    line.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
-    const composing = document.createTextNode('x')
-    line.appendChild(composing)
-    line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
-    line.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'x' }))
-    await flush()
-    expect(r.getDoc()).toBe('甲\nx\n乙\n')
-
-    line.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
-    line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
-    line.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'x' }))
-    await flush()
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    expect(r.getDoc()).toBe('甲\n写\n乙\n')
+    expect(contentRows(r).texts).toEqual(['甲', '写', '乙'])
+    expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
   })
 })

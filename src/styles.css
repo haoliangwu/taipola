@@ -551,28 +551,13 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* A paragraph the author wrapped across several source lines is ONE visual line.
-   Markdown says a lone newline inside a paragraph is a space, and the exporter has
-   always rendered it that way (`breaks: false` in `core/markdownIt.ts`), so the
-   view renders it that way too — before this, the two disagreed about the same
-   document.
-
-   The line BOXES stay one per source line: the caret arithmetic maps offsets to
-   line boxes, and `domToLocal` accumulates one line box per source line. What
-   changes is only layout — both ends of a soft break are inline-level, so a run of
-   them forms ONE anonymous block that the browser wraps by column width, exactly
-   as the exported `<p>` does. The break itself comes back as the space it means,
-   from a pseudo-element: pseudo content is not in the DOM, so rebuilding the
-   source from the DOM still sees the newline. */
-.vl-soft,
-.vl-continues {
-  display: inline;
-}
-
-.vl-soft::after {
-  content: ' ';
-}
-
+/* One line box per source line, laid out as one row each — a newline in the source
+   is a line break on screen, the way Typora shows it. (`soft-line-breaks/01` had
+   it the other way for a while, joining a paragraph's source lines into one row to
+   match the exported `<p>`; measured against Typora that was wrong: Enter then
+   typing showed `a b` where Typora shows two lines, and the blank-line case below
+   paid for it with inserted newlines — see `blank-line-typing/01`.) The export is
+   unchanged: markdown says a lone newline inside a paragraph is a space. */
 /* Collapsed syntax markers contribute no width but keep their text in the DOM,
    so the source stays intact and the caret never lands on nothing.
    `!important` is required inside table rows: a `display: grid` container

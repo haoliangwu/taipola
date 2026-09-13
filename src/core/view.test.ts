@@ -230,13 +230,12 @@ describe('嵌套与表格结构', () => {
   })
 })
 
-describe('软换行把两行源码合成一个视觉行', () => {
-  it('行盒仍按源码行切分，runs 拼回源码一字不差', () => {
+describe('段落内单换行（软换行）', () => {
+  it('行盒按源码行切分，runs 拼回源码一字不差', () => {
+    // 每个源码行一个行盒、各占一个视觉行（Typora 的显示方式）；光标的定位算术
+    // 按源码行建索引、按行累加基线，所以行盒永远不能合并。
     const view = buildBlockView('alpha beta\ngamma delta', 0, [], 2, [0])
-    // 行盒不能合并：光标的定位算术按源码行建索引、按行累加基线。
     expect(view.lines).toHaveLength(2)
-    expect(view.lines[0].softBreak).toBe(true)
-    expect(view.lines[1].softBreak).toBe(false)
     expect(view.lines.map((line) => line.runs.map((r) => r.text).join('')).join('\n')).toBe(
       'alpha beta\ngamma delta',
     )
@@ -249,9 +248,10 @@ describe('软换行把两行源码合成一个视觉行', () => {
     expect(continuation.text).toBe('b')
   })
 
-  it('没有软换行时一切照旧（行盒各自独占一行）', () => {
-    const view = buildBlockView('alpha beta\ngamma delta', 0, [], 2)
-    expect(view.lines.map((line) => line.softBreak)).toEqual([false, false])
+  it('不是续行的那一行，缩进就是内容（不折叠）', () => {
+    // 同一个块里，`continues` 才是"这行是上一行的续行"的依据：它是折叠缩进的唯一理由。
+    const view = buildBlockView('alpha\n  beta', 0, [], 2, [])
+    expect(view.lines[1].text).toBe('  beta')
   })
 })
 

@@ -31,14 +31,14 @@ export interface Block {
   /** Plain-text heading content, for the outline. */
   headingText: string
   /**
-   * Block-local line indices whose trailing newline is a SOFT break.
+   * Block-local line indices whose trailing newline is a SOFT break — the next
+   * source line continues this one's paragraph.
    *
-   * A single newline inside a paragraph means a space, not a line ending: the
-   * renderer has always treated it that way (`breaks: false` in `markdownIt.ts`)
-   * and the view must too, or the same document reads one way on screen and
-   * another way in the export. Which newlines are soft is block structure —
-   * `- a\n- b` is two items, `- a\n  b` is one item on two lines — so it is read
-   * from markdown-it's own tokens rather than re-derived.
+   * Which newlines are soft is block structure, not spelling: `- a\n- b` is two
+   * items, `- a\n  b` is one item on two lines. So it is read from markdown-it's
+   * own tokens rather than re-derived. The view uses it for one thing: a
+   * continuation line's leading whitespace is container indentation, and
+   * collapses like any other block prefix when the caret is outside the block.
    */
   softBreakAfter: number[]
 }

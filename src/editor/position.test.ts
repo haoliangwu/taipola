@@ -152,9 +152,9 @@ describe('sourceOffsetAtPoint', () => {
   })
 })
 
-describe('软换行后的命中测试', () => {
-  it('两个源码行排在同一视觉行时，点第二个源码行仍给出它自己的偏移', () => {
-    // 软换行把两行变成 inline，视觉上同排一行；命中测试不能因此把点击算到第一行去。
+describe('软换行的命中测试', () => {
+  it('同一个段落里的第二个源码行，点它给出的仍是它自己的偏移', () => {
+    // 两行各占一个视觉行（源码一行＝屏幕一行），命中测试要按行盒算。
     const { host } = mount('alpha beta\ngamma delta', null, 2, [0])
     const second = host.querySelector<HTMLElement>('[data-vline="1"]')!
     const rect = second.getBoundingClientRect()
