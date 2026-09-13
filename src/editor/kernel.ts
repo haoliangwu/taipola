@@ -34,6 +34,7 @@ import {
   sanitizeDom,
 } from './render'
 import { lineOfOffset, offsetForLine } from '../core/lines'
+import { keepBlockBreak } from '../core/blockBreaks'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -85,6 +86,22 @@ export class EditorKernel {
   /** Set by `beforeinput`, consumed by `input`. */
   private userEditPending = false
   private composing = false
+  /**
+   * The source as it stood when the current IME composition began, or null.
+   *
+   * A composition writes provisional text into the model while the DOM is left
+   * alone, so the "did this edit fill in a blank line?" question has to be answered
+   * against the source from before the composition — kept here until the committed
+   * text lands in `handleInput`.
+   */
+  private compositionBase: string | null = null
+  /**
+   * Start offset of a line Shift+Enter just opened (a soft break), or null.
+   *
+   * Held for one gesture: the character written onto that line must not be separated
+   * from the line above, because the user asked for them to stay together.
+   */
+  private softBreakLine: number | null = null
   private pendingCaret: number | null = null
 
   private undoStack: Snapshot[] = []
@@ -384,21 +401,39 @@ export class EditorKernel {
     // edits (select-all delete, multi-line delete, paste) desync the model: the
     // browser had already touched several blocks' DOM.
     const next = readDocumentSource(host) + readLooseText(host)
-    if (next === this.doc) return
+    const delta = next.length - this.doc.length
+    const caretNext = this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length)
+    // Writing onto a blank line deletes the block break that line stands for: the
+    // source keeps its newlines, but Markdown reads the single newline as a soft
+    // break, so the written line and its neighbour render as ONE line. The break is
+    // put back in the same commit as the character — for a keystroke that is what
+    // makes one undo take both away.
+    const before = this.compositionBase ?? this.doc
+    const kept = keepBlockBreak(before, next, caretNext, this.softBreakLine)
 
-    // An IME composition is mid-flight: the DOM holds provisional text. Record
-    // the model (undo snapshots are suppressed) but leave the DOM untouched so
-    // the composition is not destroyed under the user.
     if (!this.composing) {
+      this.compositionBase = null
+      this.softBreakLine = null
+      // The DOM absorbed a write that changed nothing in the model and no block break
+      // was lost: there is nothing to commit. (An IME commit whose provisional text
+      // equals the committed one lands here with `next === this.doc`, and then the
+      // restored break is the only reason left to commit.)
+      if (next === this.doc && kept === null) return
       this.pushUndo({ value: this.doc, caret: this.caret })
-      const delta = next.length - this.doc.length
-      this.commit(next, this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length))
+      this.commit(kept?.doc ?? next, kept?.caret ?? caretNext)
       return
     }
 
-    const delta = next.length - this.doc.length
+    if (next === this.doc) return
+    // An IME composition is mid-flight: the DOM holds provisional text. Record
+    // the model (undo snapshots are suppressed) but leave the DOM untouched so
+    // the composition is not destroyed under the user. The break waits for the
+    // final `input` that carries the committed text, where a render is safe — and
+    // judging it there needs the source from BEFORE this first provisional write,
+    // which is what `this.doc` still holds.
+    this.compositionBase ??= this.doc
     this.doc = next
-    this.caret = clamp(this.caretFromDom() ?? this.caret + delta, 0, next.length)
+    this.caret = caretNext
     this.recompute()
     this.reportLine()
     this.hooks.onChange(next)
@@ -431,6 +466,11 @@ export class EditorKernel {
       this.pushUndo({ value: this.doc, caret: this.caret })
       if (event.shiftKey) {
         const at = live ?? this.doc.length
+        // The line this opens is a soft break: it continues the line above on
+        // purpose, so a character written on it must not push a blank line in
+        // between (see `keepBlockBreak`). The gesture is the only thing that knows —
+        // the source of `甲` + Shift+Enter and `甲` + Enter is the same `甲\n`.
+        this.softBreakLine = at + 1
         this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), at + 1)
         return
       }
