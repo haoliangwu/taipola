@@ -7,7 +7,7 @@
  * fake instead of stubbing `window`: the point of the interface is that the
  * caller never learns which adapter is behind it, so the test shouldn't either.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createDocuments, type StorageAdapter } from './documents'
 
 interface Download {
@@ -37,6 +37,7 @@ function writeBack(
     writeOk?: boolean
     modifiedAtNow?: number
     modifiedAtThrows?: boolean
+    readThrows?: boolean
   } = {},
 ): StorageAdapter {
   return {
@@ -50,6 +51,10 @@ function writeBack(
     modifiedAt: async () => {
       if (overrides.modifiedAtThrows) throw new Error('the file is gone')
       return overrides.modifiedAtNow ?? 111
+    },
+    read: async (handle) => {
+      if (overrides.readThrows) throw new Error('删掉了')
+      return { name: 'note.md', content: '# 笔记\n', handle, modifiedAt: 111 }
     },
     download: (text, filename, mime) => downloads.push({ text, filename, mime }),
   }
@@ -219,6 +224,42 @@ describe('写回这个能力本身', () => {
     if (opened.status !== 'opened') throw new Error('expected an opened document')
 
     await expect(documents.modifiedAt(opened.document)).resolves.toBeNull()
+  })
+})
+
+describe('openEntry：打开一个已经有句柄的文件（文件夹树里点开）', () => {
+  it('不弹选择器，内容、身份与修改时间一起交回来', async () => {
+    const documents = createDocuments(writeBack([], []))
+    const opened = await documents.open()
+    if (opened.status !== 'opened') throw new Error('expected an opened document')
+    const picker = vi.spyOn(documents, 'open')
+
+    const again = await documents.openEntry(opened.document)
+
+    expect(again).toMatchObject({
+      status: 'opened',
+      content: '# 笔记\n',
+      document: { name: 'note.md', handle: HANDLE_A },
+      modifiedAt: 111,
+    })
+    expect(picker).not.toHaveBeenCalled()
+    picker.mockRestore()
+  })
+
+  it('文件读不出来时是 failed，不是一个空的文档', async () => {
+    const documents = createDocuments(writeBack([], [], { readThrows: true }))
+
+    const result = await documents.openEntry({ name: 'note.md', handle: HANDLE_A })
+
+    expect(result.status).toBe('failed')
+  })
+
+  it('平台连写回都没有时明说打不开，而不是装作成功', async () => {
+    const documents = createDocuments(downloadOnly([]))
+
+    const result = await documents.openEntry({ name: 'note.md', handle: null })
+
+    expect(result.status).toBe('failed')
   })
 })
 

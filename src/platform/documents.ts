@@ -30,6 +30,7 @@
  */
 import { localStorageDraft, type DraftStore } from './draft'
 import { renderStandaloneHtml } from './html'
+import { isAbort } from './abort'
 
 const DEFAULT_NAME = 'untitled.md'
 const MARKDOWN_MIME = 'text/markdown;charset=utf-8'
@@ -101,6 +102,12 @@ export interface Documents {
   readonly canWriteBack: boolean
   open(): Promise<OpenResult>
   /**
+   * Opens a document we already hold a handle for — a file clicked in the folder
+   * tree, which is why no picker appears. `open()` would ask the user to find the
+   * same file again.
+   */
+  openEntry(doc: OpenDocument): Promise<OpenResult>
+  /**
    * When `doc`'s file was last modified, or null when it cannot be read any more
    * (deleted, moved) or this platform cannot write back at all.
    *
@@ -171,6 +178,8 @@ export interface WriteBackAdapter extends AdapterBase {
   pickSave(suggestedName: string): Promise<PickedTarget | null>
   /** Writes through a handle. `false` when the user refuses the permission. */
   write(handle: unknown, text: string): Promise<boolean>
+  /** Reads a handle we already hold, without showing a picker. */
+  read(handle: unknown): Promise<PickedFile>
   /** Reads a handle's current modification time. Throws when the file is gone. */
   modifiedAt(handle: unknown): Promise<number>
 }
@@ -200,12 +209,20 @@ export function createDocuments(adapter: StorageAdapter): Documents {
       try {
         const picked = await adapter.pickOpen()
         if (!picked) return { status: 'cancelled' }
-        return {
-          status: 'opened',
-          document: { name: picked.name, handle: picked.handle },
-          content: picked.content,
-          modifiedAt: picked.modifiedAt,
-        }
+        return opened(picked)
+      } catch (error) {
+        return { status: 'failed', error }
+      }
+    },
+
+    async openEntry(doc) {
+      // Unreachable on a platform without the File System Access API: there is no
+      // folder tree to click in. Reported as a failure rather than pretending.
+      if (!adapter.writeBack) {
+        return { status: 'failed', error: new Error('no handle to open: this platform has no file access') }
+      }
+      try {
+        return opened(await adapter.read(doc.handle))
       } catch (error) {
         return { status: 'failed', error }
       }
@@ -327,15 +344,6 @@ interface FilePickerWindow {
   showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>
 }
 
-/**
- * A dismissed picker is reported as an `AbortError`. Which failures mean "the
- * user declined" is the adapter's knowledge, so it is translated here rather
- * than leaking up as an exception the caller has to recognise.
- */
-function isAbort(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError'
-}
-
 function fileSystemAccessAdapter(
   showOpen: NonNullable<FilePickerWindow['showOpenFilePicker']>,
   showSave: NonNullable<FilePickerWindow['showSaveFilePicker']>,
@@ -346,13 +354,14 @@ function fileSystemAccessAdapter(
     async pickOpen() {
       try {
         const [handle] = await showOpen({ types: MD_TYPES, id: 'taipola-doc' })
-        const file = await handle.getFile()
-        return { name: handle.name, content: await file.text(), handle, modifiedAt: file.lastModified }
+        return await readFile(handle)
       } catch (error) {
         if (isAbort(error)) return null
         throw error
       }
     },
+
+    read: (handle) => readFile(handle as FileSystemFileHandle),
 
     async pickSave(suggestedName) {
       try {
@@ -422,6 +431,22 @@ function downloadFile(text: string, filename: string, mime: string): void {
   anchor.download = filename
   anchor.click()
   URL.revokeObjectURL(url)
+}
+
+/** Reads a handle we hold. The shape every "opened" result is built from. */
+async function readFile(handle: FileSystemFileHandle): Promise<PickedFile> {
+  const file = await handle.getFile()
+  return { name: handle.name, content: await file.text(), handle, modifiedAt: file.lastModified }
+}
+
+/** The one shape both open paths return, so they cannot drift apart. */
+function opened(picked: PickedFile): OpenResult {
+  return {
+    status: 'opened',
+    document: { name: picked.name, handle: picked.handle },
+    content: picked.content,
+    modifiedAt: picked.modifiedAt,
+  }
 }
 
 function browserAdapter(): StorageAdapter {

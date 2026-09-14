@@ -19,6 +19,8 @@
  * policy notices and stops being silent about it.
  */
 
+import type { FolderPlacement } from './fileTree'
+
 /**
  * The record the shell keeps of unsaved work.
  *
@@ -90,6 +92,18 @@ export interface Autosave {
 }
 
 export const DRAFT_DEBOUNCE_MS = 500
+
+/**
+ * Which slot a document's unwritten content belongs to.
+ *
+ * The folder it was opened from plus its path inside it, or just the display name
+ * when it has no folder (the welcome document, a new one, a file opened on its
+ * own). The folder is part of the key so that `草稿/notes.md` and `发布/notes.md`
+ * are two slots — the same reason the title bar shows a path at all.
+ */
+export function draftSlotKey(placement: FolderPlacement | null, name: string): string {
+  return placement === null ? name : `${placement.root}/${placement.path}`
+}
 
 export function createAutosave(deps: AutosaveDeps): Autosave {
   let pending: { key: string; draft: Draft } | null = null

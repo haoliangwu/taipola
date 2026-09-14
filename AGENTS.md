@@ -31,11 +31,15 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   (the `{width=…}` image suffix),
   `editCommands.ts` (formatting commands),
   `shortcuts.ts` (keystroke → command name), `autosave.ts` (when the draft gets written),
-  `writeBack.ts` (when the content reaches its file), `welcome.ts` (the welcome document),
+  `writeBack.ts` (when the content reaches its file), `fileTree.ts` (what the folder tree shows,
+  and in what order), `welcome.ts` (the welcome document),
   `markdownIt.ts` (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
-  interface), `draft.ts` (localStorage), `html.ts` (markdown → sanitized HTML)
-- `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Outline.tsx`, `useTheme.ts`
+  interface), `folder.ts` (open a folder, read one level of it), `draft.ts` (localStorage),
+  `html.ts` (markdown → sanitized HTML), `abort.ts` (a dismissed picker, shared by both pickers)
+- `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Sidebar.tsx`,
+  `components/FileTree.tsx`, `components/Outline.tsx`, `useTheme.ts`, `useFileTree.ts`,
+  `useSidebarPanel.ts`
 - `src/editor/` — the native kernel: `render.ts` (imperative rendering, DOM → source),
   `position.ts` (source offset ↔ DOM position), `kernel.ts` (state, events, same-frame caret)
 - `src/test/` — browser-mode helpers

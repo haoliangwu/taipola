@@ -30,6 +30,7 @@ export type ShellCommand =
   | 'save'
   | 'saveAs'
   | 'open'
+  | 'openFolder'
   | 'newDocument'
   | 'toggleOutline'
 
@@ -56,10 +57,11 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
   if (!mod) return key === 'escape' ? 'blur' : null
 
   // Shift is checked first and returns early: `Cmd+Shift+B` is not "bold with
-  // shift", it is nothing. Only these three bindings use shift.
+  // shift", it is nothing. Only these four bindings use shift.
   if (stroke.shiftKey === true) {
     if (key === 'k') return 'deleteLine'
     if (key === 's') return 'saveAs'
+    if (key === 'o') return 'openFolder'
     // Shift+Backslash reports '|' in every browser I know of; '\\' is kept for
     // layouts where it does not. 只认 '\\' 是一个从来没生效过的绑定。
     if (key === '\\' || key === '|') return 'toggleOutline'

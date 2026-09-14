@@ -36,6 +36,13 @@ export interface DraftStore {
   save(key: string, draft: Draft): void
   /** Drops the slot: its content has nothing unwritten left in it. */
   remove(key: string): void
+  /**
+   * Whether a slot exists for `key`.
+   *
+   * Asked by the folder tree, which marks the documents that have content still
+   * to be written back — a broken record does not count as one.
+   */
+  has(key: string): boolean
   /** The document whose slot was written last, or null. */
   active(): string | null
 }
@@ -135,6 +142,8 @@ export const localStorageDraft: DraftStore = {
       /* best-effort, as above */
     }
   },
+
+  has: (key) => readSlot(key) !== null,
 
   active() {
     try {

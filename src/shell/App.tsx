@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
-import { Outline } from './components/Outline'
+import { Sidebar } from './components/Sidebar'
 import { computeStats, extractHeadings } from '../core/markdown'
 import { WELCOME_DOC, WELCOME_NAME } from '../core/welcome'
-import { createAutosave } from '../core/autosave'
+import { createAutosave, draftSlotKey } from '../core/autosave'
 import { createWriteBack, type WriteBack, type WriteBackStopReason } from '../core/writeBack'
 import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
+import { folders, type FolderEntry } from '../platform/folder'
+import type { FolderPlacement } from '../core/fileTree'
 import { THEME_LABEL, useTheme } from './useTheme'
+import { useFileTree } from './useFileTree'
+import { useSidebarPanel } from './useSidebarPanel'
 import {
   TABLE_SNIPPET,
   deleteLine,
@@ -83,8 +87,10 @@ export default function App() {
     // (see the folder ticket — persisting one is a separate decision).
     const key = documents.draft.active()
     const slot = key ? documents.draft.load(key) : null
-    if (slot) return { value: slot.content, name: slot.name, restored: true }
-    return { value: WELCOME_DOC, name: WELCOME_NAME, restored: false }
+    if (slot) {
+      return { value: slot.content, name: slot.name, root: slot.root, path: slot.path, restored: true }
+    }
+    return { value: WELCOME_DOC, name: WELCOME_NAME, root: null, path: null, restored: false }
   }, [])
 
   const [value, setValue] = useState(initial.value)
@@ -98,6 +104,21 @@ export default function App() {
    */
   const [file, setFile] = useState<OpenFile | null>(null)
   const [fileName, setFileName] = useState(initial.name)
+  /**
+   * Where the document sits inside the folder it was opened from, or null when it
+   * did not come from one. It is half of the draft slot's identity — `草稿/notes.md`
+   * and `发布/notes.md` in one folder are two documents, not one.
+   *
+   * A restored slot carries its own root and path, so a document put back on load
+   * keeps writing into the slot it came from even before the folder is opened
+   * again. Whether that is also what the title bar SHOWS is a separate question:
+   * see `inOpenFolder`.
+   */
+  const [filePlacement, setFilePlacement] = useState<FolderPlacement | null>(
+    initial.root !== null && initial.path !== null
+      ? { root: initial.root, path: initial.path }
+      : null,
+  )
   /**
    * The last content known to be in the file — null while the document has never
    * had one. A slot restored on load is content that reached no file, so it
@@ -121,13 +142,10 @@ export default function App() {
   const dirty = value !== savedValue
   const stats = useMemo(() => computeStats(value), [value])
   /**
-   * Which slot this document's unwritten content belongs to.
-   *
-   * The display name for now. The folder ticket turns it into the folder root
-   * plus the document's path inside it, which is what lets a slot be recognised
-   * again after a reload.
+   * Which slot this document's unwritten content belongs to: the folder it came
+   * from plus its path inside it, or its display name when it has no folder.
    */
-  const draftKey = fileName
+  const draftKey = draftSlotKey(filePlacement, fileName)
   /**
    * Whether the content can reach a file on its own.
    *
@@ -142,6 +160,38 @@ export default function App() {
     setToast(message)
     window.setTimeout(() => setToast((current) => (current === message ? null : current)), 2600)
   }, [])
+
+  // --- the sidebar's two panels ----------------------------------------------
+  const { panel, setPanel } = useSidebarPanel()
+  // Read on demand and cached until 刷新; see `useFileTree` for why there is no
+  // watching (the platform offers no change notifications).
+  const tree = useFileTree(notify)
+  /** Whether this platform can open a folder at all — a plain capability check. */
+  const canOpenFolder = folders.canOpen()
+  /**
+   * Whether the document on screen came from the folder that is open.
+   *
+   * Both halves are needed: no folder handle survives a reload, so a restored slot
+   * remembers where its document came from while no tree is on screen; and opening
+   * a DIFFERENT folder must not make the document look like it lives there.
+   */
+  const inOpenFolder =
+    filePlacement !== null && tree.root !== null && tree.root.name === filePlacement.root
+  /** Where the document on screen sits inside the open folder, or null. */
+  const activePath = inOpenFolder && filePlacement !== null ? filePlacement.path : null
+  /**
+   * Whether a row of the tree holds content that never reached its file.
+   *
+   * The slot key is the folder root plus the path inside it, the same rule the
+   * open document uses, which is why the two agree about which row is which.
+   */
+  const hasDraft = useCallback(
+    (entry: FolderEntry) =>
+      documents.draft.has(
+        draftSlotKey(tree.root === null ? null : { root: tree.root.name, path: entry.path }, entry.name),
+      ),
+    [tree.root],
+  )
 
   // --- outline (debounced: heading extraction is cheap but not free) ---------
   useEffect(() => {
@@ -227,9 +277,16 @@ export default function App() {
       return
     }
     unwrittenKeyRef.current = draftKey
-    autosave.schedule(draftKey, { content: value, name: fileName, root: null, path: null })
+    // The slot records where the document came from, so that a reload can put it
+    // back and the tree can mark it as having something unwritten.
+    autosave.schedule(draftKey, {
+      content: value,
+      name: fileName,
+      root: filePlacement?.root ?? null,
+      path: filePlacement?.path ?? null,
+    })
     return () => autosave.cancel()
-  }, [autosave, dirty, draftKey, fileName, value])
+  }, [autosave, dirty, draftKey, fileName, filePlacement, value])
 
   useEffect(() => {
     // The other half of "content reaches its file on its own". Nothing to do
@@ -323,6 +380,32 @@ export default function App() {
     writeBackRef.current?.flush()
   }, [autosave])
 
+  /**
+   * Adopt what an open handed back.
+   *
+   * Both open paths end here — the picker, and a click on a row of the folder tree
+   * — so "what switching does to the screen" is written once. `origin` is where
+   * the document came from: null for a picked file, its place in the folder for
+   * one clicked in the tree.
+   */
+  const adoptOpened = useCallback(
+    (
+      document: OpenDocument,
+      content: string,
+      modifiedAt: number,
+      origin: FolderPlacement | null,
+    ) => {
+      leaveDocument()
+      editorRef.current?.setDocument(content)
+      setSavedValue(content)
+      setFile({ document, modifiedAt })
+      setFileName(document.name)
+      setFilePlacement(origin)
+      setHeadings(extractHeadings(content))
+    },
+    [leaveDocument],
+  )
+
   const handleOpen = useCallback(async () => {
     const result = await documents.open()
     if (result.status === 'cancelled') return
@@ -335,14 +418,43 @@ export default function App() {
     // about a file that exists, and it can then name both sides of the trade.
     // A dismissed picker never gets here, so declining it costs no prompt.
     if (!confirmDiscard(`丢弃改动并打开「${document.name}」`)) return
-    leaveDocument()
-    editorRef.current?.setDocument(content)
-    setSavedValue(content)
-    setFile({ document, modifiedAt })
-    setFileName(document.name)
-    setHeadings(extractHeadings(content))
+    adoptOpened(document, content, modifiedAt, null)
     notify(`已打开 ${document.name}`)
-  }, [confirmDiscard, leaveDocument, notify])
+  }, [adoptOpened, confirmDiscard, notify])
+
+  /** Opens a document the tree already holds a handle for — no picker, no search. */
+  const handleOpenEntry = useCallback(
+    async (entry: FolderEntry) => {
+      const result = await documents.openEntry({ name: entry.name, handle: entry.handle })
+      if (result.status === 'cancelled') return
+      if (result.status === 'failed') {
+        notify(`打开失败：${String(result.error)}`)
+        return
+      }
+      if (!confirmDiscard(`丢弃改动并打开「${result.document.name}」`)) return
+      adoptOpened(result.document, result.content, result.modifiedAt, {
+        root: tree.root?.name ?? '',
+        path: entry.path,
+      })
+      notify(`已打开 ${result.document.name}`)
+      // On a narrow screen the sidebar is a drawer covering the document, so
+      // opening one has to get out of the way — the same reason a jump from the
+      // outline closes it.
+      if (isNarrowScreen()) setSidebarOpen(false)
+    },
+    [adoptOpened, confirmDiscard, notify, tree.root],
+  )
+
+  /**
+   * Opens a folder, and shows the panel that folder is for.
+   *
+   * Cancelling changes NOTHING — not even which panel is on screen — so the panel
+   * switch waits for a folder to actually be there.
+   */
+  const openFolder = tree.openFolder
+  const handleOpenFolder = useCallback(async () => {
+    if (await openFolder()) setPanel('files')
+  }, [openFolder, setPanel])
 
   const handleSave = useCallback(
     async (forcePicker = false) => {
@@ -395,6 +507,7 @@ export default function App() {
       editorRef.current?.setDocument(content)
       setSavedValue(content)
       setFile(null)
+      setFilePlacement(null)
       setFileName(name)
       setHeadings(extractHeadings(content))
     },
@@ -483,10 +596,11 @@ export default function App() {
       save: () => void handleSave(false),
       saveAs: () => void handleSave(true),
       open: () => void handleOpen(),
+      openFolder: () => void handleOpenFolder(),
       newDocument: handleNew,
       toggleOutline: () => setSidebarOpen((open) => !open),
     }
-  }, [commands, handleNew, handleOpen, handleSave])
+  }, [commands, handleNew, handleOpen, handleOpenFolder, handleSave])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -555,7 +669,16 @@ export default function App() {
             <span className="icon-lines" />
           </button>
           <div className="doc-title">
-            <span className="doc-name">{fileName}</span>
+            <span
+              className="doc-name"
+              title={
+                inOpenFolder && filePlacement !== null
+                  ? `${filePlacement.root}/${filePlacement.path}`
+                  : fileName
+              }
+            >
+              {inOpenFolder && filePlacement !== null ? filePlacement.path : fileName}
+            </span>
             {dirty && <span className="doc-dot" title="有未保存的修改" />}
           </div>
         </div>
@@ -594,6 +717,11 @@ export default function App() {
           <button type="button" className="text-button" onClick={() => void handleOpen()}>
             打开
           </button>
+          {canOpenFolder && (
+            <button type="button" className="text-button" onClick={() => void handleOpenFolder()}>
+              打开文件夹
+            </button>
+          )}
           <button type="button" className="text-button" onClick={() => void handleSave(false)}>
             保存
           </button>
@@ -636,6 +764,17 @@ export default function App() {
           >
             <OpenIcon />
           </button>
+          {canOpenFolder && (
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void handleOpenFolder()}
+              title="打开文件夹"
+              aria-label="打开文件夹"
+            >
+              <FolderIcon />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"
@@ -682,7 +821,21 @@ export default function App() {
         {sidebarOpen && (
           <div className="scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
         )}
-        {sidebarOpen && <Outline headings={headings} activeLine={caretLine} onJump={jumpToLine} />}
+        {sidebarOpen && (
+          <Sidebar
+            panel={panel}
+            onPanelChange={setPanel}
+            canOpenFolder={canOpenFolder}
+            tree={tree}
+            activePath={activePath}
+            hasDraft={hasDraft}
+            onOpenEntry={(entry) => void handleOpenEntry(entry)}
+            onOpenFolder={() => void handleOpenFolder()}
+            headings={headings}
+            activeLine={caretLine}
+            onJump={jumpToLine}
+          />
+        )}
         <main className="workspace">
           <Editor
             ref={editorRef}
@@ -804,6 +957,22 @@ function OpenIcon() {
   return (
     <Glyph>
       <path d="M2.5 4.2a1 1 0 0 1 1-1h2.7l1.2 1.6h5.1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" />
+    </Glyph>
+  )
+}
+
+/**
+ * A folder with a line under it: 打开文件夹.
+ *
+ * The open glyph is already a folder, so the two would be indistinguishable at
+ * 16px. The line underneath is what makes this one mean "the folder as a whole"
+ * — the list of documents, rather than one of them.
+ */
+function FolderIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 3.8a1 1 0 0 1 1-1h2.6l1.2 1.5h5.2a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" />
+      <path d="M3 14h10" />
     </Glyph>
   )
 }

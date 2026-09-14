@@ -8,7 +8,7 @@ interface OutlineProps {
   onJump: (line: number) => void
 }
 
-/** Sidebar document outline; highlights the section containing the caret. */
+/** The sidebar's second panel: the document's headings, caret section highlighted. */
 export function Outline({ headings, activeLine, onJump }: OutlineProps) {
   // The active entry is the last heading at or above the caret line.
   const activeIndex = useMemo(() => {
@@ -20,28 +20,25 @@ export function Outline({ headings, activeLine, onJump }: OutlineProps) {
     return index
   }, [activeLine, headings])
 
+  if (headings.length === 0) {
+    return <div className="outline-empty">还没有标题。用 # 写一个试试。</div>
+  }
+
   return (
-    <aside className="outline" aria-label="大纲">
-      <div className="outline-header">大纲</div>
-      {headings.length === 0 ? (
-        <div className="outline-empty">还没有标题。用 # 写一个试试。</div>
-      ) : (
-        <ul className="outline-list">
-          {headings.map((heading, index) => (
-            <li key={`${heading.line}:${index}`}>
-              <button
-                type="button"
-                className={`outline-item${index === activeIndex ? ' is-active' : ''}`}
-                data-level={heading.level}
-                title={heading.text}
-                onClick={() => onJump(heading.line)}
-              >
-                {heading.text}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </aside>
+    <ul className="outline-list">
+      {headings.map((heading, index) => (
+        <li key={`${heading.line}:${index}`}>
+          <button
+            type="button"
+            className={`outline-item${index === activeIndex ? ' is-active' : ''}`}
+            data-level={heading.level}
+            title={heading.text}
+            onClick={() => onJump(heading.line)}
+          >
+            {heading.text}
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }

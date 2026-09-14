@@ -504,6 +504,128 @@ body {
 }
 
 /* ==========================================================================
+   Sidebar: the two panels, and the folder tree
+   ========================================================================== */
+
+.sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  padding: 10px 12px 6px;
+}
+
+.sidebar-tab {
+  flex: 1;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sidebar-tab:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.sidebar-tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* The folder's name, with what can be done to the folder beside it. Inherits
+   `.outline-header`'s spacing but not its small-caps label styling: this is a
+   name, not a heading. */
+.sidebar-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sidebar-root-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-soft);
+}
+
+.sidebar-actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.sidebar-action {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.sidebar-action:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* The tree. A row knows how deep it is through `--depth`; the indent arithmetic
+   stays here rather than in the component. */
+.tree-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: calc(8px + var(--depth, 0) * 12px);
+}
+
+.tree-caret {
+  width: 10px;
+  flex: none;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-note {
+  padding-left: calc(8px + var(--depth, 0) * 12px);
+}
+
+/* Content that never reached its file. A dot rather than a word: the row already
+   has to fit a file name, and the tooltip says the rest. */
+.tree-badge {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ==========================================================================
    Document surface
    One scrolling container holding the source-backed view. Wrapping is the
    browser's job: markers stay in the DOM and collapse to zero width, so a
@@ -1031,9 +1153,12 @@ body {
 
   /* Header budget. The left group is `flex: none` with a 180px floor and a
      220px file name, which alone is 252px: enough on its own to push the mini
-     group off a 360px screen. Both caps come down here. */
+     group off a 360px screen. Here it becomes the part that gives way — the file
+     name ellipsizes instead of the command group being pushed out, which keeps
+     working when the group gains another command. */
   .titlebar-left {
     min-width: 0;
+    flex: 1 1 auto;
   }
 
   .doc-name {

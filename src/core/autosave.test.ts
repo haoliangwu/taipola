@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DRAFT_DEBOUNCE_MS,
   createAutosave,
+  draftSlotKey,
   type AutosaveDeps,
   type Draft,
   type DraftInput,
@@ -70,6 +71,23 @@ function fakeBackend() {
     },
   }
 }
+
+describe('draftSlotKey', () => {
+  it('没有文件夹的文档用它的显示名当槽', () => {
+    expect(draftSlotKey(null, 'welcome.md')).toBe('welcome.md')
+    expect(draftSlotKey(null, '笔记.md')).toBe('笔记.md')
+  })
+
+  it('文件夹里的文档用「根名/相对路径」当槽', () => {
+    expect(draftSlotKey({ root: '干草堆', path: '章节/一.md' }, '一.md')).toBe('干草堆/章节/一.md')
+  })
+
+  it('同名不同目录的两份文档是两个槽', () => {
+    expect(draftSlotKey({ root: '项目', path: '草稿/notes.md' }, 'notes.md')).not.toBe(
+      draftSlotKey({ root: '项目', path: '发布/notes.md' }, 'notes.md'),
+    )
+  })
+})
 
 describe('createAutosave', () => {
   it('防抖：窗口内连打多次，只在最后一次之后写一遍', () => {

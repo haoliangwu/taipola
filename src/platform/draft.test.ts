@@ -31,6 +31,19 @@ describe('localStorageDraft', () => {
     expect(localStorageDraft.load('从来没有过.md')).toBeNull()
   })
 
+  it('has 说得出哪份文档还有没写回的内容', () => {
+    localStorageDraft.save('甲.md', draft('甲的改动'))
+
+    expect(localStorageDraft.has('甲.md')).toBe(true)
+    expect(localStorageDraft.has('乙.md')).toBe(false)
+  })
+
+  it('坏掉的记录不算「有内容」', () => {
+    localStorage.setItem('taipola:draft:坏.md', '{ 这不是 JSON')
+
+    expect(localStorageDraft.has('坏.md')).toBe(false)
+  })
+
   it('写入的槽成为「最后编辑的那个」', () => {
     localStorageDraft.save('甲.md', draft('甲'))
     localStorageDraft.save('乙.md', draft('乙'))

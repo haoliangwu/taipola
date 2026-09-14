@@ -49,7 +49,12 @@ describe('shortcutFor', () => {
   it('Shift 分支是早返回：没绑定的 Shift 组合一律不做声', () => {
     expect(shortcutFor(mod('b', { shiftKey: true }))).toBeNull()
     expect(shortcutFor(mod('1', { shiftKey: true }))).toBeNull()
-    expect(shortcutFor(mod('o', { shiftKey: true }))).toBeNull()
+    expect(shortcutFor(mod('x', { shiftKey: true }))).toBeNull()
+  })
+
+  it('Cmd/Ctrl+Shift+O 打开文件夹，接力给 Cmd/Ctrl+O 打开文件', () => {
+    expect(shortcutFor(mod('o', { shiftKey: true }))).toBe('openFolder')
+    expect(shortcutFor(mod('o'))).toBe('open')
   })
 
   it('Escape 只在没有修饰键时模糊焦点', () => {

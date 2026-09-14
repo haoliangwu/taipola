@@ -12,6 +12,8 @@ import userEvent from '@testing-library/user-event'
 import { page } from 'vitest/browser'
 import App from './App'
 import { documents } from '../platform/documents'
+import { folders } from '../platform/folder'
+import { readDocumentSource } from '../editor/render'
 
 const NARROW = [390, 844] as const
 const NARROW_SMALL = [360, 780] as const
@@ -79,19 +81,21 @@ describe('窄屏外壳（390px）', () => {
     expect(el('.outline')).toBeNull()
   })
 
-  it('mini 组是手机上真正能用的那几个命令：新建 / 打开 / 保存 / 导出', async () => {
+  it('mini 组是手机上真正能用的那几个命令：新建 / 打开 / 打开文件夹 / 保存 / 导出', async () => {
     vi.spyOn(documents, 'open').mockResolvedValue({ status: 'cancelled' })
     vi.spyOn(documents, 'save').mockImplementation(async (_doc, _value, options) => ({
       status: 'saved',
       document: { name: options?.name ?? 'welcome.md', handle: null },
     }))
+    // 能不能开文件夹由平台决定，所以这条能力在这里点名，而不是听环境的。
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
 
     const { user, el } = renderApp()
     const labels = [...el('.titlebar-mini')!.querySelectorAll('button')].map((b) =>
       b.getAttribute('aria-label'),
     )
     // 顺序与桌面组一致（主题除外——它是偏好，`system` 跟手机自己的设置）。
-    expect(labels).toEqual(['新建', '打开', '保存', '导出'])
+    expect(labels).toEqual(['新建', '打开', '打开文件夹', '保存', '导出'])
 
     await user.click(el('.titlebar-mini [aria-label="新建"]')!)
     expect(el('.doc-name')!.textContent).toBe('untitled.md')
@@ -162,6 +166,34 @@ describe('窄屏外壳（390px）', () => {
     expect(visible('.outline')).toBe(true)
     expect(visible('.scrim')).toBe(false)
     view.unmount()
+  })
+
+  it('窄屏点树里的文档：抽屉让开，文档换掉', async () => {
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
+    vi.spyOn(folders, 'pick').mockResolvedValue({ name: '干草堆', handle: { dir: '干草堆' } })
+    vi.spyOn(folders, 'list').mockResolvedValue([
+      { name: '笔记.md', path: '笔记.md', kind: 'file', handle: { file: '笔记.md' } },
+    ])
+    vi.spyOn(documents, 'openEntry').mockResolvedValue({
+      status: 'opened',
+      document: { name: '笔记.md', handle: { file: '笔记.md' } },
+      content: '文件里的内容\n',
+      modifiedAt: 111,
+    })
+
+    const { user, el, visible } = renderApp()
+    // 抽屉是盖在文档上的：先把它拉开，再从 mini 组打开文件夹（面板自动切到「文件」）。
+    await user.click(el('[aria-label="切换大纲"]')!)
+    expect(visible('.outline')).toBe(true)
+    await user.click(el('.titlebar-mini [aria-label="打开文件夹"]')!)
+    expect(visible('.tree-item')).toBe(true)
+
+    await user.click(el('.tree-item')!)
+
+    // 打开文档之后抽屉要让开——和大纲跳转同一个理由：它正盖着刚打开的东西。
+    expect(visible('.outline')).toBe(false)
+    expect(el('.doc-name')!.textContent).toBe('笔记.md')
+    expect(readDocumentSource(el('.doc')!)).toBe('文件里的内容\n')
   })
 
   it('长文件名不会把 header 撑出横向溢出（360 与 390 都试）', async () => {

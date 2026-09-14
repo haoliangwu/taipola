@@ -3,6 +3,7 @@ import { act, render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
+import { folders, type FolderEntry } from '../platform/folder'
 import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
 
@@ -642,6 +643,328 @@ describe('有文件时自动写回', () => {
     } finally {
       saveSpy.mockRestore()
       modified.mockRestore()
+      view.unmount()
+    }
+  })
+})
+
+/**
+ * The folder sidebar: browsing a folder and switching documents inside it.
+ *
+ * The real directory picker is a system dialog and cannot be automated, so the
+ * seam is stubbed here. What that leaves to a human — picking a real folder on a
+ * real machine — is written down in the ticket's `## Comments`.
+ */
+describe('侧栏打开文件夹', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  const ROOT = { name: '干草堆', handle: { dir: '干草堆' } }
+  const NOTE = { name: '笔记.md', handle: { file: '笔记.md' } }
+  const CHAPTER = { name: '一.md', handle: { file: '章节/一.md' } }
+
+  /** Deliberately unsorted, and holding both what shows and what must not. */
+  const ROOT_ENTRIES: FolderEntry[] = [
+    { name: '截图.png', path: '截图.png', kind: 'file', handle: {} },
+    { name: '章节', path: '章节', kind: 'directory', handle: {} },
+    { name: '笔记.md', path: '笔记.md', kind: 'file', handle: NOTE.handle },
+    { name: '.hidden.md', path: '.hidden.md', kind: 'file', handle: {} },
+    { name: '空目录', path: '空目录', kind: 'directory', handle: {} },
+  ]
+
+  function stubFolders() {
+    return {
+      canOpen: vi.spyOn(folders, 'canOpen').mockReturnValue(true),
+      pick: vi.spyOn(folders, 'pick').mockResolvedValue(ROOT),
+      list: vi.spyOn(folders, 'list').mockImplementation(async (_root, path) => {
+        if (path === '章节') {
+          return [{ name: '一.md', path: '章节/一.md', kind: 'file', handle: CHAPTER.handle }]
+        }
+        // 一个真的空目录：展开它必须说一句话，而不是留一片空白。
+        if (path === '空目录') return []
+        return [...ROOT_ENTRIES]
+      }),
+    }
+  }
+
+  async function openFolder(view: ReturnType<typeof render>) {
+    await act(async () => {
+      findButton(view, '打开文件夹').click()
+    })
+  }
+
+  const rows = (view: ReturnType<typeof render>) =>
+    [...view.container.querySelectorAll('.file-tree .tree-item')].map((el) =>
+      // The disclosure caret is part of the button's text; the name is the rest.
+      (el.textContent ?? '').replace(/[▸▾]/g, ''),
+    )
+
+  const row = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.tree-item')].find((el) =>
+      (el.textContent ?? '').includes(label),
+    ) as HTMLButtonElement
+
+  const sidebarAction = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.sidebar-action')].find(
+      (el) => el.textContent?.trim() === label,
+    ) as HTMLButtonElement | undefined
+
+  const tab = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.sidebar-tab')].find(
+      (el) => el.textContent?.trim() === label,
+    ) as HTMLButtonElement
+
+  it('打开文件夹：侧栏切到「文件」，只列 Markdown 与目录，目录在前', async () => {
+    stubFolders()
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+
+      expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('文件')
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('干草堆')
+      // 目录在前；同名次按名称升序（码点序，见 `core/fileTree.ts`）。
+      expect(rows(view)).toEqual(['空目录', '章节', '笔记.md'])
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('点目录只展开它，不换掉正在编辑的文档；折叠再展开不再读一次', async () => {
+    const stubs = stubFolders()
+    const openEntry = vi.spyOn(documents, 'openEntry')
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      const before = readDocumentSource(documentBody(view))
+
+      await user.click(row(view, '章节'))
+
+      expect(readDocumentSource(documentBody(view))).toBe(before)
+      expect(rows(view)).toEqual(['空目录', '章节', '一.md', '笔记.md'])
+      expect(openEntry).not.toHaveBeenCalled()
+      expect(stubs.list).toHaveBeenCalledTimes(2)
+
+      // 折叠、再展开：读过的层留在缓存里，不再问一次目录。
+      await user.click(row(view, '章节'))
+      await user.click(row(view, '章节'))
+      expect(rows(view)).toEqual(['空目录', '章节', '一.md', '笔记.md'])
+      expect(stubs.list).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('展开一个空目录：说一句「没有 Markdown 文档」，不是一片空白', async () => {
+    stubFolders()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      await user.click(row(view, '空目录'))
+
+      expect(view.container.querySelector('.tree-note')?.textContent).toBe('没有 Markdown 文档')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('点文件：当前窗口换文档、不再询问、标题栏显示相对路径、树上高亮', async () => {
+    stubFolders()
+    vi.spyOn(documents, 'openEntry').mockImplementation(async (doc) => ({
+      status: 'opened',
+      document: doc,
+      content: doc.name === '一.md' ? '第一章\n' : '笔记正文\n',
+      modifiedAt: 111,
+    }))
+    const confirm = vi.spyOn(window, 'confirm')
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      // 打开文件夹本身不动当前文档。
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+
+      await user.click(row(view, '章节'))
+      await user.click(row(view, '一.md'))
+
+      // 有文件句柄 = 内容会自己写回，所以切换不再问任何问题。
+      expect(confirm).not.toHaveBeenCalled()
+      expect(readDocumentSource(documentBody(view))).toBe('第一章\n')
+      // 相对路径，而不是裸文件名：同名文档在两个子目录里才分得开。
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('章节/一.md')
+      expect(view.container.querySelector('.doc-name')?.getAttribute('title')).toBe(
+        '干草堆/章节/一.md',
+      )
+      expect(row(view, '一.md').classList.contains('is-active')).toBe(true)
+
+      // Settle before the next switch. Without this the second swap loses: an
+      // input/blur round-trip queued by the FIRST switch (and the write-back it
+      // started) lands after the second `setDocument` and writes the previous
+      // text back through `onChange`. Recorded in the ticket's Comments as an
+      // ordering question for a real browser.
+      await act(async () => {})
+      const openEntry = vi.mocked(documents.openEntry)
+      await user.click(row(view, '笔记.md'))
+      expect(openEntry).toHaveBeenCalledTimes(2)
+      expect(openEntry.mock.calls[1]?.[0]).toEqual({ name: '笔记.md', handle: NOTE.handle })
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('笔记.md')
+      expect(confirm).not.toHaveBeenCalled()
+      expect(readDocumentSource(documentBody(view))).toBe('笔记正文\n')
+      expect(row(view, '笔记.md').classList.contains('is-active')).toBe(true)
+      expect(row(view, '一.md').classList.contains('is-active')).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  /**
+   * 「点文件不询问」的成立条件是当前文档**有文件**：01 把提示留在没有文件的
+   * 文档上（草稿是它唯一的副本），这里钉住那一半，免得读成"什么都不问了"。
+   */
+  it('当前文档没有文件、又有没保存的内容：切换仍然先问', async () => {
+    stubFolders()
+    vi.spyOn(documents, 'openEntry').mockResolvedValue({
+      status: 'opened',
+      document: CHAPTER,
+      content: '第一章\n',
+      modifiedAt: 111,
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await typeInto(view, 'X')
+      const before = readDocumentSource(documentBody(view))
+      await openFolder(view)
+
+      await user.click(row(view, '章节'))
+      await user.click(row(view, '一.md'))
+
+      expect(confirm).toHaveBeenCalledTimes(1)
+      // 拒绝之后整篇没被替换。
+      expect(readDocumentSource(documentBody(view))).toBe(before)
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('有没写回文件的文档在树上带标记', async () => {
+    localStorage.setItem(
+      'taipola:draft:干草堆/笔记.md',
+      JSON.stringify({
+        content: '没写回的改动\n',
+        name: '笔记.md',
+        savedAt: 1,
+        root: '干草堆',
+        path: '笔记.md',
+      }),
+    )
+    stubFolders()
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+
+      expect(row(view, '笔记.md').querySelector('.tree-badge')).not.toBeNull()
+      expect(row(view, '空目录').querySelector('.tree-badge')).toBeNull()
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('刷新重读读过的层，行还在', async () => {
+    const stubs = stubFolders()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      expect(stubs.list).toHaveBeenCalledTimes(1)
+
+      await user.click(sidebarAction(view, '刷新')!)
+      // 读目录是异步的：等它落完再断言。
+      await act(async () => {})
+
+      expect(stubs.list).toHaveBeenCalledTimes(2)
+      expect(rows(view)).toEqual(['空目录', '章节', '笔记.md'])
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('刷新读不动时，树保留原来那些行，只提示一次', async () => {
+    const stubs = stubFolders()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      stubs.list.mockRejectedValue(new Error('权限被撤了'))
+      await user.click(sidebarAction(view, '刷新')!)
+      await act(async () => {})
+
+      // 缓存不是先清后读：读失败不该把用户正在看的树换成一片「正在读取…」。
+      expect(rows(view)).toEqual(['空目录', '章节', '笔记.md'])
+      expect(view.container.querySelector('.toast')?.textContent).toContain('读取文件夹失败')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('文件夹选择器被取消：什么都不发生，连面板都不换', async () => {
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
+    vi.spyOn(folders, 'pick').mockResolvedValue(null)
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+
+      expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('大纲')
+      expect(view.container.querySelector('.sidebar-root-name')).toBeNull()
+      expect(view.container.querySelector('.file-tree')).toBeNull()
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('平台不能开文件夹时：入口不出现，也不给一个只能失败的按钮', async () => {
+    vi.spyOn(folders, 'canOpen').mockReturnValue(false)
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      expect(
+        [...view.container.querySelectorAll('.text-button')].some(
+          (el) => el.textContent?.trim() === '打开文件夹',
+        ),
+      ).toBe(false)
+      expect(view.container.querySelector('.titlebar-mini [aria-label="打开文件夹"]')).toBeNull()
+
+      await user.click(tab(view, '文件'))
+
+      expect(sidebarAction(view, '打开文件夹')).toBeUndefined()
+      expect(view.container.querySelector('.outline-empty')?.textContent).toContain('不能打开文件夹')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('侧栏面板的选择被记住', () => {
+    localStorage.setItem('taipola:sidebar-panel', 'files')
+    const view = render(<App />)
+    try {
+      expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('文件')
+    } finally {
       view.unmount()
     }
   })
