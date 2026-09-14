@@ -569,10 +569,18 @@ export class EditorKernel {
         this.commit(renumberLists(edited), live + insert.length)
         return
       }
-      // A plain line, caret at its very END: split AFTER the line's newline, so a
-      // fresh empty line opens below. Inserting at `lineEnd` itself (just before
-      // the existing '\n') produces the SAME string and made Enter a silent no-op
-      // at the end of any line.
+      // A plain line, caret at its very END: one fresh line below, opened with a
+      // SINGLE newline. The line's own trailing `\n` is already the boundary to
+      // the next line (a doc-final line without one gains its terminator here).
+      // The caret lands on the fresh line, and typing there continues the SAME
+      // paragraph (a soft break) — exactly like a plain text editor, and like
+      // Shift+Enter. The paragraph gap is made by a SECOND Enter, or by Enter
+      // MID-line, which splits the paragraph in two
+      // (`.scratch/enter-backspace-smoke/issues/10`).
+      //
+      // Inserting at `lineEnd` itself (just before the existing '\n') produced
+      // the same string but left the caret before the break, which made Enter a
+      // silent no-op at the end of any line once.
       if (live >= lineEnd) {
         if (currentLine === '') {
           // Blank line: one more blank line, exactly as before.
@@ -580,18 +588,11 @@ export class EditorKernel {
           this.insertNewlines(at, 1, live + 1)
           return
         }
-        // Enter is the HARD break: it leaves a paragraph gap, i.e. one blank
-        // line MORE than Shift+Enter's plain newline — the source-level
-        // difference Typora shows as "Enter 的换行距离比 Shift+Enter 大"
-        // (`.scratch/enter-backspace-smoke/issues/01`). The caret lands at the
-        // start of the FIRST fresh line (`at + 1`), so typing right after Enter
-        // opens a paragraph of its own, an empty line above and below it. At
-        // the very END of the document, when the line has NO trailing newline
-        // (`lineEnd === doc.length`), both fresh lines trail the text and the
-        // caret goes past them (`at + 2`): typing then starts the new paragraph
-        // one blank line below.
         const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
-        this.insertNewlines(at, 2, lineEnd === this.doc.length ? at + 2 : at + 1)
+        // Caret on the FRESH line. A line that already has its trailing newline
+        // starts the fresh one at `at`; a doc-final line without one gains its
+        // terminator with the insert, so the fresh line starts one past it.
+        this.insertNewlines(at, 1, lineEnd === this.doc.length ? at + 1 : at)
         return
       }
       // Line START: an empty line opens above (unchanged).
