@@ -810,20 +810,23 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('# 标题\n\n\n正文\n')
-    // 行首合并的既有落点规则：光标停在上一段内容末尾（backspace-join/01）——
-    // `# 标题` 4 字，合并后光标就在偏移 4。
-    expect(caretFromDom()).toBe(4)
+    // 光标在**空行**上的那条规则（`enter-backspace-smoke/09`）：删掉的是它前面那个换行，
+    // 光标留在剩下的空行上（3 个 \n 收成 2 个，光标落在第 2 个空行的行首 = 偏移 5）。
+    // 改动前它会被甩到标题末尾，再按一次就吃掉标题的字。
+    expect(caretFromDom()).toBe(5)
     await assertDomMatchesSource(r)
   })
 
   /**
-   * 合并换行之后光标落在哪里。
+   * 合并换行之后光标落在哪里：**两条编辑路径，两条规则**。
    *
-   * 同一段文字有**两条编辑路径**：光标在空行上、光标在下一行行首。两条路径产出的文本一字不差，
-   * 所以落点也必须一样——否则用户会遇到"同样是消掉一个空行，光标却一处落在上一段末尾、
-   * 一处落在下一行文字之前"，后者继续打字会插进下一段里。
+   * - 光标在**下一行行首**（C2）：落在上一段内容的末尾。`live - 1` 会停在看不见的空行上，
+   *   读起来像"光标跳到了下一行文字前面"，继续打字会插进下一段里（`backspace-join/01`）。
+   * - 光标在**空行**上（C1）：落在删掉的那个换行处，也就是**剩下的空行**上。曾经两条路径
+   *   都统一到"上一段末尾"，代价是连按 Backspace 时第二次就删掉上一段的最后一个字
+   *   （`enter-backspace-smoke/09`）——空行有多少个，用户就想删多少个。
    */
-  it('合并之后光标落在上一段文字的末尾：两条编辑路径给同一个落点', async () => {
+  it('合并换行的落点：下一行行首落上一段末尾，空行上则留在空行上', async () => {
     // 路径 C1：回车拆出一个空行，光标就在那个空行上。
     const split = renderEditor('## 有序列表\n## 列表嵌套\n')
     await clickInRun(split, 0, 0, 1, 'end')
@@ -836,8 +839,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(split)
     await flush()
     expect(split.getDoc()).toBe('## 有序列表\n\n## 列表嵌套\n')
-    // 行首合并的既有落点规则：光标停在上一段内容末尾（`## 有序列表` 7 字 = 偏移 7）。
-    expect(caretFromDom()).toBe(7)
+    // 光标留在剩下的那个空行上（偏移 8），离它删掉的那个换行最近。
+    expect(caretFromDom()).toBe(8)
 
     // 路径 C2：光标在下一行的行首（源码里的行首，`## ` 之前）。先把光标放进这一行，
     // 让 `## ` 显现成可见源码，再移到行首——这就是真的按两次左箭头会到的地方。
@@ -857,9 +860,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
 
     await pressBackspace(atLineStart)
     await flush()
-    // 落点规则一致（都停在上一段内容末尾 = 偏移 7），但删掉的 \n 不同：
-    // Enter（硬换行）现在拆出两个空行，C1 一次 Backspace 只收回一个（3 \n → 2 \n），
-    // C2 的起点本来就只有一个空行（2 \n → 1 \n），所以文本必然不同。
+    // C2 走另一条规则：光标落在上一段内容末尾（偏移 7）。文本也不同——C1 的起点是 3 个 \n
+    // （Enter 硬换行拆出两个空行），C2 的起点只有 2 个 \n，一次 Backspace 各收一个。
     expect(atLineStart.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
     expect(caretFromDom()).toBe(7)
   })
@@ -941,10 +943,12 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('连续两个空行：一次 Backspace 只吃掉一个，光标落在上一段末尾', async () => {
+  it('光标在下一行行首：一次 Backspace 只吃掉一个换行，落点在上一段末尾', async () => {
     const r = renderEditor('甲\n\n\n乙\n')
     await flush()
     // 两个空行是同一个 blank block 的两条视觉行；`乙` 是 block 2。
+    // 这条走的是 C2 路径（光标在**下一行行首**，行内有文字）；同样一份文档、光标停在
+    // **空行**上那条走 C1，落点在剩下的空行上——两条规则，见下面的「合并换行的落点」。
     await clickInRun(r, 2, 0, 0, 'start')
     await flush()
     expect(caretFromDom()).toBe(4)
@@ -965,6 +969,77 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n乙\n')
+  })
+
+  /**
+   * 光标停在**空行**上时是另一条规则（`enter-backspace-smoke/09`）。
+   *
+   * 改动前这一按会被一路甩到上一段末尾（`while (joined[caret - 1] === '\n') caret--`），
+   * 于是**第二次** Backspace 删掉的是正文的最后一个字，而剩下的空行一个不少——
+   * 空行越多越明显。删掉的就是光标前面那个换行，光标留在剩下的空行上。
+   */
+  it('光标在空行上：一次只删一个换行，光标留在空行上', async () => {
+    const r = renderEditor('甲\n\n\n乙\n')
+    await flush()
+    // 两个空行是同一个 blank block 的两条视觉行，这里点第 2 条。
+    await clickAtLine(r, 1, 1)
+    await flush()
+    expect(caretFromDom()).toBe(3)
+
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    expect(caretFromDom()).toBe(2)
+    await assertDomMatchesSource(r)
+  })
+
+  it('空行上连按：换行逐个消失、光标跟着走，正文一个字不少', async () => {
+    const r = renderEditor('甲\n\n\n\n\n乙\n') // 4 个空行
+    await flush()
+    await clickAtLine(r, 1, 2)
+    await flush()
+    expect(caretFromDom()).toBe(4)
+
+    await pressBackspace(r)
+    await flush()
+    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n\n\n乙\n', 3])
+    await pressBackspace(r)
+    await flush()
+    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n\n乙\n', 2])
+    await pressBackspace(r)
+    await flush()
+    // 三次删掉三个换行，`甲` 还在——改动前它在这第三次之前就被吃掉了。
+    // 这时光标已经贴到 `甲` 的行末（偏移 1），是空行的边界而不是空行本身。
+    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n乙\n', 1])
+    await assertDomMatchesSource(r)
+
+    // 边界：再按一次就是普通的删字（这里已经没有换行可删了），一个字都不多删。
+    await pressBackspace(r)
+    await flush()
+    expect([r.getDoc(), caretFromDom()]).toEqual(['\n\n乙\n', 0])
+  })
+
+  /**
+   * 只有空格的行同样是空行（`isBlankLine`，与解析器和视图的口径一致）。
+   *
+   * 改动前这一按会把光标甩到 `甲` 末尾、再按一次吃掉 `甲`：条件是 `line.text !== ''`，
+   * 而 `   ` 被当成了文字，于是又走回「往上找上一段」那条路
+   * （`.scratch/enter-backspace-smoke/issues/09`）。
+   */
+  it('只有空格的行：和空行同一条规则，不甩到上一段末尾', async () => {
+    const r = renderEditor('甲\n\n   \n乙\n')
+    await flush()
+    await clickAtLine(r, 1, 1)
+    await flush()
+    expect(caretFromDom()).toBe(3) // 空格行的行首
+
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n   \n乙\n')
+    expect(caretFromDom()).toBe(2)
+    // 这里不跑 `assertDomMatchesSource`：**只有空格的行本身在视图里就被丢掉了**（DOM 重建出的
+    // 源码少了那几个空格），是既有问题、与本票的光标规则无关，已记进
+    // `.scratch/enter-backspace-smoke/issues/08-observations-log.md` 的观察项。
   })
 
   /**

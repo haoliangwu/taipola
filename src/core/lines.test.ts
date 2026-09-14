@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { lineOfOffset, offsetForLine } from './lines'
+import { isBlankLine, lineOfOffset, offsetForLine } from './lines'
+
+describe('isBlankLine', () => {
+  it('空字符串、只有空格或制表符的行都算空行', () => {
+    expect(isBlankLine('')).toBe(true)
+    expect(isBlankLine('   ')).toBe(true)
+    expect(isBlankLine('\t \t')).toBe(true)
+  })
+
+  it('有任何别的字符就不是空行', () => {
+    expect(isBlankLine('甲')).toBe(false)
+    expect(isBlankLine(' 甲 ')).toBe(false)
+    expect(isBlankLine('-')).toBe(false)
+  })
+})
 
 describe('line arithmetic', () => {
   it('offsetForLine / lineOfOffset 互为反函数', () => {

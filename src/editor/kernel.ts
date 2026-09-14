@@ -33,7 +33,7 @@ import {
   renderDocument,
   sanitizeDom,
 } from './render'
-import { lineOfOffset, offsetForLine } from '../core/lines'
+import { isBlankLine, lineOfOffset, offsetForLine } from '../core/lines'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -716,17 +716,25 @@ export class EditorKernel {
           this.pushUndo({ value: this.doc, caret: this.caret })
           const drop = joinIndent.length + 1
           const joined = this.doc.slice(0, live - drop) + this.doc.slice(live)
-          // Land the caret at the END of the content above, not at the start of the
-          // line below. When the line above is EMPTY — which is the case that brings
-          // the user here — `live - 1` is already the caret's own line start, so the
-          // caret read as "jumped in front of the next line's text" and typing glued
-          // itself to the following block. Both edit paths (caret on the empty line,
-          // caret at the start of the line below) produce the SAME text, so they must
-          // produce the same caret; this is the offset that describes what the user
-          // meant, and it is also where Enter's reverse lands (Enter then Backspace
-          // returns to the offset from before Enter).
+          // Backspace joining a line that has TEXT to the content above: land the
+          // caret at the END of that content, not at the start of the line below.
+          // `live - 1` would sit on an invisible blank line, so the caret read as
+          // "jumped in front of the next line's text" and typing glued itself to
+          // the following block. It is also where Enter's reverse lands — Enter
+          // then Backspace returns to the offset from before Enter — in THIS
+          // case; Enter at the end of a blank line has its reverse in the branch
+          // below; the two are not the same offset.
+          //
+          // A caret that was ON an empty line is a different case, and it must not
+          // walk: the blank run is the user's, one Backspace takes one newline,
+          // and the caret stays on what is left of it. Walking back from there put
+          // the caret at the end of the paragraph above — one keystroke away from
+          // deleting its last character, which is what
+          // `.scratch/enter-backspace-smoke/issues/09` reports.
           let caret = live - drop
-          while (caret > 0 && joined[caret - 1] === '\n') caret--
+          if (!isBlankLine(line.text)) {
+            while (caret > 0 && joined[caret - 1] === '\n') caret--
+          }
           this.commit(joined, caret)
           return
         }
@@ -820,7 +828,7 @@ export class EditorKernel {
    *   line rule, so its indentation goes with the break too.
    */
   private continuationIndent(before: string, line: LineBounds): string | null {
-    if (before === '' || !/^[ \t]+$/.test(before)) return null
+    if (before === '' || !isBlankLine(before)) return null
     // Exactly at the content start, and with content after it: a caret inside the
     // indentation, or on a whitespace-only line, is deleting whitespace.
     if (/^[ \t]*/.exec(line.text)?.[0] !== before) return null
