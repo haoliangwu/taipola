@@ -1037,9 +1037,64 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     expect(r.getDoc()).toBe('甲\n   \n乙\n')
     expect(caretFromDom()).toBe(2)
-    // 这里不跑 `assertDomMatchesSource`：**只有空格的行本身在视图里就被丢掉了**（DOM 重建出的
-    // 源码少了那几个空格），是既有问题、与本票的光标规则无关，已记进
-    // `.scratch/enter-backspace-smoke/issues/08-observations-log.md` 的观察项。
+    // 改动前这里跑不了这行断言：只有空格的行在解析阶段就被丢了字符，DOM 重建出的
+    // 源码比模型少那几个空格。现在空白行的字符活在折叠 run 里，往返逐字一致
+    // （`.scratch/whitespace-round-trip/issues/01`）。
+    await assertDomMatchesSource(r)
+  })
+
+  /**
+   * 只有空格的行：源码必须原样活下来。
+   *
+   * 改动前空白行在解析阶段就丢了字符（blank 块的 `raw: ''`），DOM 重建出的源码比模型
+   * 少那几个空格，于是**任何一次编辑**都会把它们写没——用户打出来的空白就这么消失，
+   * 而且撤销栈里那一步记的是"输入了别的字"，等于不可撤销。
+   */
+  it('只有空格的行：渲染出来的 DOM 与模型逐字一致', async () => {
+    const r = renderEditor('甲\n   \n乙\n')
+    await flush()
+    await assertDomMatchesSource(r)
+  })
+
+  it('只有空格的行：在别处输入一个字符，空格原样保留、字符落在光标处', async () => {
+    const r = renderEditor('甲\n   \n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    await r.user.keyboard('X')
+    await flush()
+    expect(r.getDoc()).toBe('X甲\n   \n乙\n')
+    expect(caretFromDom()).toBe(1)
+    await assertDomMatchesSource(r)
+  })
+
+  it('只有空格的行：在这一行上打字，字符落在这一行、空格一个不少', async () => {
+    const r = renderEditor('甲\n   \n乙\n')
+    await flush()
+    await clickAtLine(r, 1, 0)
+    await flush()
+    await r.user.keyboard('X')
+    await flush()
+    // 空格不参与排版，所以这一行只有一个光标位：行首。打进去的字落在空格**之前**
+    // ——比丢掉空格好；这个代价记在 ADR-0002。
+    expect(r.getDoc()).toBe('甲\nX   \n乙\n')
+    // 光标随后面的字（`X` 之后），没有跳回上一行、也没有跳到文档末尾。
+    expect(caretFromDom()).toBe(3)
+    await assertDomMatchesSource(r)
+  })
+
+  it('只有空格的行：在行首回车，换行插在光标处（空格之前）', async () => {
+    // 回车走 `applyEdit`，它从 DOM 选区读块内偏移。折叠 run 排不出来，读回必须是
+    // **行首**；读成"最后一个 run 的末尾"就会把换行插到那几个空格后面，用户看到
+    // 光标在行首、换行却出现在空格之后。
+    const r = renderEditor('甲\n   \n乙\n')
+    await flush()
+    await clickAtLine(r, 1, 0)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n   \n乙\n')
+    await assertDomMatchesSource(r)
   })
 
   /**

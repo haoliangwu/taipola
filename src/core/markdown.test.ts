@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { computeStats, extractHeadings, parseDocument } from './markdown'
 
 /**
@@ -99,6 +99,45 @@ describe('parseDocument 结构不变量', () => {
     const { blocks } = parseDocument('a\n')
     expect(blocks).toHaveLength(2)
     expect(blocks[1].raw).toBe('')
+  })
+
+  /**
+   * 空白行对 Markdown 是空行，但那几个空格是用户自己打出来的源码。丢掉它们之后，
+   * 下一次按键会把"这里没有空格"写回文档——用户的东西静默消失，而且撤销栈里那一步
+   * 记的是别的事件，等于不可撤销（`.scratch/whitespace-round-trip/issues/01`）。
+   */
+  it('只有空格的行：字符留在块的 raw 里', () => {
+    const { blocks } = parseDocument('甲\n   \n乙\n')
+    expect(blocks.map((block) => block.raw)).toEqual(['甲', '   ', '乙', ''])
+    expect([blocks[1].startLine, blocks[1].endLine]).toEqual([1, 2])
+  })
+
+  it('两行都只有空格：块内的换行属于这个块，原样保留', () => {
+    const { blocks } = parseDocument('甲\n  \n   \n乙\n')
+    expect(blocks[1].raw).toBe('  \n   ')
+  })
+
+  it('纯换行的空块仍然是空 raw（行数照旧由行的跨度决定）', () => {
+    // 上面那条的边界：只有换行的空块不该因为"保留源码"而改变形状，它今天靠
+    // `endLine - startLine` 补出若干个行盒。
+    const { blocks } = parseDocument('甲\n\n\n乙\n')
+    expect(blocks[1].raw).toBe('')
+    expect(blocks[1].endLine - blocks[1].startLine).toBe(2)
+  })
+
+  it('空白行的源码不让 dev 的 assertSourcePreserved 出声', () => {
+    // 块铺满断言只比对"行跨度能不能覆盖源码"，它今天也是绿的；这条钉住"保留 raw
+    // 不等于越界"（票据验收里点名的一条）。断言失败走的是 console.error。
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      parseDocument('甲\n   \n乙\n')
+      parseDocument('甲\n  \n   \n乙\n')
+      parseDocument('甲\n\n   \n乙\n')
+      parseDocument('   \n')
+    } finally {
+      spy.mockRestore()
+    }
+    expect(spy).not.toHaveBeenCalled()
   })
 })
 

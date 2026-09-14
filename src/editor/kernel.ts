@@ -251,9 +251,9 @@ export class EditorKernel {
       const start = this.offsets[block.index]
       const end = start + block.raw.length
       const revealed = this.caret >= start && this.caret <= end ? [this.caret] : []
-      // A blank block's span covers possibly several source lines (raw is
-      // empty); render one line box per blank line so the view mirrors the
-      // document exactly.
+      // A blank block's span covers possibly several source lines (its raw holds
+      // only the whitespace those lines carry, if any); render one line box per
+      // blank line so the view mirrors the document exactly.
       return buildBlockView(
         block.raw,
         start,

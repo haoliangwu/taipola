@@ -13,6 +13,7 @@
 
 import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
 import { readImageSize } from './imageSize'
+import { isBlankLine } from './lines'
 import { exportableHref, md } from './markdownIt'
 
 interface MarkerCell {
@@ -508,8 +509,34 @@ function isTableDelimiter(raw: string): boolean {
 
 function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
   if (isTableDelimiter(raw)) return emptyLine(raw.length, sourceStart)
+  // A whitespace-only line is BLANK to Markdown, but its characters are the
+  // user's source. The parser keeps them in the block's raw now, so the view has
+  // to carry them too — otherwise the renderer would have to reach into
+  // `block.raw` to find them and the view would stop being the DOM's only truth.
+  // HOW they are carried matters: they must occupy no space at all, which is what
+  // a collapsed run does. Inside a fence the spaces are laid-out columns the
+  // caret has to be able to sit on, so code content keeps the normal path.
+  if (!opts.inCode && isBlankLine(raw)) return blankLine(raw, sourceStart)
   if (isTableRow(raw)) return buildTableLine(raw, revealFrom, sourceStart, opts)
   return buildInlineLine(raw, revealFrom, sourceStart, opts)
+}
+
+/**
+ * A blank line's view: source kept, no visible cell.
+ *
+ * A truly empty line stays exactly as it was (`runs: []`); a line of spaces or
+ * tabs reports them as ONE COLLAPSED run. Collapsed because an "empty" line has
+ * to keep looking empty, and because it is what makes the caret rules agree with
+ * `.scratch/enter-backspace-smoke/issues/09`: such a line has a single caret
+ * position (its start) whether or not it holds invisible characters.
+ */
+function blankLine(raw: string, sourceStart = 0): ViewLine {
+  const line = emptyLine(raw.length, sourceStart)
+  if (raw === '') return line
+  return {
+    ...line,
+    runs: [{ text: raw, src: sourceStart, mark: {}, marker: true }],
+  }
 }
 
 /** A line whose characters take up no space at all. */

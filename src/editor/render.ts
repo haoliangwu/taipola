@@ -23,6 +23,7 @@
 import type { Block } from '../core/markdown'
 import type { BlockView, ImageMark, ViewRun } from '../core/view'
 import type { LineState } from '../core/inline'
+import { isBlankLine } from '../core/lines'
 
 /* -------------------------------------------------------------------------- */
 /* building                                                                   */
@@ -185,33 +186,46 @@ function lineElement(
     el.style.setProperty('--vl-indent', indent)
   }
 
-  if (line.runs.length === 0) {
-    // A table's `| --- |` row renders as an EMPTY line box in both states (the
-    // view never emits runs for it), and in Typora it is not a visible row at
-    // all: it collapses so the table has no blank band in the middle, and the
-    // separator it stands for is drawn by the header row's border.
-    if (state?.kind === 'table-delim') {
-      // The row shows nothing (Typora has no visible delimiter row) but its
-      // SOURCE must stay recoverable from the DOM. With no trace of `| --- |` in
-      // the DOM, absorbing the document deleted that row outright: type one
-      // character in a table and the delimiter vanished, so the table stopped
-      // being a table. `normalizeTables` blanked the row on BOTH sides of the
-      // comparison, which is why nothing caught it.
-      syncChildren(el, 1, (_index, current) =>
-        current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart),
-      )
-      return el
-    }
-    // Every other empty line gets a real `<br>` so the browser has a text
-    // position INSIDE it. Without one, a caret anchored on the empty line box is
-    // resolved back to the end of the previous text node when the user types:
-    // the characters then land at the end of the line above (`…内容ZZZQY`).
-    // The old implementation rendered no child and relied on `min-height`, only
-    // because React's reconciliation fought over a `<br>` it had not created —
-    // the kernel owns this DOM, so the workaround is obsolete.
+  // A table's `| --- |` row renders as an EMPTY line box in both states (the
+  // view never emits runs for it), and in Typora it is not a visible row at
+  // all: it collapses so the table has no blank band in the middle, and the
+  // separator it stands for is drawn by the header row's border.
+  if (state?.kind === 'table-delim') {
+    // The row shows nothing (Typora has no visible delimiter row) but its
+    // SOURCE must stay recoverable from the DOM. With no trace of `| --- |` in
+    // the DOM, absorbing the document deleted that row outright: type one
+    // character in a table and the delimiter vanished, so the table stopped
+    // being a table. `normalizeTables` blanked the row on BOTH sides of the
+    // comparison, which is why nothing caught it.
     syncChildren(el, 1, (_index, current) =>
-      current && current.hasAttribute('data-br') ? current : brElement(),
+      current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart),
     )
+    return el
+  }
+
+  // A BLANK line — nothing on it, or nothing but spaces and tabs — has no text of
+  // its own, so it needs a real `<br>`: without it the browser resolves a caret
+  // anchored on the box back to the end of the previous text node, and the
+  // characters typed on the empty line land at the end of the line above
+  // (`…内容ZZZQY`). The old implementation rendered no child and relied on
+  // `min-height`, only because React's reconciliation fought over a `<br>` it had
+  // not created — the kernel owns this DOM, so the workaround is obsolete.
+  //
+  // The judgement is "blank", NOT "lays out no cell". Plenty of content lines have
+  // no visible run while their construct is collapsed — a fence line, a thematic
+  // break, an empty list item — and those already have a box of their own: a
+  // `<br>` inside one gives it a SECOND line (measured, a `---` line went from 1px
+  // to a full line box). So the whitespace test is what admits a line here.
+  //
+  // The `<br>` comes FIRST: the caret on such a line is anchored on the line box
+  // (a collapsed run cannot hold a caret), and that anchor reads back as the
+  // line's start. A whitespace-only blank line carries its spaces AFTER it, in
+  // collapsed runs that occupy no width (`blankLine` in core/view).
+  if (isBlankLine(raw) && line.runs.every((run) => run.marker)) {
+    syncChildren(el, 1 + line.runs.length, (index, current) => {
+      if (index === 0) return current && current.hasAttribute('data-br') ? current : brElement()
+      return runElement(current, line.runs[index - 1], index - 1, state)
+    })
     return el
   }
   if (line.cellRuns) {

@@ -131,6 +131,24 @@ describe('applyCaret + domToLocal：offset → anchor → offset 往返', () => 
     expect(domToLocal(view, lineEl, 0)).toBe(6)
   })
 
+  /**
+   * 只有空格的行：源码保住了（折叠 run），但**没有排布出来的格子**——Range 落进
+   * display:none 的内容会被浏览器夹回去，这正是上面那条空行注释里的事故。
+   *
+   * 所以它的落点仍然是行盒，整行只有一个光标位：行首。读回也必须是行首，否则
+   * 光标会被当成"空格之后"，下一次 Backspace 吃的是空格而不是换行
+   * （`.scratch/whitespace-round-trip/issues/01`）。
+   */
+  it('只有空格的行：折叠 run 与 br 落点并存，读回是该行行首', () => {
+    const { host, view } = mount('   ', 0)
+    const lineEl = host.querySelector<HTMLElement>('[data-vline="0"]')!
+    expect(lineEl.querySelector('br[data-br]')).not.toBeNull()
+    expect(lineEl.querySelector('[data-run]')?.textContent).toBe('   ')
+    expect(applyCaret(host, 0, view, 0, 3)).toBe(true)
+    expect(caretOffset(view)).toBe(0)
+    expect(domToLocal(view, lineEl, 0)).toBe(0)
+  })
+
   it('行盒里的直接文本节点按字数计入偏移', () => {
     // 往空行里打字时，浏览器把字符插进行盒（而不是任何 run span）。
     // 不计这些字符，模型光标会停在刚打的字之前，输入逐字逆序（`二行第`）。
@@ -161,5 +179,33 @@ describe('软换行的命中测试', () => {
     const hit = sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, second)
     // 第二个源码行在块内起始于 11（`alpha beta` 10 字 + 换行符）。
     expect(hit).toEqual({ block: 0, local: 11 })
+  })
+})
+
+/**
+ * 哪些行盒带 `<br data-br>`：只有**空白行**。
+ *
+ * 判据如果放宽成"所有 run 都折叠"，分隔线（`---`）和折叠的围栏行也会被算进来——
+ * 它们同样是"没有可见格"，但它们是**内容**，行盒本来就有高度，塞一个 `<br>` 进去
+ * 等于凭空多出一条线的高度（`.vl-rule` 实测 1px → 27.25px）。这条差异没有别的
+ * 测试盯着，所以在这里按形状钉死。
+ */
+describe('br 落点只给空白行', () => {
+  it('分隔线整行折叠也不加 br', () => {
+    const { host } = mount('---', null)
+    const lineEl = host.querySelector<HTMLElement>('[data-vline="0"]')!
+    expect(lineEl.querySelector('[data-run]')?.textContent).toBe('---')
+    expect(lineEl.querySelector('br[data-br]')).toBeNull()
+  })
+
+  it('折叠的围栏行不加 br', () => {
+    const { host } = mount('```ts\ncode\n```', null)
+    expect(host.querySelector('[data-vline="0"] [data-run]')?.textContent).toBe('```ts')
+    expect(host.querySelector('[data-vline="0"] br[data-br]')).toBeNull()
+  })
+
+  it('只有空格的行仍然加 br（判据的正面）', () => {
+    const { host } = mount('   ', 0)
+    expect(host.querySelector('[data-vline="0"] br[data-br]')).not.toBeNull()
   })
 })

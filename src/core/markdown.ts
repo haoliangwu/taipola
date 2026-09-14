@@ -244,6 +244,29 @@ export function parseDocument(source: string): ParsedDocument {
     lineStarts.push(lineStarts[line] + (lines[line]?.length ?? 0) + 1)
   }
 
+  /**
+   * The source of the lines `[startLine, endLine)`, minus its TRAILING newlines.
+   *
+   * A trailing newline is the boundary to the next block, not this block's text:
+   * the inter-block gap is emitted separately as spacer blocks, so keeping it
+   * here would count it twice.
+   *
+   * What is NOT dropped is the rest — whitespace included. A run of blank lines
+   * is not empty source: a line holding `   ` is whitespace the user typed, and
+   * throwing it away (`raw: ''`, which `pushBlank` used to hardcode) made the
+   * whole editor lossy. The view had nothing to draw, the DOM therefore carried
+   * no trace of it, and the next keystroke rebuilt the document from that DOM —
+   * silently deleting it (`.scratch/whitespace-round-trip/issues/01`).
+   */
+  const sourceOf = (startLine: number, endLine: number): string => {
+    let raw = ''
+    for (let line = startLine; line < endLine; line++) {
+      raw += lines[line] ?? ''
+      if (line < lines.length - 1) raw += '\n'
+    }
+    return raw.replace(/\n+$/, '')
+  }
+
   const pushBlock = (
     startLine: number,
     endLine: number,
@@ -252,15 +275,7 @@ export function parseDocument(source: string): ParsedDocument {
     softBreakLines: number[] = [],
   ) => {
     if (endLine <= startLine) return
-    let raw = ''
-    for (let line = startLine; line < endLine; line++) {
-      raw += lines[line] ?? ''
-      if (line < lines.length - 1) raw += '\n'
-    }
-    // Trailing blank lines of the slice belong to the inter-block gap, which is
-    // emitted separately as spacer blocks.
-    const trailing = raw.length - raw.replace(/\n+$/, '').length
-    const text = trailing > 0 ? raw.slice(0, raw.length - trailing) : raw
+    const text = sourceOf(startLine, endLine)
     if (text.length === 0) return
     blocks.push({
       index: blocks.length,
@@ -283,7 +298,9 @@ export function parseDocument(source: string): ParsedDocument {
       index: blocks.length,
       startLine,
       endLine,
-      raw: '',
+      // Blank to Markdown, but the whitespace on those lines is the user's source
+      // (`sourceOf`); a gap of nothing but newlines still comes out as `''`.
+      raw: sourceOf(startLine, endLine),
       headingLevel: 0,
       headingText: '',
       softBreakAfter: [],

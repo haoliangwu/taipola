@@ -107,7 +107,15 @@ export function anchorForSource(
   return runIndexAtCursor(line, cursor, lineIndex)
 }
 
-/** The run holding visible cell `cursor`, with the caret at its end. */
+/**
+ * The run holding visible cell `cursor`, with the caret at its end.
+ *
+ * `runIndex: -1` means "this line has no laid-out run at all" — an empty line, or
+ * one whose runs all collapse (a whitespace-only line, a fence line while it is
+ * closed). There is no cell to put a caret in, so the DOM layer anchors on the
+ * line BOX instead; saying so here keeps that rule in one place rather than
+ * having every caller re-discover it (`applyCaret`).
+ */
 function runIndexAtCursor(
   line: BlockView['lines'][number],
   cursor: number,
@@ -122,7 +130,7 @@ function runIndexAtCursor(
     }
     seen += run.text.length
   }
-  const last = line.runs.map((r, i) => (r.marker ? -1 : i)).filter((i) => i >= 0).pop() ?? 0
+  const last = line.runs.map((r, i) => (r.marker ? -1 : i)).filter((i) => i >= 0).pop() ?? -1
   return { lineIndex, runIndex: last, offsetInRun: line.runs[last]?.text.length ?? 0 }
 }
 
@@ -149,6 +157,9 @@ export function applyCaret(
     `[data-block="${blockIndex}"] [data-vline="${target.lineIndex}"]`,
   )
   if (!lineEl) return false
+  // `runIndex: -1` (no laid-out run) indexes nothing, which is exactly the point:
+  // the line box takes the caret. A Range inside a COLLAPSED run would be clamped
+  // back by the browser instead — the failure the `else` branch below describes.
   const span = lineEl.querySelectorAll<HTMLElement>('[data-run]')[target.runIndex]
 
   host.focus({ preventScroll: true })
@@ -161,11 +172,11 @@ export function applyCaret(
       range.selectNodeContents(span)
     }
   } else {
-    // An EMPTY line (a blank block, or the blank line left by exiting an empty
-    // list item) has no run spans. Aborting here left the DOM selection clamped
-    // on the previous line by the browser, and the read-back dragged the
-    // document caret back with it: the "blank line disappears" bug. Anchor on
-    // the line element itself instead.
+    // An EMPTY or fully collapsed line (a blank block, a whitespace-only line, the
+    // blank line left by exiting an empty list item) has no run span that can hold
+    // a caret. Aborting here left the DOM selection clamped on the previous line by
+    // the browser, and the read-back dragged the document caret back with it: the
+    // "blank line disappears" bug. Anchor on the line element itself instead.
     range.setStart(lineEl, 0)
   }
   range.collapse(true)
@@ -219,8 +230,18 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   }
 
   // Caret anchored on the line element itself (empty line, or past the end).
+  //
+  // With no LAID-OUT run the box has exactly one position — its start. That is an
+  // empty line, and it is also a line whose runs all collapse (a whitespace-only
+  // line): reading the end of a collapsed run there put the caret AFTER its
+  // invisible spaces, where the next Backspace ate a space instead of the newline
+  // (`.scratch/whitespace-round-trip/issues/01`). The question is asked of the
+  // SPANS IN THE DOM rather than of the view, because those are the ones that
+  // produced the caret being read back — the same reason the rest of this function
+  // works from the DOM.
   const last = runs[runs.length - 1]
-  if (last) {
+  const addressable = runs.some((el) => getComputedStyle(el).display !== 'none')
+  if (last && addressable) {
     // The end of the last run is the end of the line's source. A trailing
     // COLLAPSED marker still counts in full: its characters occupy no width, but
     // they are source characters the line owns (`**加粗**` ends at 6, not 4).

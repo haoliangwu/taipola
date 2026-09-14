@@ -87,6 +87,36 @@ describe('视图是无损的（除表格分隔行这一处刻意例外）', () =
     })
     expect(line.visibleToSource).toHaveLength(line.text.length)
   })
+
+  /**
+   * 空白行（只有空格/制表符）对 Markdown 是空行，但那几个字符是用户打的源码：
+   * 视图必须自己把它们交出来，否则渲染层只能去 `block.raw` 里补，视图就不再是
+   * DOM 的唯一真相了（`.scratch/whitespace-round-trip/issues/01`）。
+   *
+   * 交出来的方式是**一个折叠 run**：源码在，排版宽度一点不占，看上去仍是空行。
+   */
+  it('只有空格的行：源码在折叠 run 里，一个可见格都不占', () => {
+    const v = view('甲\n   \n乙')
+    expect(v.lines).toHaveLength(3)
+    expect(reconstruct(v)).toBe('甲\n   \n乙')
+    expect(v.lines[1].runs.map((run) => ({ text: run.text, marker: run.marker }))).toEqual([
+      { text: '   ', marker: true },
+    ])
+    expect(v.lines[1].text).toBe('')
+    expect(v.lines[1].sourceToVisible).toEqual([-1, -1, -1])
+  })
+
+  it('一个字都没有的空行不带 run：形状与改动前一致', () => {
+    const v = buildBlockView('', 0, [], 2)
+    expect(v.lines.every((line) => line.runs.length === 0)).toBe(true)
+  })
+
+  it('围栏里的空白行仍按普通行渲染：空格是排得出来的列位', () => {
+    // 空白行的快路径必须绕开代码内容：围栏里的空格不是"看不见的语法"，而是代码
+    // 自己的缩进，折叠掉光标就落不到第 4 列上了。
+    const v = view('```\n   \n```')
+    expect(runs(v, 1)).toEqual([{ text: '   ', marker: false, dim: false }])
+  })
 })
 
 describe('行内标记：折叠与显现', () => {
