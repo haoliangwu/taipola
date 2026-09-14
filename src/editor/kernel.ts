@@ -100,6 +100,21 @@ export class EditorKernel {
   /** Set by `beforeinput`, consumed by `input`. */
   private userEditPending = false
   private composing = false
+  /**
+   * True on the input that CARRIES a composition's commit (set at
+   * `compositionend`, consumed by the next input). The DOM still holds the
+   * composition's provisional shape then — see `handleInput` and `handleCompositionEnd`.
+   */
+  private composed = false
+  /**
+   * Model offset where the composition started (`compositionstart`). The one
+   * reliable anchor across a composition: the DOM is in its provisional shape
+   * the whole time, so every DOM-based read is off by a line or two; the
+   * committed caret is this, plus the composed text's LENGTH (tracked from each
+   * `insertCompositionText` input's `data`).
+   */
+  private composeStart = 0
+  private composeLength = 0
   private pendingCaret: number | null = null
 
   private undoStack: Snapshot[] = []
@@ -392,20 +407,48 @@ export class EditorKernel {
   private handleCompositionStart = (): void => {
     this.placedByUs = false
     this.composing = true
+    this.composeStart = this.caret
+    this.composeLength = 0
   }
 
   private handleCompositionEnd = (): void => {
     this.composing = false
-    // Deliberately no render here. The browser may fire `compositionend` BEFORE
-    // the `input` that carries the committed text: at that moment the DOM already
-    // holds the final characters while the model still holds the pinyin, and
-    // rebuilding from the model would erase what was just committed. The
-    // following `input` absorbs the committed DOM and renders as usual.
+    if (!this.host) {
+      this.composed = true
+      return
+    }
+    // Split the commit into its two shapes with ONE DOM read:
+    //
+    // - DOM matches the model (an ASCII commit — pinyin `ABC` lands as `ABC`):
+    //   the browser may then fire NO further input at all (CDP's
+    //   `Input.insertText` commits this way; `.scratch/enter-backspace-smoke/11`),
+    //   leaving the caret where the browser parked it — some line below the text,
+    //   because the composition's provisional shape still holds. Normalize the
+    //   DOM right here and place the caret at `composeStart + composeLength` —
+    //   the one position that survives every shape.
+    //
+    // - DOM differs from the model (a CJK commit: the DOM already holds the final
+    //   characters while the model still holds the pinyin): rebuilding now would
+    //   erase what was just committed, so set `composed` and let the commit input
+    //   that follows absorb it and decide the caret from the diff (`insertedEnd`).
+    const next = readDocumentSource(this.host) + readLooseText(this.host)
+    if (next === this.doc) {
+      this.composed = false
+      if (this.render()) this.placeCaret(this.composeStart + this.composeLength)
+    } else {
+      this.composed = true
+    }
   }
 
-  private handleInput = (): void => {
+  private handleInput = (event: Event): void => {
     const host = this.host
     if (!host || this.readOnly) return
+    // Track the composition's current text: its LENGTH is the committed caret's
+    // offset from `composeStart`, computed rather than read (the DOM is in the
+    // composition's provisional shape the whole time).
+    if (this.composing && event instanceof InputEvent && event.data !== null) {
+      this.composeLength = event.data.length
+    }
     const userEdit = this.userEditPending
     this.userEditPending = false
     if (!userEdit) return
@@ -420,7 +463,20 @@ export class EditorKernel {
     // edits (select-all delete, multi-line delete, paste) desync the model: the
     // browser had already touched several blocks' DOM.
     const next = readDocumentSource(host) + readLooseText(host)
-    if (next === this.doc) return
+    if (next === this.doc) {
+      // Backstop for a commit input that arrives after a same-content
+      // `compositionend`: the model has nothing to absorb, but the DOM may still
+      // hold the composition's provisional shape — a bare text node inside the
+      // line box, not a run. Skipping entirely would leave that shape for the
+      // NEXT edit to misread (`.scratch/enter-backspace-smoke/issues/11`), so
+      // normalize the DOM and re-anchor the caret by the same computed offset
+      // `compositionend` would have used.
+      if (this.composed) {
+        this.composed = false
+        if (this.render()) this.placeCaret(this.composeStart + this.composeLength)
+      }
+      return
+    }
     const delta = next.length - this.doc.length
 
     // A PURE deletion leaves no inserted text: the browser is free to park the
@@ -430,14 +486,30 @@ export class EditorKernel {
     // of the DOM on exactly this path.
     const prefix = sharedPrefix(this.doc, next)
     const insertedEnd = next.length - sharedSuffix(this.doc, next, prefix)
+    // A composition's COMMIT decides its caret from the diff too, for the same
+    // reason: the DOM the browser left is still the provisional shape, so a DOM
+    // read is off by a line or two, and the pinyin↔final delta makes
+    // `caret + delta` wrong as well. The end of the committed text is the one
+    // honest position (`insertedEnd`).
+    const committing = this.composed
+    this.composed = false
     const caretNext =
       insertedEnd <= prefix
         ? prefix
-        : this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length)
+        : committing
+          ? insertedEnd
+          : this.caretFromDom() ?? clamp(this.caret + delta, 0, next.length)
 
     // An IME composition is mid-flight: the DOM holds provisional text. Record
     // the model (undo snapshots are suppressed) but leave the DOM untouched so
     // the composition is not destroyed under the user.
+    //
+    // The caret NEVER comes from the DOM here: every recompute reshapes the
+    // views while the DOM keeps the provisional form, so the read is fine the
+    // FIRST time and off from the second input on — composing `ABC` then `ABCD`
+    // flew the caret away (`.scratch/enter-backspace-smoke/issues/11`).
+    // `composeStart + composeLength` is always the composed text's end in the
+    // model.
     if (!this.composing) {
       this.pushUndo({ value: this.doc, caret: this.caret })
       this.commit(next, caretNext)
@@ -445,7 +517,7 @@ export class EditorKernel {
     }
 
     this.doc = next
-    this.caret = caretNext
+    this.caret = this.composeStart + this.composeLength
     this.recompute()
     this.reportLine()
     this.hooks.onChange(next)

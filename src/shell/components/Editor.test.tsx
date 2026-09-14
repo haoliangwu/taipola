@@ -610,6 +610,262 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
+  /**
+   * ASCII 输入法的合成（拼音 `ABC` → 提交 `ABC`，内容一个字符都不变）在提交那条路上
+   * 的回归。坏掉时：提交后 DOM 仍是合成形态的裸文本节点、没有 run，模型又以为没变化
+   * 直接早退，于是**下一次按键**在脏 DOM 上算光标，字符落点整体错位
+   * （`.scratch/enter-backspace-smoke/issues/11`，用户实测 CJK 输入法复现）。
+   */
+  it('IME ASCII 提交（内容不变）：提交后接着打字，字符落点紧跟光标', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // 在行尾新开的那一行上开始合成：浏览器把拼音作为裸文本放进行盒。
+    const doc = r.container
+    const fresh = (() => {
+      const sel = window.getSelection()!
+      const n = sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+      return (n instanceof Element ? n : n?.parentElement) as HTMLElement
+    })()
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const composing = document.createTextNode('ABC')
+    fresh.appendChild(composing)
+    const range = document.createRange()
+    range.setStart(composing, 3)
+    range.collapse(true)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
+
+    // ASCI 提交：合成文本原样落定（内容不变，但 DOM 形态要恢复正常）。
+    doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC' }))
+    doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
+    // 提交后的光标在 ABC 末尾（`甲\nABC` 的尽头 = 偏移 5）。
+    expect(caretFromDom()).toBe('甲'.length + 1 + 3)
+
+    // 接着打字：字符必须落在 ABC 之后，光标跟走——坏掉时落点和光标都会错位。
+    await r.user.keyboard('D')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 1 + 4)
+    await assertDomMatchesSource(r)
+  })
+
+  /**
+   * 同一条路的「无 input 提交」形态：`compositionend` 之后浏览器一个 input 都不发
+   * （CDP 的 `Input.insertText` 提交就是这样），紧接着的普通按键必须不受影响。
+   * 坏掉时：`compositionend` 的归一化不做，光标被浏览器留在别处，下一个字符掉到
+   * 别的行上（`.scratch/enter-backspace-smoke/issues/11` 的真机实测）。
+   */
+  it('IME ASCII 提交后不再有 input（CDP 那类）：下一个字符仍落在合成文本之后', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    const doc = r.container
+    const fresh = (() => {
+      const sel = window.getSelection()!
+      const n = sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+      return (n instanceof Element ? n : n?.parentElement) as HTMLElement
+    })()
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const composing = document.createTextNode('ABC')
+    fresh.appendChild(composing)
+    const range = document.createRange()
+    range.setStart(composing, 3)
+    range.collapse(true)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
+    await flush()
+    // 提交只以 compositionend 到达——没有后续 input。
+    doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC' }))
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
+    // 光标当场停在 ABC 末尾（`甲\nABC` = 偏移 5）。
+    expect(caretFromDom()).toBe('甲'.length + 1 + 3)
+
+    await r.user.keyboard('D')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 1 + 4)
+    await assertDomMatchesSource(r)
+  })
+
+  /**
+   * 合成**逐步增长**（输入法联想：`ABC` → 继续键入 `D` 变 `ABCD`）时，第二个
+   * `insertCompositionText` 的输入把光标从 DOM 读——而上一次的 `recompute()` 已经把
+   * 视图换成新形状、DOM 却还是合成的临时形态，读出来的偏移就飞走了
+   * （`.scratch/enter-backspace-smoke/issues/11` 的用户实测：摄取后光标飞掉）。
+   */
+  it('IME 合成逐步增长（ABC → ABCD）：光标始终跟在合成文本末尾', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    const doc = r.container
+    const fresh = (() => {
+      const sel = window.getSelection()!
+      const n = sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+      return (n instanceof Element ? n : n?.parentElement) as HTMLElement
+    })()
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const composing = document.createTextNode('ABC')
+    fresh.appendChild(composing)
+    const place = (at: number) => {
+      const range = document.createRange()
+      range.setStart(composing, at)
+      range.collapse(true)
+      const sel = window.getSelection()!
+      sel.removeAllRanges()
+      sel.addRange(range)
+    }
+    place(3)
+    doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
+    await flush()
+    // 合成继续：浏览器把合成文本扩成 ABCD、光标在末尾。
+    composing.textContent = 'ABCD'
+    place(4)
+    doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABCD' }))
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
+    // 第二个合成输入之后模型光标仍指向合成文本末尾（偏移 6）。这里不能直接断言
+    // `caretFromDom()`：合成中 DOM 保持临时形态（裸文本节点，不渲染），助手的
+    // 行盒读法只会看到行盒起始；模型值由提交后的落点和继续打字验证。
+    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
+
+    // 提交后继续打字：字符跟光标走。
+    doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABCD' }))
+    await flush()
+    await r.user.keyboard('E')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABCDE\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 1 + 5)
+    await assertDomMatchesSource(r)
+  })
+
+  /**
+   * 「ABC → space → D → space」的两种真实输入法形态（用户实测场景，可能二选一）：
+   *
+   * - space **并入**合成（真机 CDP 实测：合成中按 Space，`insertCompositionText` 的 data
+   *   变成 `'ABC '`）——合成一路长到 `'ABC D '`，提交后光标在末尾；
+   * - 输入法把整个合成**替换**成新内容（`deleteCompositionText` + `insertCompositionText`）
+   *   ——删除输入的 data 为 null，`composeLength` 不能依赖它。
+   *
+   * 两条都不允许光标在提交后飞走。
+   */
+  it('IME 合成中按 Space（并入合成）：提交后光标仍跟合成文本', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    const doc = r.container
+    const sel = window.getSelection()!
+    const n = sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+    const box = (n instanceof Element ? n : n?.parentElement) as HTMLElement
+    const place = (t: Text, at: number) => {
+      const range = document.createRange()
+      range.setStart(t, at)
+      range.collapse(true)
+      const s = window.getSelection()!
+      s.removeAllRanges()
+      s.addRange(range)
+    }
+    const fire = (inputType: string, data: string | null) => {
+      const opts = { inputType, data, bubbles: true, cancelable: true, composed: true } as InputEventInit
+      doc.dispatchEvent(new InputEvent('beforeinput', opts))
+      doc.dispatchEvent(new InputEvent('input', opts))
+    }
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const t = document.createTextNode('ABC')
+    box.appendChild(t)
+    place(t, 3)
+    fire('insertCompositionText', 'ABC')
+    await flush()
+    t.textContent = 'ABC D '
+    place(t, 6)
+    fire('insertCompositionText', 'ABC D ')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABC D \n\n乙\n')
+    doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC D ' }))
+    await flush()
+    await r.user.keyboard('E')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nABC D E\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 1 + 7)
+    await assertDomMatchesSource(r)
+  })
+
+  it('IME 输入法把合成整体替换成新文本（deleteCompositionText）：光标不飞', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    const doc = r.container
+    const sel = window.getSelection()!
+    const n = sel.rangeCount > 0 ? sel.getRangeAt(0).startContainer : null
+    const box = (n instanceof Element ? n : n?.parentElement) as HTMLElement
+    const place = (t: Text, at: number) => {
+      const range = document.createRange()
+      range.setStart(t, at)
+      range.collapse(true)
+      const s = window.getSelection()!
+      s.removeAllRanges()
+      s.addRange(range)
+    }
+    const fire = (inputType: string, data: string | null) => {
+      const opts = { inputType, data, bubbles: true, cancelable: true, composed: true } as InputEventInit
+      doc.dispatchEvent(new InputEvent('beforeinput', opts))
+      doc.dispatchEvent(new InputEvent('input', opts))
+    }
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const t = document.createTextNode('ABC ')
+    box.appendChild(t)
+    place(t, 4)
+    fire('insertCompositionText', 'ABC ')
+    await flush()
+    // 输入法把整个合成替换成 D：先删（data 为 null，composeLength 不能停滞在旧值
+    // 之外），再插。
+    t.textContent = ''
+    place(t, 0)
+    fire('deleteCompositionText', null)
+    await flush()
+    t.textContent = 'D'
+    place(t, 1)
+    fire('insertCompositionText', 'D')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nD\n\n乙\n')
+    doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'D' }))
+    await flush()
+    await r.user.keyboard('E')
+    await flush()
+    expect(r.getDoc()).toBe('甲\nDE\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 1 + 2)
+    await assertDomMatchesSource(r)
+  })
+
   it('有序列表中间回车：后面的编号顺延，不再出现重复编号', async () => {
     const r = renderEditor('1. 甲\n2. 乙\n3. 丙\n')
     await clickInRun(r, 0, 1, 1, 'end')
