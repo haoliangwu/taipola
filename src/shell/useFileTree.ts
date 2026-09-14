@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { visibleEntries } from '../core/fileTree'
 import { folders, type FolderEntry, type FolderRoot } from '../platform/folder'
 import { savedFolder } from '../platform/savedFolder'
@@ -57,6 +57,15 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
   const [offeredRoot, setOfferedRoot] = useState<FolderRoot | null>(null)
   /** The remembered file, from the last session's record (see the interface). */
   const [lastFile, setLastFile] = useState<string | null>(null)
+  /**
+   * Whether a folder has been picked by hand since the mount probe started.
+   *
+   * The probe resolves whenever its promises do — possibly AFTER the user has
+   * already picked a folder of their own. That resolution must not write the
+   * PREVIOUS session's record over the fresh pick, so a pick bumps the epoch
+   * and the probe checks it before applying anything.
+   */
+  const probeEpochRef = useRef(0)
 
   const read = useCallback(
     async (folder: FolderRoot, path: string) => {
@@ -102,6 +111,9 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
       // A folder picked by hand has no remembered file in it: the record's path
       // belonged to whatever folder the last session left.
       setLastFile(null)
+      // And a still-in-flight mount probe must not write the last session's
+      // record back on top of this pick.
+      probeEpochRef.current += 1
       await applyRoot(picked)
       return true
     } catch (error) {
@@ -137,17 +149,16 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
   // A storage failure is "nothing" — never an error to show on load.
   useEffect(() => {
     let cancelled = false
+    const epoch = probeEpochRef.current
     void savedFolder
       .probe()
       .then((record) => {
-        if (cancelled) return
-        if (record.status === 'restorable') {
-          setLastFile(record.lastFile)
-          void applyRoot(record.root)
-        } else if (record.status === 'offered') {
-          setLastFile(record.lastFile)
-          setOfferedRoot(record.root)
-        }
+        if (cancelled || probeEpochRef.current !== epoch) return
+        // Both surviving statuses bring the remembered file along; only the
+        // folder's own half differs.
+        if (record.status !== 'none') setLastFile(record.lastFile)
+        if (record.status === 'restorable') void applyRoot(record.root)
+        else if (record.status === 'offered') setOfferedRoot(record.root)
       })
       .catch(() => {})
     return () => {

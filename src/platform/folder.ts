@@ -122,18 +122,24 @@ export function fileSystemAccessFolders(api: DirectoryPickerWindow): Folders {
         const handle = await directory.getFileHandle(name)
         return { name, path, kind: 'file', handle }
       } catch (error) {
-        // A missing name, or a segment whose kind does not match the step
-        // (a file where a directory is walked, a directory where the file is
-        // taken): browsers report these as NotFoundError / TypeMismatchError or
-        // a TypeError, and all of them mean "this path has no file here".
-        if (error instanceof DOMException && (error.name === 'NotFoundError' || error.name === 'TypeMismatchError')) {
-          return null
-        }
-        if (error instanceof TypeError) return null
+        if (isMissingPath(error)) return null
         throw error
       }
     },
   }
+}
+
+/**
+ * The signals that "this path has no file here": a missing name, or a segment
+ * whose kind does not match the step (a file walked as a directory, a directory
+ * taken as the file). Browsers report them as NotFoundError / TypeMismatchError
+ * or a TypeError, depending on the era of the API.
+ */
+function isMissingPath(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof DOMException && (error.name === 'NotFoundError' || error.name === 'TypeMismatchError'))
+  )
 }
 
 /** Walks down from the root: one `getDirectoryHandle` per path segment. */

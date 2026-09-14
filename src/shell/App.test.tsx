@@ -1336,6 +1336,38 @@ describe('侧栏记忆上次的文件夹', () => {
     }
   })
 
+  it('probe 还悬着就新开了文件夹：晚到的旧记录不把新文件夹顶掉', async () => {
+    stubSavedFolder()
+    let settle!: (status: SavedFolderStatus) => void
+    vi.spyOn(savedFolder, 'probe').mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    vi.spyOn(folders, 'pick').mockResolvedValue({ name: '另一个目录', handle: {} })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      // probe 在路上，用户先自己选了一个文件夹。
+      await act(async () => {
+        findButton(view, '打开文件夹').click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('另一个目录')
+
+      // probe 这才落定：上一会话的记录不得写回新文件夹之上。
+      await act(async () => {
+        settle({ status: 'offered', root: ROOT, lastFile: '笔记.md' })
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('另一个目录')
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
   it('恢复落定前用户已经自己打开过文档：记忆的文件不顶掉人家的', async () => {
     stubSavedFolder()
     let settle!: (status: SavedFolderStatus) => void

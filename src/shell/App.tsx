@@ -482,11 +482,12 @@ export default function App() {
     void (async () => {
       const entry = await folders.fileAt(root, lastFile)
       if (cancelled || entry === null) return
-      // Guarded AGAIN after the await: `touched` is a ref on purpose, so a
-      // choice made while the handle was being re-found (新建, a hand save)
-      // changes no effect dep and would sail straight past the checks above.
-      // The window closes here, not by hoping for a re-run.
-      if (touchedRef.current || dirty || inOpenFolder) return
+      // `touched` is a ref on purpose, so a choice made while the handle was
+      // being re-found (新建, a hand save) changes no effect dep and would sail
+      // straight past the checks above. The state-backed guards need no second
+      // check here: any flip of theirs re-renders, restarts this effect and
+      // cancels this run through `cancelled`.
+      if (touchedRef.current) return
       await handleOpenEntry(entry)
     })().catch(() => {})
     return () => {
