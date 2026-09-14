@@ -23,7 +23,7 @@ const HANDLE_B = { file: 'b' }
 function downloadOnly(downloads: Download[]): StorageAdapter {
   return {
     writeBack: false,
-    pickOpen: async () => ({ name: 'note.md', content: '# 笔记\n', handle: null }),
+    pickOpen: async () => ({ name: 'note.md', content: '# 笔记\n', handle: null, modifiedAt: 111 }),
     download: (text, filename, mime) => downloads.push({ text, filename, mime }),
   }
 }
@@ -32,15 +32,24 @@ function downloadOnly(downloads: Download[]): StorageAdapter {
 function writeBack(
   downloads: Download[],
   writes: Array<{ handle: unknown; text: string }>,
-  overrides: { pickSave?: () => Promise<{ name: string; handle: unknown } | null>; writeOk?: boolean } = {},
+  overrides: {
+    pickSave?: () => Promise<{ name: string; handle: unknown } | null>
+    writeOk?: boolean
+    modifiedAtNow?: number
+    modifiedAtThrows?: boolean
+  } = {},
 ): StorageAdapter {
   return {
     writeBack: true,
-    pickOpen: async () => ({ name: 'note.md', content: '# 笔记\n', handle: HANDLE_A }),
+    pickOpen: async () => ({ name: 'note.md', content: '# 笔记\n', handle: HANDLE_A, modifiedAt: 111 }),
     pickSave: overrides.pickSave ?? (async (name) => ({ name, handle: HANDLE_B })),
     write: async (handle, text) => {
       writes.push({ handle, text })
       return overrides.writeOk ?? true
+    },
+    modifiedAt: async () => {
+      if (overrides.modifiedAtThrows) throw new Error('the file is gone')
+      return overrides.modifiedAtNow ?? 111
     },
     download: (text, filename, mime) => downloads.push({ text, filename, mime }),
   }
@@ -55,6 +64,12 @@ describe('open', () => {
       content: '# 笔记\n',
       document: { name: 'note.md' },
     })
+  })
+
+  it('连文件的修改时间一起交回来（写回之前要拿它比对）', async () => {
+    const documents = createDocuments(downloadOnly([]))
+    const result = await documents.open()
+    expect(result).toMatchObject({ modifiedAt: 111 })
   })
 
   it('用户取消是一个结果，不是异常', async () => {
@@ -176,6 +191,34 @@ describe('save：支持写回时写回原文件', () => {
     if (opened.status !== 'opened') throw new Error('expected an opened document')
 
     await expect(documents.save(opened.document, 'x')).resolves.toEqual({ status: 'cancelled' })
+  })
+})
+
+describe('写回这个能力本身', () => {
+  it('能写回的平台说自己能，只有下载的平台说自己不能', () => {
+    expect(createDocuments(writeBack([], [])).canWriteBack).toBe(true)
+    expect(createDocuments(downloadOnly([])).canWriteBack).toBe(false)
+  })
+
+  it('问得出文件的修改时间', async () => {
+    const documents = createDocuments(writeBack([], [], { modifiedAtNow: 4_242 }))
+    const opened = await documents.open()
+    if (opened.status !== 'opened') throw new Error('expected an opened document')
+
+    await expect(documents.modifiedAt(opened.document)).resolves.toBe(4_242)
+  })
+
+  it('平台不会写回时不装作问得到', async () => {
+    const documents = createDocuments(downloadOnly([]))
+    await expect(documents.modifiedAt({ name: 'note.md', handle: null })).resolves.toBeNull()
+  })
+
+  it('文件已经没了：返回 null，而不是把异常扔给调用者', async () => {
+    const documents = createDocuments(writeBack([], [], { modifiedAtThrows: true }))
+    const opened = await documents.open()
+    if (opened.status !== 'opened') throw new Error('expected an opened document')
+
+    await expect(documents.modifiedAt(opened.document)).resolves.toBeNull()
   })
 })
 

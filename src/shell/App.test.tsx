@@ -7,6 +7,55 @@ import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
 
 /**
+ * Puts an unwritten document in its slot, the way a previous session would have
+ * left it.
+ *
+ * A slot is keyed by the document (`taipola:draft:<key>`) and one pointer says
+ * which slot was written last — that pointer is what a reload restores.
+ */
+function seedDraft(key: string, draft: { content: string; name: string; savedAt?: number }) {
+  localStorage.setItem(
+    `taipola:draft:${key}`,
+    JSON.stringify({ savedAt: 1_000, root: null, path: null, ...draft }),
+  )
+  localStorage.setItem('taipola:active-draft', key)
+}
+
+/** Writes another tab's slot behind this session's back. */
+function foreignSlot(key: string, content: string, savedAt = 9_999) {
+  localStorage.setItem(
+    `taipola:draft:${key}`,
+    JSON.stringify({ content, name: key, savedAt, root: null, path: null }),
+  )
+}
+
+function findButton(view: ReturnType<typeof render>, label: string): HTMLButtonElement {
+  return [...view.container.querySelectorAll('.text-button')].find(
+    (el) => el.textContent?.trim() === label,
+  ) as HTMLButtonElement
+}
+
+const documentBody = (view: ReturnType<typeof render>) =>
+  view.container.querySelector('.doc') as HTMLElement
+
+/** Types one character at the start of the first line, so the document is dirty. */
+async function typeInto(view: ReturnType<typeof render>, key: string) {
+  const doc = documentBody(view)
+  const user = userEvent.setup({ delay: null })
+  doc.focus({ preventScroll: true })
+  const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+  if (!run?.firstChild) throw new Error('first run has no text node')
+  placeCaretAt(run.firstChild, 0)
+  await user.keyboard(key)
+}
+
+/** Past the draft debounce (500ms), which is where a wrong cross-tab notice would show. */
+const pastDraftDebounce = () => new Promise((resolve) => setTimeout(resolve, 700))
+
+/** Past the write-back debounce (1000ms), with room for the async write to settle. */
+const pastWriteBack = () => new Promise((resolve) => setTimeout(resolve, 1_300))
+
+/**
  * App-level draft-persistence regression.
  *
  * Reported: deleting a chunk of text, then refreshing the page, restored the
@@ -20,14 +69,10 @@ describe('草稿持久化', () => {
   })
 
   it('编辑后立即刷新（pagehide）草稿不回退', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({
-        content: '# 它FINA==现在能做什么\n\n正文\n',
-        name: 'untitled.md',
-        savedAt: Date.now(),
-      }),
-    )
+    seedDraft('untitled.md', {
+      content: '# 它FINA==现在能做什么\n\n正文\n',
+      name: 'untitled.md',
+    })
     const view = render(<App />)
     const doc = view.container.querySelector('.doc') as HTMLElement
     const run = doc.querySelector(
@@ -48,17 +93,14 @@ describe('草稿持久化', () => {
     // the 500ms debounce timer would ever fire.
     await new Promise((resolve) => setTimeout(resolve, 50))
     window.dispatchEvent(new Event('pagehide'))
-    const draft = documents.draft.load()
+    const draft = documents.draft.load('untitled.md')
     // The real caret sat at the line end, so 4 Backspaces removed 4 characters.
     expect(draft?.content).toBe('# 它FINA==现在\n\n正文\n')
     view.unmount()
   })
 
   it('标签页转入后台（visibilitychange → hidden）也立刻落盘，不等防抖', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '甲\n', name: 'untitled.md', savedAt: Date.now() }),
-    )
+    seedDraft('untitled.md', { content: '甲\n', name: 'untitled.md' })
     const view = render(<App />)
     const user = userEvent.setup({ delay: null })
     const doc = view.container.querySelector('.doc') as HTMLElement
@@ -69,14 +111,14 @@ describe('草稿持久化', () => {
     await user.keyboard('X')
 
     // 防抖还没到点，盘上还是旧草稿。
-    expect(documents.draft.load()?.content).toBe('甲\n')
+    expect(documents.draft.load('untitled.md')?.content).toBe('甲\n')
 
     // 只派发 visibilitychange（不派发 pagehide），标签页转入后台。
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
     try {
       document.dispatchEvent(new Event('visibilitychange'))
       // 这条写入只可能来自 visibilitychange 那条接线。
-      expect(documents.draft.load()?.content).toBe('X甲\n')
+      expect(documents.draft.load('untitled.md')?.content).toBe('X甲\n')
     } finally {
       Reflect.deleteProperty(document, 'visibilityState')
     }
@@ -98,10 +140,7 @@ describe('导出文件名', () => {
   })
 
   it('草稿恢复出的文档，导出沿用草稿的文件名', () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '# 标题\n\n正文\n', name: '报告.md', savedAt: Date.now() }),
-    )
+    seedDraft('报告.md', { content: '# 标题\n\n正文\n', name: '报告.md' })
     const downloaded: string[] = []
     // `downloadFile` hands the browser an <a download=…> and clicks it; that is
     // the observable, so record the name instead of letting a real download run.
@@ -143,10 +182,7 @@ describe('快捷键接线', () => {
   })
 
   it('Cmd/Ctrl+B 加粗，Cmd/Ctrl+Shift+K 删掉整行（同一个 K 的两种修饰键）', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '第一行\n第二行\n', name: 'untitled.md', savedAt: Date.now() }),
-    )
+    seedDraft('untitled.md', { content: '第一行\n第二行\n', name: 'untitled.md' })
     const view = render(<App />)
     const user = userEvent.setup({ delay: null })
     const doc = view.container.querySelector('.doc') as HTMLElement
@@ -186,10 +222,7 @@ describe('欢迎文档的名字', () => {
   })
 
   it('__welcome__ 连名字一起恢复，而不是只换正文', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '别的文档\n', name: '报告.md', savedAt: Date.now() }),
-    )
+    seedDraft('报告.md', { content: '别的文档\n', name: '报告.md' })
     const view = render(<App />)
     expect(view.container.querySelector('.doc-name')?.textContent).toBe('报告.md')
 
@@ -219,10 +252,7 @@ describe('丢弃未保存内容前的确认', () => {
   })
 
   function setup() {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '原来的内容\n', name: '报告.md', savedAt: Date.now() }),
-    )
+    seedDraft('报告.md', { content: '原来的内容\n', name: '报告.md' })
     const view = render(<App />)
     const doc = () => view.container.querySelector('.doc') as HTMLElement
     const button = (label: string) =>
@@ -248,6 +278,7 @@ describe('丢弃未保存内容前的确认', () => {
     status: 'opened' as const,
     document: { name: '别的.md', handle: null },
     content: '新文件的内容\n',
+    modifiedAt: 111,
   }
 
   it('未保存 + 打开并选到文件：拒绝之后连撤销栈都没被动过', async () => {
@@ -310,7 +341,12 @@ describe('丢弃未保存内容前的确认', () => {
   })
 
   it('没有未保存改动时不问，直接打开', async () => {
-    const { view, doc, button } = setup()
+    // 欢迎文档：没有对应的文件，也没有未写回的内容。
+    const view = render(<App />)
+    const button = (label: string) =>
+      [...view.container.querySelectorAll('.text-button')].find(
+        (el) => el.textContent?.trim() === label,
+      ) as HTMLButtonElement
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
     const confirm = vi.spyOn(window, 'confirm')
     try {
@@ -319,8 +355,34 @@ describe('丢弃未保存内容前的确认', () => {
       })
 
       expect(confirm).not.toHaveBeenCalled()
-      expect(readDocumentSource(doc())).toBe('新文件的内容\n')
+      expect(readDocumentSource(view.container.querySelector('.doc') as HTMLElement)).toBe(
+        '新文件的内容\n',
+      )
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('别的.md')
+    } finally {
+      open.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  /**
+   * A slot restored on load is content that never reached a file, so it starts
+   * UNSAVED — the opposite of what the single global draft used to do, where the
+   * restored record was treated as already saved.
+   */
+  it('从草稿恢复出来的文档算「未保存」，切换之前仍然问', async () => {
+    const { view, doc, button } = setup()
+
+    const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      await act(async () => {
+        button('打开').click()
+      })
+
+      expect(confirm).toHaveBeenCalled()
+      expect(readDocumentSource(doc())).toBe('原来的内容\n')
     } finally {
       open.mockRestore()
       confirm.mockRestore()
@@ -349,64 +411,238 @@ describe('丢弃未保存内容前的确认', () => {
 })
 
 /**
- * The draft is ONE global record, shared by every tab — decided, not accidental.
+ * Two tabs on the SAME document share one slot — decided, not accidental.
  *
- * So a write from either tab destroys whatever the other put there, and that part
- * stays: a global draft is last-write-wins by definition, and refusing to write
- * would break the autosave the rest of the module exists for. What is removed is
- * the SILENCE, and this is the only test that reaches the wiring — the policy
- * itself is unit-tested in `core/autosave.test.ts`.
+ * A write from either tab destroys whatever the other put there, and that part
+ * stays: one slot is last-write-wins by definition, and refusing to write would
+ * break the autosave the rest of the module exists for. What is removed is the
+ * SILENCE. (Two tabs on DIFFERENT documents have nothing to do with each other
+ * any more — that is the per-slot baseline, unit-tested in
+ * `core/autosave.test.ts`.) This is the only test that reaches the wiring.
  */
-describe('草稿是全局一份', () => {
+describe('跨标签页的草稿', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
   it('另一个标签页写过更新的草稿时提示一次，并且仍然覆盖', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '原来的\n', name: '报告.md', savedAt: 1_000 }),
-    )
+    seedDraft('报告.md', { content: '原来的\n', name: '报告.md' })
     const view = render(<App />)
-    // The other tab wrote after this one loaded its draft — and, importantly,
+    // The other tab wrote after this one loaded its slot — and, importantly,
     // BEFORE this tab's first write, which is the ordering that actually happens.
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '别的标签页写的\n', name: '报告.md', savedAt: 9_999 }),
-    )
+    foreignSlot('报告.md', '别的标签页写的\n')
 
-    const user = userEvent.setup({ delay: null })
-    const doc = view.container.querySelector('.doc') as HTMLElement
-    doc.focus({ preventScroll: true })
-    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
-    if (!run?.firstChild) throw new Error('first run has no text node')
-    placeCaretAt(run.firstChild, 0)
-    await user.keyboard('X')
+    await typeInto(view, 'X')
     // 越过防抖窗口。
-    await new Promise((resolve) => setTimeout(resolve, 700))
+    await act(async () => {
+      await pastDraftDebounce()
+    })
 
     expect(view.container.querySelector('.toast')?.textContent).toContain('另一个标签页')
     // 后写者赢：这话说得出口，前提是它真的发生了。
-    expect(JSON.parse(localStorage.getItem('taipola:draft') ?? '{}').content).toBe('X原来的\n')
+    expect(documents.draft.load('报告.md')?.content).toBe('X原来的\n')
     view.unmount()
   })
 
   it('只有一个标签页时不提示', async () => {
-    localStorage.setItem(
-      'taipola:draft',
-      JSON.stringify({ content: '原来的\n', name: '报告.md', savedAt: 1_000 }),
-    )
+    seedDraft('报告.md', { content: '原来的\n', name: '报告.md' })
     const view = render(<App />)
-    const user = userEvent.setup({ delay: null })
-    const doc = view.container.querySelector('.doc') as HTMLElement
-    doc.focus({ preventScroll: true })
-    const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
-    if (!run?.firstChild) throw new Error('first run has no text node')
-    placeCaretAt(run.firstChild, 0)
-    await user.keyboard('X')
-    await new Promise((resolve) => setTimeout(resolve, 700))
+
+    await typeInto(view, 'X')
+    await act(async () => {
+      await pastDraftDebounce()
+    })
 
     expect(view.container.querySelector('.toast')?.textContent ?? '').not.toContain('另一个标签页')
     view.unmount()
+  })
+
+  /**
+   * The point of a slot per document: another tab working on a DIFFERENT document
+   * writes newer records all day, and none of them concern this one. A shared
+   * baseline reported every one of them as a conflict.
+   */
+  it('另一个标签页写的是别的文档：不误报，也不互相覆盖', async () => {
+    seedDraft('甲.md', { content: '甲原来的\n', name: '甲.md' })
+    const view = render(<App />)
+    foreignSlot('乙.md', '乙那份\n')
+
+    await typeInto(view, 'X')
+    await act(async () => {
+      await pastDraftDebounce()
+    })
+
+    expect(view.container.querySelector('.toast')?.textContent ?? '').not.toContain('另一个标签页')
+    expect(documents.draft.load('甲.md')?.content).toBe('X甲原来的\n')
+    expect(documents.draft.load('乙.md')?.content).toBe('乙那份\n')
+    view.unmount()
+  })
+})
+
+/**
+ * The write-back wiring: with a file behind the document, the content gets there
+ * on its own and switching stops asking. The policy's own decisions are
+ * unit-tested in `core/writeBack.test.ts`; what these reach is the seam between
+ * it, the draft slots and the shell's state.
+ */
+describe('有文件时自动写回', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  /** The file-backed document every test below opens first. */
+  const FILE = {
+    status: 'opened' as const,
+    document: { name: '笔记.md', handle: { file: '笔记.md' } },
+    content: '文件里的内容\n',
+    modifiedAt: 111,
+  }
+
+  /** Opens `FILE` (or `other`) the way the picker would. */
+  async function openFile(
+    view: ReturnType<typeof render>,
+    opened: typeof FILE = FILE,
+  ) {
+    const open = vi.spyOn(documents, 'open').mockResolvedValueOnce(opened)
+    try {
+      await act(async () => {
+        findButton(view, '打开').click()
+      })
+    } finally {
+      open.mockRestore()
+    }
+  }
+
+  it('有文件的文档，切换时不再问「还没保存」', async () => {
+    const view = render(<App />)
+    const saveSpy = vi.spyOn(documents, 'save').mockResolvedValue({
+      status: 'saved',
+      document: FILE.document,
+    })
+    const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(FILE.modifiedAt)
+    const confirm = vi.spyOn(window, 'confirm')
+    try {
+      await openFile(view)
+      await typeInto(view, 'X')
+      expect(readDocumentSource(documentBody(view))).toBe('X文件里的内容\n')
+
+      await openFile(view, {
+        ...FILE,
+        document: { name: '另一篇.md', handle: { file: '另一篇.md' } },
+        content: '另一篇的内容\n',
+      })
+
+      expect(confirm).not.toHaveBeenCalled()
+      expect(readDocumentSource(documentBody(view))).toBe('另一篇的内容\n')
+    } finally {
+      saveSpy.mockRestore()
+      modified.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('停顿一秒之后内容写进文件，草稿槽随之消失、脏标记也消失', async () => {
+    const view = render(<App />)
+    const saveSpy = vi.spyOn(documents, 'save').mockResolvedValue({
+      status: 'saved',
+      document: FILE.document,
+    })
+    const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(FILE.modifiedAt)
+    try {
+      await openFile(view)
+      await typeInto(view, 'X')
+      await act(async () => {
+        await pastWriteBack()
+      })
+
+      expect(saveSpy).toHaveBeenCalledWith(FILE.document, 'X文件里的内容\n')
+      // 内容已经在文件里了，槽不该再留着。
+      expect(localStorage.getItem('taipola:draft:笔记.md')).toBeNull()
+      expect(view.container.querySelector('.doc-dot')).toBeNull()
+    } finally {
+      saveSpy.mockRestore()
+      modified.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('磁盘上的文件被别的程序改过：问一次，拒绝就不写，内容留在草稿里', async () => {
+    const view = render(<App />)
+    const saveSpy = vi.spyOn(documents, 'save').mockResolvedValue({
+      status: 'saved',
+      document: FILE.document,
+    })
+    const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(999)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      await openFile(view)
+      await typeInto(view, 'X')
+      await act(async () => {
+        await pastWriteBack()
+      })
+
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(confirm.mock.calls[0]?.[0]).toContain('笔记.md')
+      expect(saveSpy).not.toHaveBeenCalled()
+      expect(view.container.querySelector('.toast')?.textContent).toContain('停止自动写回')
+      expect(JSON.parse(localStorage.getItem('taipola:draft:笔记.md') ?? '{}').content).toBe(
+        'X文件里的内容\n',
+      )
+    } finally {
+      saveSpy.mockRestore()
+      modified.mockRestore()
+      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('文件已经找不到了：不写、提示一次并停下来', async () => {
+    const view = render(<App />)
+    const saveSpy = vi.spyOn(documents, 'save')
+    // 读不到修改时间 = 文件被删掉或移走了。照写会把它凭空重建出来。
+    const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(null)
+    try {
+      await openFile(view)
+      await typeInto(view, 'X')
+      await act(async () => {
+        await pastWriteBack()
+      })
+
+      expect(saveSpy).not.toHaveBeenCalled()
+      expect(view.container.querySelector('.toast')?.textContent).toContain('找不到这个文件')
+      expect(documents.draft.load('笔记.md')?.content).toBe('X文件里的内容\n')
+    } finally {
+      saveSpy.mockRestore()
+      modified.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('写回失败：提示一次并停下来，之后不再自己重试', async () => {
+    const view = render(<App />)
+    const saveSpy = vi
+      .spyOn(documents, 'save')
+      .mockResolvedValue({ status: 'failed', error: new Error('disk full') })
+    const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(FILE.modifiedAt)
+    try {
+      await openFile(view)
+      await typeInto(view, 'X')
+      await act(async () => {
+        await pastWriteBack()
+      })
+      expect(saveSpy).toHaveBeenCalledTimes(1)
+      expect(view.container.querySelector('.toast')?.textContent).toContain('写回文件失败')
+
+      await typeInto(view, 'Y')
+      await act(async () => {
+        await pastWriteBack()
+      })
+      expect(saveSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      saveSpy.mockRestore()
+      modified.mockRestore()
+      view.unmount()
+    }
   })
 })

@@ -14,10 +14,15 @@
  * open, save, status-bar sentence — and had to catch a `UserCancelled`
  * exception to tell "the user declined" apart from a real failure. Neither
  * survives this interface: declining is a returned result, and the shell no
- * longer asks which adapter it is talking to at all. (It briefly did, through a
- * `supportsWriteBack()` used to pick one sentence of status-bar text. The
- * sentence is gone, and so is the last way for the capability to leak out of
- * here — which is what this seam was for.)
+ * longer asks which adapter it is talking to.
+ *
+ * One capability IS exposed, and it is the exception that proves the rule:
+ * `canWriteBack` says whether content can reach its file on its own. That is not
+ * adapter identity — it decides what the user gets ASKED. With write-back,
+ * replacing the document throws nothing away and no prompt is owed; without it,
+ * the draft slot is the only copy there is and the prompts stay. Hiding this from
+ * the shell (an earlier `supportsWriteBack()` tried) hid nothing: it only moved
+ * the branch somewhere a reader could not see it.
  *
  * The save policy itself (write back when we hold a file; pick a destination on
  * "save as" or for a new document; download otherwise) is shared and lives here,
@@ -55,7 +60,19 @@ export interface OpenDocument {
 }
 
 export type OpenResult =
-  | { status: 'opened'; document: OpenDocument; content: string }
+  | {
+      status: 'opened'
+      document: OpenDocument
+      content: string
+      /**
+       * When the file was last modified, as of reading it.
+       *
+       * Carried out of the adapter because "has anything changed this file since
+       * we read it?" is a question only the shell can act on, and only the file
+       * itself can answer.
+       */
+      modifiedAt: number
+    }
   /** The user dismissed the picker. */
   | { status: 'cancelled' }
   | { status: 'failed'; error: unknown }
@@ -70,7 +87,27 @@ export type SaveResult =
   | { status: 'failed'; error: unknown }
 
 export interface Documents {
+  /**
+   * Whether this platform can write into a file the user already opened.
+   *
+   * This is a CAPABILITY, not an adapter's name, and the shell is allowed to read
+   * it because it changes what the user sees: with write-back, content reaches
+   * its file on its own and switching documents needs no prompt; without it,
+   * every document is unsaved until the user says otherwise, and the old prompts
+   * stay. (An earlier version of this seam hid the capability completely and the
+   * shell branched on a status-bar sentence instead — that hid nothing, it just
+   * moved the branch.)
+   */
+  readonly canWriteBack: boolean
   open(): Promise<OpenResult>
+  /**
+   * When `doc`'s file was last modified, or null when it cannot be read any more
+   * (deleted, moved) or this platform cannot write back at all.
+   *
+   * Null is a real answer, not a missing one: on the write-back path it is how
+   * the caller learns there is nothing left to write into.
+   */
+  modifiedAt(doc: OpenDocument): Promise<number | null>
   /**
    * Saves `text` as `doc`'s file, or as a new one when there is no `doc` or
    * `forcePicker` asks for "save as".
@@ -110,6 +147,8 @@ interface PickedFile {
   name: string
   content: string
   handle: unknown
+  /** The file's modification time, as of this read. */
+  modifiedAt: number
 }
 
 /** A destination the user chose: a name and the handle to write through. */
@@ -132,6 +171,8 @@ export interface WriteBackAdapter extends AdapterBase {
   pickSave(suggestedName: string): Promise<PickedTarget | null>
   /** Writes through a handle. `false` when the user refuses the permission. */
   write(handle: unknown, text: string): Promise<boolean>
+  /** Reads a handle's current modification time. Throws when the file is gone. */
+  modifiedAt(handle: unknown): Promise<number>
 }
 
 /** The fallback adapter: <input type=file> for reading, downloads for writing. */
@@ -153,6 +194,8 @@ export type StorageAdapter = WriteBackAdapter | DownloadAdapter
 
 export function createDocuments(adapter: StorageAdapter): Documents {
   return {
+    canWriteBack: adapter.writeBack,
+
     async open() {
       try {
         const picked = await adapter.pickOpen()
@@ -161,9 +204,22 @@ export function createDocuments(adapter: StorageAdapter): Documents {
           status: 'opened',
           document: { name: picked.name, handle: picked.handle },
           content: picked.content,
+          modifiedAt: picked.modifiedAt,
         }
       } catch (error) {
         return { status: 'failed', error }
+      }
+    },
+
+    async modifiedAt(doc) {
+      if (!adapter.writeBack) return null
+      try {
+        return await adapter.modifiedAt(doc.handle)
+      } catch {
+        // Deleted since we read it, or the permission went away. Either way there
+        // is nothing left to compare against, and the caller stops rather than
+        // writing a file that is no longer there.
+        return null
       }
     },
 
@@ -291,7 +347,7 @@ function fileSystemAccessAdapter(
       try {
         const [handle] = await showOpen({ types: MD_TYPES, id: 'taipola-doc' })
         const file = await handle.getFile()
-        return { name: handle.name, content: await file.text(), handle }
+        return { name: handle.name, content: await file.text(), handle, modifiedAt: file.lastModified }
       } catch (error) {
         if (isAbort(error)) return null
         throw error
@@ -321,6 +377,11 @@ function fileSystemAccessAdapter(
       return true
     },
 
+    async modifiedAt(handle) {
+      const file = await (handle as FileSystemFileHandle).getFile()
+      return file.lastModified
+    },
+
     download: downloadFile,
   }
 }
@@ -337,7 +398,12 @@ function downloadAdapter(): DownloadAdapter {
         input.onchange = async () => {
           const file = input.files?.[0]
           if (!file) return resolve(null)
-          resolve({ name: file.name, content: await file.text(), handle: null })
+          resolve({
+            name: file.name,
+            content: await file.text(),
+            handle: null,
+            modifiedAt: file.lastModified,
+          })
         }
         input.oncancel = () => resolve(null)
         input.click()

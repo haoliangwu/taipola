@@ -4,6 +4,7 @@ import { Outline } from './components/Outline'
 import { computeStats, extractHeadings } from '../core/markdown'
 import { WELCOME_DOC, WELCOME_NAME } from '../core/welcome'
 import { createAutosave } from '../core/autosave'
+import { createWriteBack, type WriteBack, type WriteBackStopReason } from '../core/writeBack'
 import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
 import { THEME_LABEL, useTheme } from './useTheme'
@@ -48,22 +49,64 @@ const EXPORT_FORMATS = [
 /** What `新建` starts from: a document with no file behind it yet. */
 const NEW_DOC = { content: '# 未命名\n\n', name: 'untitled.md' }
 
+/**
+ * The file a document is backed by: the handle the seam handed over, and when
+ * that file was last modified as of reading it.
+ *
+ * Held as ONE value, because the two are only ever true together. Split into two
+ * pieces of state, there is a render in which the document has a handle and the
+ * PREVIOUS document's timestamp, and nothing downstream can tell.
+ */
+interface OpenFile {
+  readonly document: OpenDocument
+  readonly modifiedAt: number
+}
+
+/**
+ * What the user is told when the automatic writes give up.
+ *
+ * One sentence per reason, written down together so that a new reason cannot be
+ * added without one.
+ */
+const WRITE_BACK_STOP_MESSAGE: Record<WriteBackStopReason, string> = {
+  declined: '磁盘上的文件被别的程序改过，已停止自动写回；内容留在草稿里',
+  failed: '写回文件失败，已停止自动写回；内容留在草稿里，可以手动保存',
+  missing: '找不到这个文件（可能已被删除或移动），已停止自动写回；内容留在草稿里，可以手动保存',
+}
+
 export default function App() {
   const editorRef = useRef<EditorHandle>(null)
 
   const initial = useMemo(() => {
-    const draft = documents.draft.load()
-    if (draft) return { value: draft.content, name: draft.name }
-    return { value: WELCOME_DOC, name: WELCOME_NAME }
+    // The slot written last is the document that was being edited, and it is the
+    // only one a reload can put back: a file handle does not survive a reload
+    // (see the folder ticket — persisting one is a separate decision).
+    const key = documents.draft.active()
+    const slot = key ? documents.draft.load(key) : null
+    if (slot) return { value: slot.content, name: slot.name, restored: true }
+    return { value: WELCOME_DOC, name: WELCOME_NAME, restored: false }
   }, [])
 
   const [value, setValue] = useState(initial.value)
-  // Where the document lives, as far as the shell can tell: it holds this and
-  // hands it back to `documents.save`. Whether it is backed by a writable file
-  // handle is the adapter's business (platform/documents.ts).
-  const [doc, setDoc] = useState<OpenDocument | null>(null)
+  /**
+   * Where the document lives, as far as the shell can tell.
+   *
+   * The shell holds it and hands it back to `documents.save`; whether it is
+   * backed by a writable handle is the adapter's business
+   * (platform/documents.ts), and whether content can reach it on its own is the
+   * `canWriteBack` capability below.
+   */
+  const [file, setFile] = useState<OpenFile | null>(null)
   const [fileName, setFileName] = useState(initial.name)
-  const [savedValue, setSavedValue] = useState(initial.value)
+  /**
+   * The last content known to be in the file — null while the document has never
+   * had one. A slot restored on load is content that reached no file, so it
+   * starts UNSAVED: `dirty` is the truth the title bar and the draft slot are
+   * built on, and pretending otherwise would hide the one copy there is.
+   */
+  const [savedValue, setSavedValue] = useState<string | null>(
+    initial.restored ? null : initial.value,
+  )
   const [caretLine, setCaretLine] = useState(1)
   const [headings, setHeadings] = useState(() => extractHeadings(initial.value))
   // Open by default on a desktop, where the outline is a column beside the
@@ -77,6 +120,23 @@ export default function App() {
 
   const dirty = value !== savedValue
   const stats = useMemo(() => computeStats(value), [value])
+  /**
+   * Which slot this document's unwritten content belongs to.
+   *
+   * The display name for now. The folder ticket turns it into the folder root
+   * plus the document's path inside it, which is what lets a slot be recognised
+   * again after a reload.
+   */
+  const draftKey = fileName
+  /**
+   * Whether the content can reach a file on its own.
+   *
+   * When it can, switching documents throws nothing away and therefore asks
+   * nothing. When it cannot — a platform with no write-back, a document with no
+   * file behind it, a slot restored on load that has no handle yet — the old
+   * prompts stay, because they are the only thing between the user and lost work.
+   */
+  const canWriteBack = documents.canWriteBack && file !== null
 
   const notify = useCallback((message: string) => {
     setToast(message)
@@ -90,15 +150,17 @@ export default function App() {
   }, [value])
 
   // --- draft persistence -----------------------------------------------------
-  // The policy (debounce, and write now on unload) is `core/autosave.ts`; this is
-  // the wiring: real localStorage, real timers, real unload events.
+  // The policy (debounce, one slot per document, write now on unload) is
+  // `core/autosave.ts`; this is the wiring: real localStorage, real timers, real
+  // unload events.
   const autosave = useMemo(
     () =>
       createAutosave({
-        write: (draft) => documents.draft.save(draft),
-        // The draft is ONE record shared by every tab (see `core/autosave.ts`), so
-        // this read is how the policy tells its own last write from another tab's.
-        peek: () => documents.draft.load(),
+        write: (key, draft) => documents.draft.save(key, draft),
+        // Read before every write, per slot: this is how the policy tells its own
+        // last write from another tab's on the SAME document.
+        peek: (key) => documents.draft.load(key),
+        remove: (key) => documents.draft.remove(key),
         onForeignDraft: () => notify('另一个标签页也改过这份草稿，已被当前内容覆盖'),
         setTimer: (run, delayMs) => window.setTimeout(run, delayMs),
         clearTimer: (handle) => window.clearTimeout(handle),
@@ -107,19 +169,90 @@ export default function App() {
     [notify],
   )
 
+  /** The slot of the document on screen right now — the only one the callbacks below may touch. */
+  const currentKeyRef = useRef(draftKey)
   useEffect(() => {
-    autosave.schedule({ content: value, name: fileName })
+    currentKeyRef.current = draftKey
+  }, [draftKey])
+
+  /**
+   * Writing the content into its file while the user types, so that switching
+   * documents is not a lossy operation and no longer has to ask.
+   *
+   * `core/writeBack.ts` owns the four decisions (debounce, one question when the
+   * file changed underneath, giving up after a write that did not happen, never
+   * writing a superseded text twice); this is the wiring.
+   */
+  const writeBack = useMemo(() => {
+    if (!canWriteBack || file === null) return null
+    return createWriteBack({
+      openedAt: file.modifiedAt,
+      currentModifiedAt: () => documents.modifiedAt(file.document),
+      write: async (text) => (await documents.save(file.document, text)).status === 'saved',
+      confirmOverwrite: () => window.confirm(`磁盘上的「${fileName}」被别的程序改过，确定覆盖吗？`),
+      onWritten: (text) => {
+        // The slot holds content that is now in the file — unless something newer
+        // got into it while the write was in flight, which is why the check is by
+        // content and not by "we just wrote".
+        autosave.forgetUnlessNewer(draftKey, text)
+        // The user may have switched documents while this was being written:
+        // marking the NEW document saved with the OLD text would be a lie.
+        if (currentKeyRef.current !== draftKey) return
+        setSavedValue(text)
+      },
+      onStopped: (reason) => notify(WRITE_BACK_STOP_MESSAGE[reason]),
+      setTimer: (run, delayMs) => window.setTimeout(run, delayMs),
+      clearTimer: (handle) => window.clearTimeout(handle),
+    })
+  }, [autosave, canWriteBack, draftKey, file, fileName, notify])
+
+  const writeBackRef = useRef<WriteBack | null>(null)
+  useEffect(() => {
+    writeBackRef.current = writeBack
+  }, [writeBack])
+
+  /** The slot the content would go into if the document is dirty right now. */
+  const unwrittenKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!dirty) {
+      // Clean: nothing is unwritten, so the slot has nothing to hold. Forgetting
+      // the key that WAS dirty (rather than the current one) is what covers
+      // "save as", where the document is clean under a new name by the time this
+      // runs.
+      const key = unwrittenKeyRef.current
+      if (key !== null) {
+        autosave.forget(key)
+        unwrittenKeyRef.current = null
+      }
+      return
+    }
+    unwrittenKeyRef.current = draftKey
+    autosave.schedule(draftKey, { content: value, name: fileName, root: null, path: null })
     return () => autosave.cancel()
-  }, [autosave, fileName, value])
+  }, [autosave, dirty, draftKey, fileName, value])
+
+  useEffect(() => {
+    // The other half of "content reaches its file on its own". Nothing to do
+    // while the document is clean, and nothing to do when there is no file to
+    // write into — that is the whole of `canWriteBack`.
+    if (!writeBack || !dirty) return
+    writeBack.schedule(value)
+    return () => writeBack.cancel()
+  }, [writeBack, dirty, value])
 
   useEffect(() => {
     // The debounce timer dies the moment the page unloads: an edit made just
     // before refreshing could still be sitting in the timer, and reloading then
     // restores the STALE draft — observed as deleted text "coming back" after
     // a refresh. Flush synchronously on unload (localStorage writes are sync).
-    // Registered once: the store remembers the pending draft, so these listeners
-    // do not need re-registering on every keystroke.
-    const flush = () => autosave.flush()
+    // Registered once: the stores remember the pending content, so these
+    // listeners do not need re-registering on every keystroke.
+    const flush = () => {
+      autosave.flush()
+      // Started, not awaited: `pagehide` has no time to wait. The slot written
+      // just above is what covers a write that never gets to finish.
+      writeBackRef.current?.flush()
+    }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush()
     }
@@ -134,11 +267,16 @@ export default function App() {
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
       if (!dirty) return
+      // With write-back the content is on its way into the file by itself, so
+      // leaving the page is not a way to lose it and there is nothing to warn
+      // about. Without it, the draft is the only copy and the browser's question
+      // is the last line of defence.
+      if (canWriteBack) return
       event.preventDefault()
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [dirty])
+  }, [canWriteBack, dirty])
 
   // --- file actions ----------------------------------------------------------
   /**
@@ -159,11 +297,31 @@ export default function App() {
    * operation with a file picker must pick first and ask about THAT file, while
    * one with no picker asks before it does anything. So this decides, and the
    * caller decides when.
+   *
+   * It is skipped entirely when the content can reach its file on its own
+   * (`canWriteBack`): then replacing the document throws nothing away, and a
+   * question with no consequence is just an interruption. The prompt survives
+   * exactly where it still buys something — a document with no file behind it,
+   * where the draft slot is the only copy there is.
    */
   const confirmDiscard = useCallback(
-    (action: string): boolean => !dirty || window.confirm(`当前文档还没保存，确定${action}吗？`),
-    [dirty],
+    (action: string): boolean =>
+      !dirty || canWriteBack || window.confirm(`当前文档还没保存，确定${action}吗？`),
+    [canWriteBack, dirty],
   )
+
+  /**
+   * Hands the current document over before another one replaces it.
+   *
+   * Two things have to happen first: the slot has to be written (synchronously —
+   * it is the only copy if the file write below does not get there), and the file
+   * write has to be started (not awaited: it finishes while the screen has
+   * already moved on, and its callbacks know which document it belonged to).
+   */
+  const leaveDocument = useCallback(() => {
+    autosave.flush()
+    writeBackRef.current?.flush()
+  }, [autosave])
 
   const handleOpen = useCallback(async () => {
     const result = await documents.open()
@@ -172,24 +330,28 @@ export default function App() {
       notify(`打开失败：${String(result.error)}`)
       return
     }
-    const { document, content } = result
+    const { document, content, modifiedAt } = result
     // Asked AFTER the picker, unlike 新建: the question is worth answering only
     // about a file that exists, and it can then name both sides of the trade.
     // A dismissed picker never gets here, so declining it costs no prompt.
     if (!confirmDiscard(`丢弃改动并打开「${document.name}」`)) return
+    leaveDocument()
     editorRef.current?.setDocument(content)
     setSavedValue(content)
-    setDoc(document)
+    setFile({ document, modifiedAt })
     setFileName(document.name)
     setHeadings(extractHeadings(content))
     notify(`已打开 ${document.name}`)
-  }, [confirmDiscard, notify])
+  }, [confirmDiscard, leaveDocument, notify])
 
   const handleSave = useCallback(
     async (forcePicker = false) => {
       // The shell owns the display name, so it hands it over: with no file handle
       // there is nothing else to name the saved document after.
-      const result = await documents.save(doc, value, { forcePicker, name: fileName })
+      const result = await documents.save(file?.document ?? null, value, {
+        forcePicker,
+        name: fileName,
+      })
       if (result.status === 'cancelled') {
         // The user declined — dismissing the picker, or refusing the write
         // permission. Nothing was written, so the document stays dirty.
@@ -201,27 +363,43 @@ export default function App() {
         return
       }
       if (result.status === 'saved') {
-        setDoc(result.document)
+        // A file that has just been created or written has a new modification
+        // time, and that is the one the automatic writes must compare against.
+        // Read BEFORE the state changes, so that the handle and its timestamp
+        // never appear in different renders. A file whose time cannot be read is
+        // recorded as "no file": without a baseline, an automatic write could not
+        // tell its own work from somebody else's.
+        const modifiedAt = await documents.modifiedAt(result.document)
+        setFile(modifiedAt === null ? null : { document: result.document, modifiedAt })
         setFileName(result.document.name)
       }
       setSavedValue(value)
+      // Whatever the automatic writes were waiting to do, the user has just done
+      // it by hand.
+      writeBackRef.current?.savedByHand()
       notify(result.status === 'downloaded' ? '已下载文件' : '已保存')
     },
-    [doc, fileName, notify, value],
+    [file, fileName, notify, value],
   )
 
   /**
    * Adopt a document that has no file behind it — the welcome document, or a new
-   * one. Clearing `doc` is the point rather than bookkeeping: it is what stops a
-   * later save from writing the new text into whatever file was open before.
+   * one. Clearing the file is the point rather than bookkeeping: it is what stops
+   * a later save from writing the new text into whatever file was open before,
+   * and what keeps the automatic writes away from a document whose content has no
+   * destination yet.
    */
-  const adoptDocument = useCallback((content: string, name: string) => {
-    editorRef.current?.setDocument(content)
-    setSavedValue(content)
-    setDoc(null)
-    setFileName(name)
-    setHeadings(extractHeadings(content))
-  }, [])
+  const adoptDocument = useCallback(
+    (content: string, name: string) => {
+      leaveDocument()
+      editorRef.current?.setDocument(content)
+      setSavedValue(content)
+      setFile(null)
+      setFileName(name)
+      setHeadings(extractHeadings(content))
+    },
+    [leaveDocument],
+  )
 
   const handleNew = useCallback(() => {
     // No picker on this path, so there is nothing to pick before asking: the

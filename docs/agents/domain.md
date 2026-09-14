@@ -5,13 +5,14 @@ codebase.
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root — the glossary. It does not exist yet; see "Lazy creation"
-  below.
+- **`CONTEXT.md`** at the repo root — the glossary (created by `/domain-modeling`; see "Lazy
+  creation" below).
 - **`docs/adr/`**: read the ADRs that touch the area you are about to work in. Today there are
-  three: `docs/adr/0001-editor-core-native.md` (the editor core is a native kernel; React renders
+  four: `docs/adr/0001-editor-core-native.md` (the editor core is a native kernel; React renders
   only the shell), `0002-caret-invariants-and-pitfalls.md` (caret arithmetic invariants —
   required before touching block collection or caret code), `0003-image-size-syntax.md` (the
-  `{width=…}` inline syntax).
+  `{width=…}` inline syntax), `0004-write-back-when-there-is-a-file.md` (content reaches its file
+  on its own whenever the document has one — which is why switching documents no longer asks).
 
 If any of these files do not exist, **proceed silently**. Do not flag their absence and do not
 suggest creating them upfront.
