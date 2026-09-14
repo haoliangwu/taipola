@@ -13,6 +13,7 @@ import { page } from 'vitest/browser'
 import App from './App'
 import { documents } from '../platform/documents'
 import { folders } from '../platform/folder'
+import { stubSavedFolder } from '../test/platformStubs'
 import { readDocumentSource } from '../editor/render'
 
 const NARROW = [390, 844] as const
@@ -39,6 +40,9 @@ function renderApp() {
 describe('窄屏外壳（390px）', () => {
   beforeEach(async () => {
     await page.viewport(...NARROW)
+    // Folder memory stays out of this file: nothing here is about it, and a
+    // pick that really wrote would leak a record into the file's own context.
+    stubSavedFolder()
   })
 
   it('大纲默认收起：画布留给自己', () => {

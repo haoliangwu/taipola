@@ -166,6 +166,12 @@ export default function App() {
   // Read on demand and cached until 刷新; see `useFileTree` for why there is no
   // watching (the platform offers no change notifications).
   const tree = useFileTree(notify)
+  // An offered folder (stored, but its permission needs one click) is a 文件
+  // panel concern: bring the tree into view just like opening a folder does, or
+  // the offer would sit in a panel nobody is looking at.
+  useEffect(() => {
+    if (tree.resumePrompt) setPanel('files')
+  }, [setPanel, tree.resumePrompt])
   /** Whether this platform can open a folder at all — a plain capability check. */
   const canOpenFolder = folders.canOpen()
   /**

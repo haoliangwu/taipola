@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { visibleEntries } from '../core/fileTree'
 import { folders, type FolderEntry, type FolderRoot } from '../platform/folder'
+import { savedFolder } from '../platform/savedFolder'
 
 /**
  * The folder the sidebar is showing, and the levels of it that have been read.
@@ -21,8 +22,15 @@ export interface FileTreeState {
   rows(path: string): FolderEntry[] | undefined
   isExpanded(path: string): boolean
   isBusy(path: string): boolean
+  /**
+   * True while the last session's folder is stored but needs one click to come
+   * back (its permission does not survive the reload). See `savedFolder.ts`.
+   */
+  resumePrompt: boolean
   /** Shows the directory picker. `false` when the user declined or it failed. */
   openFolder(): Promise<boolean>
+  /** One click: restore the last session's folder. `false` when denied. */
+  resume(): Promise<boolean>
   /** Opens or closes one directory, reading it the first time. */
   toggle(path: string): void
   /** Re-reads every level that has been read. */
@@ -34,6 +42,11 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
   const [children, setChildren] = useState<ReadonlyMap<string, FolderEntry[]>>(new Map())
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
+  /**
+   * The folder the last session left, waiting for one click. Non-null while the
+   * offer is on screen; `resumePrompt` is this presence.
+   */
+  const [offeredRoot, setOfferedRoot] = useState<FolderRoot | null>(null)
 
   const read = useCallback(
     async (folder: FolderRoot, path: string) => {
@@ -56,20 +69,73 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
     [onError],
   )
 
+  /** The tail every folder takes — picked now or restored from last time. */
+  const applyRoot = useCallback(
+    async (folder: FolderRoot) => {
+      setRoot(folder)
+      setChildren(new Map())
+      setExpanded(new Set())
+      await read(folder, '')
+    },
+    [read],
+  )
+
   const openFolder = useCallback(async () => {
     try {
       const picked = await folders.pick()
       if (!picked) return false
-      setRoot(picked)
-      setChildren(new Map())
-      setExpanded(new Set())
-      await read(picked, '')
+      // Best effort: remembering the folder is a convenience, not part of the
+      // pick — a full IndexedDB must neither fail the open nor leak a rejected
+      // promise into the console.
+      savedFolder.save(picked).catch(() => {})
+      setOfferedRoot(null)
+      await applyRoot(picked)
       return true
     } catch (error) {
       onError(`打开文件夹失败：${String(error)}`)
       return false
     }
-  }, [onError, read])
+  }, [applyRoot, onError])
+
+  /**
+   * The one click the sidebar offers while `resumePrompt` is true.
+   *
+   * NOTHING is awaited before `authorize`: `requestPermission` must run inside
+   * the click's user activation, and an IndexedDB round-trip between the click
+   * and the call could let that activation expire. The record was already read
+   * at mount (`offeredRoot`), so the click goes straight to the gesture.
+   */
+  const resume = useCallback(async () => {
+    const root = offeredRoot
+    if (root === null) return false
+    setOfferedRoot(null)
+    try {
+      if (!(await savedFolder.authorize(root))) return false
+      await applyRoot(root)
+      return true
+    } catch (error) {
+      onError(`恢复文件夹失败：${String(error)}`)
+      return false
+    }
+  }, [applyRoot, offeredRoot, onError])
+
+  // What the previous session left: restore it silently when the permission
+  // survived, hold a one-click offer when it did not, and do nothing otherwise.
+  // A storage failure is "nothing" — never an error to show on load.
+  useEffect(() => {
+    let cancelled = false
+    void savedFolder
+      .probe()
+      .then((record) => {
+        if (cancelled) return
+        if (record.status === 'restorable') void applyRoot(record.root)
+        else if (record.status === 'offered') setOfferedRoot(record.root)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [applyRoot])
 
   const toggle = useCallback(
     (path: string) => {
@@ -99,7 +165,9 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
     rows: (path) => children.get(path),
     isExpanded: (path) => expanded.has(path),
     isBusy: (path) => busy.has(path),
+    resumePrompt: offeredRoot !== null,
     openFolder,
+    resume,
     toggle,
     refresh,
   }

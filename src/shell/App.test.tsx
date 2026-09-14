@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
 import { folders, type FolderEntry } from '../platform/folder'
+import { savedFolder } from '../platform/savedFolder'
+import { stubSavedFolder } from '../test/platformStubs'
 import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
 
@@ -658,6 +660,10 @@ describe('有文件时自动写回', () => {
 describe('侧栏打开文件夹', () => {
   beforeEach(() => {
     localStorage.clear()
+    // The real folder memory must not leak into this file: probe reads
+    // nothing and a pick never writes (that record is tested in its own file).
+    stubSavedFolder()
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
   })
 
   const ROOT = { name: '干草堆', handle: { dir: '干草堆' } }
@@ -725,6 +731,48 @@ describe('侧栏打开文件夹', () => {
       expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('干草堆')
       // 目录在前；同名次按名称升序（码点序，见 `core/fileTree.ts`）。
       expect(rows(view)).toEqual(['空目录', '章节', '笔记.md'])
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('打开文件夹：外壳把选中的文件夹交给记忆（save 接线）', async () => {
+    stubFolders()
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+      expect(vi.mocked(savedFolder.save)).toHaveBeenCalledWith({
+        name: '干草堆',
+        handle: { dir: '干草堆' },
+      })
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('记忆写入失败（IndexedDB 满之类）：不挡住打开文件夹', async () => {
+    stubFolders()
+    vi.mocked(savedFolder.save).mockRejectedValueOnce(new Error('disk full'))
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('干草堆')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('选择器抛错：提示打开文件夹失败，侧栏不切面板、对方还是空的', async () => {
+    vi.spyOn(folders, 'pick').mockRejectedValue(new Error('boom'))
+    const view = render(<App />)
+    try {
+      await openFolder(view)
+      expect(view.container.querySelector('.toast')?.textContent).toContain('打开文件夹失败')
+      expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('大纲')
+      expect(view.container.querySelector('.sidebar-root-name')).toBeNull()
     } finally {
       vi.restoreAllMocks()
       view.unmount()
@@ -964,6 +1012,111 @@ describe('侧栏打开文件夹', () => {
     const view = render(<App />)
     try {
       expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('文件')
+    } finally {
+      view.unmount()
+    }
+  })
+})
+
+/**
+ * 重开页面后的文件夹记忆（`.scratch/folder-sidebar/issues/03`）。
+ *
+ * 权限能不能活过重载是浏览器的决定（Chrome 122+ 有持久权限），所以外壳只认
+ * `savedFolder` 给的判词：`restorable` 静默恢复、`offered` 亮一个按钮、
+ * 拒绝就消失。真实 IndexedDB 的存取在 `savedFolder.test.ts` 里测，这里换掉。
+ */
+describe('侧栏记忆上次的文件夹', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
+    vi.spyOn(folders, 'list').mockResolvedValue([
+      { name: '笔记.md', path: '笔记.md', kind: 'file', handle: {} },
+    ])
+  })
+
+  const ROOT = { name: '干草堆', handle: { dir: '干草堆' } }
+
+  const sidebarAction = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.sidebar-action')].find(
+      (el) => el.textContent?.trim() === label,
+    ) as HTMLButtonElement | undefined
+
+  const treeRows = (view: ReturnType<typeof render>) =>
+    [...view.container.querySelectorAll('.file-tree .tree-item')].map((el) =>
+      (el.textContent ?? '').replace(/[▸▾]/g, ''),
+    )
+
+  it('授权还活着：重开页面直接恢复文件夹，没有按钮、树已经在', async () => {
+    stubSavedFolder({ status: 'restorable', root: ROOT })
+    // 静默恢复不抢面板（尊重记住的偏好）；把偏好设成「文件」才能看见树，
+    // 与「offered」那条（按钮必须可见、自动切面板）对比。
+    localStorage.setItem('taipola:sidebar-panel', 'files')
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('干草堆')
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
+      expect(treeRows(view)).toEqual(['笔记.md'])
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('授权没了：出现「恢复上次的文件夹」，点一下树出来、按钮消失', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      // 面板自动切到「文件」，否则这个按钮在没人看的那个面板里。
+      expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('文件')
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeDefined()
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('没有打开文件夹')
+
+      await act(async () => {
+        sidebarAction(view, '恢复上次的文件夹')!.click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('干草堆')
+      expect(treeRows(view)).toEqual(['笔记.md'])
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('点「恢复」被拒：按钮消失、树不出现，这一会话不再问', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT })
+    vi.mocked(savedFolder.authorize).mockResolvedValueOnce(false)
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeDefined()
+
+      await act(async () => {
+        sidebarAction(view, '恢复上次的文件夹')!.click()
+      })
+      await act(async () => {})
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('没有打开文件夹')
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('点「恢复」时后台出错：提示一次，按钮消失、树不出现', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT })
+    vi.mocked(savedFolder.authorize).mockRejectedValueOnce(new Error('boom'))
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {
+        sidebarAction(view, '恢复上次的文件夹')!.click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('没有打开文件夹')
+      expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
+      expect(view.container.querySelector('.toast')?.textContent).toContain('恢复文件夹失败')
     } finally {
       view.unmount()
     }

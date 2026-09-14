@@ -68,6 +68,11 @@ export function Sidebar({
               )}
               {/* No button at all where the platform cannot open one: a control
                   that can only fail is worse than no control. */}
+              {canOpenFolder && tree.resumePrompt && (
+                <button type="button" className="sidebar-action" onClick={() => void tree.resume()}>
+                  恢复上次的文件夹
+                </button>
+              )}
               {canOpenFolder && (
                 <button type="button" className="sidebar-action" onClick={onOpenFolder}>
                   {tree.root === null ? '打开文件夹' : '换一个'}
