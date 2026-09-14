@@ -203,10 +203,28 @@ function collectRanges(tokens: MarkdownToken[]): {
 }
 
 /**
+ * The source of the lines `[startLine, endLine)`, exactly as they appear —
+ * including the newline that ends each one.
+ *
+ * Shared by the block model (which then trims the trailing newlines, see
+ * `sourceOf`) and by the dev assertion that the blocks tile the source
+ * (`assertSourcePreserved`): the two have to agree on what a line range's text
+ * is, and they used to build it with the same loop written twice.
+ */
+function linesText(lines: string[], startLine: number, endLine: number): string {
+  let raw = ''
+  for (let line = startLine; line < endLine; line++) {
+    raw += lines[line] ?? ''
+    if (line < lines.length - 1) raw += '\n'
+  }
+  return raw
+}
+
+/**
  * Splits a markdown document into caret-addressable blocks.
  *
  * Every character of the source belongs to exactly one block (or to the
- * inter-block gap, which is emitted as a blank blockso that no line is ever
+ * inter-block gap, which is emitted as a blank block so that no line is ever
  * unaddressable).
  */
 export function parseDocument(source: string): ParsedDocument {
@@ -258,14 +276,8 @@ export function parseDocument(source: string): ParsedDocument {
    * no trace of it, and the next keystroke rebuilt the document from that DOM —
    * silently deleting it (`.scratch/whitespace-round-trip/issues/01`).
    */
-  const sourceOf = (startLine: number, endLine: number): string => {
-    let raw = ''
-    for (let line = startLine; line < endLine; line++) {
-      raw += lines[line] ?? ''
-      if (line < lines.length - 1) raw += '\n'
-    }
-    return raw.replace(/\n+$/, '')
-  }
+  const sourceOf = (startLine: number, endLine: number): string =>
+    linesText(lines, startLine, endLine).replace(/\n+$/, '')
 
   const pushBlock = (
     startLine: number,
@@ -355,18 +367,9 @@ function assertSourcePreserved(source: string, lines: string[], blocks: Block[])
   // source right there. A blank block's line span reaches to the next block's
   // start, so it may owe one terminating newline — accepting either form keeps
   // the check exact without over-constraining the line semantics.
-  const sliceOf = (startLine: number, endLine: number): string => {
-    let raw = ''
-    for (let line = startLine; line < endLine; line++) {
-      raw += lines[line] ?? ''
-      if (line < lines.length - 1) raw += '\n'
-    }
-    return raw
-  }
-
   let cursor = 0
   for (const block of blocks) {
-    const slice = sliceOf(block.startLine, block.endLine)
+    const slice = linesText(lines, block.startLine, block.endLine)
     const withNewline = `${slice}\n`
 
     if (slice.length > 0 && slice !== '\n'.repeat(block.endLine - block.startLine)) {

@@ -157,10 +157,11 @@ export function applyCaret(
     `[data-block="${blockIndex}"] [data-vline="${target.lineIndex}"]`,
   )
   if (!lineEl) return false
-  // `runIndex: -1` (no laid-out run) indexes nothing, which is exactly the point:
-  // the line box takes the caret. A Range inside a COLLAPSED run would be clamped
-  // back by the browser instead — the failure the `else` branch below describes.
-  const span = lineEl.querySelectorAll<HTMLElement>('[data-run]')[target.runIndex]
+  // `runIndex: -1` means "this line has no laid-out run", so there is no span to
+  // put a caret in and the line box takes it (the `else` branch below). A Range
+  // inside a COLLAPSED run would be clamped back by the browser instead.
+  const spans = lineEl.querySelectorAll<HTMLElement>('[data-run]')
+  const span = target.runIndex < 0 ? null : spans[target.runIndex]
 
   host.focus({ preventScroll: true })
   const range = document.createRange()

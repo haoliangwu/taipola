@@ -530,7 +530,7 @@ function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts
  * `.scratch/enter-backspace-smoke/issues/09`: such a line has a single caret
  * position (its start) whether or not it holds invisible characters.
  */
-function blankLine(raw: string, sourceStart = 0): ViewLine {
+function blankLine(raw: string, sourceStart: number): ViewLine {
   const line = emptyLine(raw.length, sourceStart)
   if (raw === '') return line
   return {
