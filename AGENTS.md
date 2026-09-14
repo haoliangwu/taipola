@@ -35,8 +35,9 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   and in what order), `welcome.ts` (the welcome document),
   `markdownIt.ts` (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
-  interface), `folder.ts` (open a folder, read one level of it), `savedFolder.ts` (remember the last
-  folder in IndexedDB and re-authorize it after a reload), `draft.ts` (localStorage),
+  interface), `folder.ts` (open a folder, read one level of it, resolve one file by path),
+  `savedFolder.ts` (remember the last folder — and the last opened file inside it — in
+  IndexedDB, and re-authorize the folder after a reload), `draft.ts` (localStorage),
   `html.ts` (markdown → sanitized HTML), `abort.ts` (a dismissed picker, shared by both pickers)
 - `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Sidebar.tsx`,
   `components/FileTree.tsx`, `components/Outline.tsx`, `useTheme.ts`, `useFileTree.ts`,

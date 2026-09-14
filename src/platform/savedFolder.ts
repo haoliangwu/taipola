@@ -17,11 +17,13 @@
  * load would be a nag, and the folder picker itself remembers its position
  * (`folder.ts`'s picker id), so re-picking stays one dialog away.
  *
- * What is deliberately NOT remembered is which document was open: restoring a
- * document handle would silently re-arm the write-back machinery (ADR-0004)
- * right after load. Restoring the folder brings back only the TREE; the
- * document is whatever it is on load, and write-back starts when a file is
- * opened from the tree — exactly as if the folder had been picked by hand.
+ * What is remembered about the document is only its PATH inside the folder,
+ * never a handle. A path is identity (the same identity the draft slots use),
+ * and the file is re-read from the restored folder when the tree comes back —
+ * so ADR-0004's write-back arms with a fresh `openedAt`, exactly as if the row
+ * had been clicked. Content that never reached its file is not this memory's
+ * business: it rides the draft slot (`draft.ts`), and that document wins the
+ * screen at load over the remembered path.
  */
 import type { FolderRoot } from './folder'
 
@@ -30,15 +32,21 @@ export type SavedFolderStatus =
   /** Nothing stored (or a stored record was denied once too often). */
   | { status: 'none' }
   /** Stored, and the permission still holds: restore without asking. */
-  | { status: 'restorable'; root: FolderRoot }
+  | { status: 'restorable'; root: FolderRoot; lastFile: string | null }
   /** Stored, but re-authorization needs one user gesture. */
-  | { status: 'offered'; root: FolderRoot }
+  | { status: 'offered'; root: FolderRoot; lastFile: string | null }
 
 export interface SavedFolder {
   /** What the previous session left. Never throws; a storage failure is "none". */
   probe(): Promise<SavedFolderStatus>
   /** Remembers the folder just picked; a later pick replaces it. */
   save(root: FolderRoot): Promise<void>
+  /**
+   * Remembers which file was open inside the folder, by its path — replaced on
+   * the next tree click. Meaningless without a saved folder, so `save` (a new
+   * pick) clears it too.
+   */
+  rememberFile(path: string): Promise<void>
   /** Forgets the record. */
   clear(): Promise<void>
   /**
@@ -76,6 +84,8 @@ const HANDLE_PERMISSION: FolderPermission = {
 
 const STORE = 'saved-folder'
 const KEY = 'root'
+/** The last opened file's path inside the folder; one key, nothing else. */
+const FILE_KEY = 'last-file'
 // The stored record IS a `FolderRoot`: a directory handle survives the IndexedDB
 // structured clone as the same kind of object, plus a name to show.
 
@@ -114,8 +124,17 @@ export function makeSavedFolder(options: SavedFolderOptions = {}): SavedFolder {
   const readRecord = async (): Promise<FolderRoot | null> =>
     ((await withStore('readonly', (store) => store.get(KEY))) as FolderRoot | undefined) ?? null
 
+  const readFileKey = async (): Promise<string | null> =>
+    ((await withStore('readonly', (store) => store.get(FILE_KEY))) as string | undefined) ?? null
+
+  /**
+   * The file memory is meaningless without its folder, so they are cleared
+   * together — two writes, no atomicity promised, and none needed: a record
+   * half-cleared by a crash is just "no folder to restore".
+   */
   const clearRecord = async (): Promise<void> => {
     await withStore('readwrite', (store) => store.delete(KEY))
+    await withStore('readwrite', (store) => store.delete(FILE_KEY))
   }
 
   return {
@@ -123,9 +142,10 @@ export function makeSavedFolder(options: SavedFolderOptions = {}): SavedFolder {
       try {
         const record = await readRecord()
         if (!record) return { status: 'none' }
+        const lastFile = await readFileKey()
         const verdict = await permission.query(record.handle)
-        if (verdict === 'granted') return { status: 'restorable', root: record }
-        if (verdict === 'prompt') return { status: 'offered', root: record }
+        if (verdict === 'granted') return { status: 'restorable', root: record, lastFile }
+        if (verdict === 'prompt') return { status: 'offered', root: record, lastFile }
         // Denied: forget it, so the offer does not come back on every load.
         await clearRecord()
         return { status: 'none' }
@@ -137,7 +157,14 @@ export function makeSavedFolder(options: SavedFolderOptions = {}): SavedFolder {
     },
 
     async save(root) {
+      // A folder picked by hand is a fresh start: whatever file the PREVIOUS
+      // folder remembered cannot mean anything here.
+      await withStore('readwrite', (store) => store.delete(FILE_KEY))
       await withStore('readwrite', (store) => store.put(root, KEY))
+    },
+
+    async rememberFile(path) {
+      await withStore('readwrite', (store) => store.put(path, FILE_KEY))
     },
 
     async clear() {

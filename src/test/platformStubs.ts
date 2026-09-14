@@ -17,6 +17,7 @@ import { savedFolder, type SavedFolderStatus } from '../platform/savedFolder'
 export function stubSavedFolder(status: SavedFolderStatus = { status: 'none' }, authorize = true): void {
   vi.spyOn(savedFolder, 'probe').mockResolvedValue(status)
   vi.spyOn(savedFolder, 'save').mockResolvedValue()
+  vi.spyOn(savedFolder, 'rememberFile').mockResolvedValue()
   vi.spyOn(savedFolder, 'clear').mockResolvedValue()
   vi.spyOn(savedFolder, 'authorize').mockResolvedValue(authorize)
 }

@@ -10,6 +10,9 @@
  * through the document seam, which is what it already does with a picked file —
  * carrying the content, the handle and the modification time back as one result.
  * A second reader here would be a second place for those three to disagree.
+ * Resolving a file's HANDLE by path IS here (`fileAt`): that is path walking,
+ * the tree's own business, and it is what the "last opened file" memory needs
+ * when a reload has only the path to go on.
  *
  * Everything the browser exposes is behind `fileSystemAccessFolders(api)` so the
  * path walking and the entry shape can be tested against a fake API; the seam is
@@ -44,6 +47,13 @@ export interface Folders {
    * the directory cannot be read (permission withdrawn, folder moved).
    */
   list(root: FolderRoot, path: string): Promise<FolderEntry[]>
+  /**
+   * Resolves ONE file inside the folder by its path, re-finding the handle the
+   * tree would show for it. `null` when the path no longer resolves — renamed,
+   * moved, deleted, or a segment is the wrong kind. Only the HANDLE is found
+   * here; reading the content is the document seam's (`documents.openEntry`).
+   */
+  fileAt(root: FolderRoot, path: string): Promise<FolderEntry | null>
 }
 
 /**
@@ -57,6 +67,7 @@ interface DirectoryHandleLike {
   readonly name: string
   values(): AsyncIterableIterator<FileHandleLike | DirectoryHandleLike>
   getDirectoryHandle(name: string): Promise<DirectoryHandleLike>
+  getFileHandle(name: string): Promise<FileHandleLike>
 }
 
 interface FileHandleLike {
@@ -98,6 +109,29 @@ export function fileSystemAccessFolders(api: DirectoryPickerWindow): Folders {
         })
       }
       return entries
+    },
+
+    async fileAt(root, path) {
+      if (path === '') return null
+      const segments = path.split('/')
+      const name = segments.pop()!
+      try {
+        // The parent walk is `directoryAt`'s job — one getDirectoryHandle per
+        // segment — so this cannot drift from `list`'s segment semantics.
+        const directory = await directoryAt(root.handle as DirectoryHandleLike, segments.join('/'))
+        const handle = await directory.getFileHandle(name)
+        return { name, path, kind: 'file', handle }
+      } catch (error) {
+        // A missing name, or a segment whose kind does not match the step
+        // (a file where a directory is walked, a directory where the file is
+        // taken): browsers report these as NotFoundError / TypeMismatchError or
+        // a TypeError, and all of them mean "this path has no file here".
+        if (error instanceof DOMException && (error.name === 'NotFoundError' || error.name === 'TypeMismatchError')) {
+          return null
+        }
+        if (error instanceof TypeError) return null
+        throw error
+      }
     },
   }
 }

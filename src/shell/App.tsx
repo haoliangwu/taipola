@@ -81,6 +81,14 @@ const WRITE_BACK_STOP_MESSAGE: Record<WriteBackStopReason, string> = {
 export default function App() {
   const editorRef = useRef<EditorHandle>(null)
 
+  /**
+   * Whether the user has adopted ANY document this load, by hand — a picked
+   * file, a tree click, 新建, the welcome reset. The remembered file only ever
+   * replaces the pristine welcome document; once the user has chosen, the
+   * memory has no business choosing for them.
+   */
+  const touchedRef = useRef(false)
+
   const initial = useMemo(() => {
     // The slot written last is the document that was being edited, and it is the
     // only one a reload can put back: a file handle does not survive a reload
@@ -401,6 +409,7 @@ export default function App() {
       modifiedAt: number,
       origin: FolderPlacement | null,
     ) => {
+      touchedRef.current = true
       leaveDocument()
       editorRef.current?.setDocument(content)
       setSavedValue(content)
@@ -443,13 +452,47 @@ export default function App() {
         path: entry.path,
       })
       notify(`已打开 ${result.document.name}`)
+      // The file just opened is the one a reload should put back (best effort).
+      tree.rememberFile(entry.path)
       // On a narrow screen the sidebar is a drawer covering the document, so
       // opening one has to get out of the way — the same reason a jump from the
       // outline closes it.
       if (isNarrowScreen()) setSidebarOpen(false)
     },
-    [adoptOpened, confirmDiscard, notify, tree.root],
+    [adoptOpened, confirmDiscard, notify, tree.rememberFile, tree.root],
   )
+
+  /**
+   * The file the last session had open comes back with its folder — by path,
+   * never by handle (see `savedFolder.ts`): once the tree is up, re-read it
+   * exactly like a tree click, so the automatic write-back arms fresh.
+   *
+   * Three situations keep their own document on screen: the user has already
+   * adopted one this load (`touched`), the content on screen has not reached
+   * its file (`dirty` — the draft slot, the only copy), or the document already
+   * came from this folder. Only the pristine welcome document is ever swapped,
+   * and a remembered file that no longer resolves is passed over in silence.
+   */
+  useEffect(() => {
+    const root = tree.root
+    const lastFile = tree.lastFile
+    if (root === null || lastFile === null) return
+    if (touchedRef.current || dirty || inOpenFolder) return
+    let cancelled = false
+    void (async () => {
+      const entry = await folders.fileAt(root, lastFile)
+      if (cancelled || entry === null) return
+      // Guarded AGAIN after the await: `touched` is a ref on purpose, so a
+      // choice made while the handle was being re-found (新建, a hand save)
+      // changes no effect dep and would sail straight past the checks above.
+      // The window closes here, not by hoping for a re-run.
+      if (touchedRef.current || dirty || inOpenFolder) return
+      await handleOpenEntry(entry)
+    })().catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [dirty, handleOpenEntry, inOpenFolder, tree.lastFile, tree.root])
 
   /**
    * Opens a folder, and shows the panel that folder is for.
@@ -491,6 +534,12 @@ export default function App() {
         setFile(modifiedAt === null ? null : { document: result.document, modifiedAt })
         setFileName(result.document.name)
       }
+      // A hand save is a choice, exactly like opening a document: the remembered
+      // file must not come back and swap out what the user just saved. Without
+      // this, a restored draft saved by hand turns `dirty` false and re-arms the
+      // auto-open (the dirty guard exists to protect the only copy, which a save
+      // has just created a second one of).
+      touchedRef.current = true
       setSavedValue(value)
       // Whatever the automatic writes were waiting to do, the user has just done
       // it by hand.
@@ -509,6 +558,7 @@ export default function App() {
    */
   const adoptDocument = useCallback(
     (content: string, name: string) => {
+      touchedRef.current = true
       leaveDocument()
       editorRef.current?.setDocument(content)
       setSavedValue(content)

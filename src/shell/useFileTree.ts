@@ -27,6 +27,14 @@ export interface FileTreeState {
    * back (its permission does not survive the reload). See `savedFolder.ts`.
    */
   resumePrompt: boolean
+  /**
+   * The file the last session had open inside the recovered folder, by path —
+   * or null when there is nothing to pick back up (no memory at all, or a
+   * folder picked fresh this session, whose memory starts empty).
+   */
+  lastFile: string | null
+  /** Remembers the file just opened, so a reload can pick it back up. Best effort. */
+  rememberFile(path: string): void
   /** Shows the directory picker. `false` when the user declined or it failed. */
   openFolder(): Promise<boolean>
   /** One click: restore the last session's folder. `false` when denied. */
@@ -47,6 +55,8 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
    * offer is on screen; `resumePrompt` is this presence.
    */
   const [offeredRoot, setOfferedRoot] = useState<FolderRoot | null>(null)
+  /** The remembered file, from the last session's record (see the interface). */
+  const [lastFile, setLastFile] = useState<string | null>(null)
 
   const read = useCallback(
     async (folder: FolderRoot, path: string) => {
@@ -89,6 +99,9 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
       // promise into the console.
       savedFolder.save(picked).catch(() => {})
       setOfferedRoot(null)
+      // A folder picked by hand has no remembered file in it: the record's path
+      // belonged to whatever folder the last session left.
+      setLastFile(null)
       await applyRoot(picked)
       return true
     } catch (error) {
@@ -128,8 +141,13 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
       .probe()
       .then((record) => {
         if (cancelled) return
-        if (record.status === 'restorable') void applyRoot(record.root)
-        else if (record.status === 'offered') setOfferedRoot(record.root)
+        if (record.status === 'restorable') {
+          setLastFile(record.lastFile)
+          void applyRoot(record.root)
+        } else if (record.status === 'offered') {
+          setLastFile(record.lastFile)
+          setOfferedRoot(record.root)
+        }
       })
       .catch(() => {})
     return () => {
@@ -160,12 +178,18 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
     for (const path of new Set(['', ...children.keys()])) void read(root, path)
   }, [children, read, root])
 
+  const rememberFile = useCallback((path: string) => {
+    savedFolder.rememberFile(path).catch(() => {})
+  }, [])
+
   return {
     root,
     rows: (path) => children.get(path),
     isExpanded: (path) => expanded.has(path),
     isBusy: (path) => busy.has(path),
     resumePrompt: offeredRoot !== null,
+    lastFile,
+    rememberFile,
     openFolder,
     resume,
     toggle,

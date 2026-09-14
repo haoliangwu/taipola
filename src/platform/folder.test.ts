@@ -26,11 +26,20 @@ function directory(node: FakeNode) {
       }
     },
     async getDirectoryHandle(name: string) {
-      const child = (node.children ?? []).find(
-        (candidate) => candidate.name === name && candidate.kind === 'directory',
-      )
+      const child = (node.children ?? []).find((candidate) => candidate.name === name)
       if (!child) throw new DOMException(`no such directory: ${name}`, 'NotFoundError')
+      // A name that exists but is a file: the kind mismatch a browser reports
+      // as a TypeError — `fileAt` maps it to "no file here".
+      if (child.kind !== 'directory') throw new TypeError(`not a directory: ${name}`)
       return directory(child)
+    },
+    async getFileHandle(name: string) {
+      const child = (node.children ?? []).find((candidate) => candidate.name === name)
+      if (!child) throw new DOMException(`no such file: ${name}`, 'NotFoundError')
+      // A name that exists but is a directory: the kind mismatch a browser
+      // reports as TypeMismatchError (older Chrome) — `fileAt` maps it too.
+      if (child.kind !== 'file') throw new DOMException(`not a file: ${name}`, 'TypeMismatchError')
+      return { kind: 'file' as const, name: child.name }
     },
   }
 }
@@ -160,5 +169,53 @@ describe('list', () => {
     if (!root) throw new Error('expected a folder')
 
     await expect(folders.list(root, '没有这个目录')).rejects.toThrow()
+  })
+})
+
+describe('fileAt', () => {
+  it('按路径把文件句柄找回来，根级与深层都行', async () => {
+    const folders = fileSystemAccessFolders(apiWith(directory(TREE)))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    expect(await folders.fileAt(root, '笔记.md')).toEqual({
+      name: '笔记.md',
+      path: '笔记.md',
+      kind: 'file',
+      handle: { kind: 'file', name: '笔记.md' },
+    })
+    expect(await folders.fileAt(root, '章节/一.md')).toEqual({
+      name: '一.md',
+      path: '章节/一.md',
+      kind: 'file',
+      handle: { kind: 'file', name: '一.md' },
+    })
+    expect(await folders.fileAt(root, '章节/上/序.md')).toEqual({
+      name: '序.md',
+      path: '章节/上/序.md',
+      kind: 'file',
+      handle: { kind: 'file', name: '序.md' },
+    })
+  })
+
+  it('文件不在了（改名/删除）：返回 null，而不是抛给调用者', async () => {
+    const folders = fileSystemAccessFolders(apiWith(directory(TREE)))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    expect(await folders.fileAt(root, '没了.md')).toBeNull()
+    expect(await folders.fileAt(root, '章节/没了.md')).toBeNull()
+    expect(await folders.fileAt(root, '章节/上/没了.md')).toBeNull()
+  })
+
+  it('路径中间是文件、或最后一段是目录：也是 null（两种"种类不对"报错都走到）', async () => {
+    const folders = fileSystemAccessFolders(apiWith(directory(TREE)))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    // 中间一段是文件：往文件里走目录 → 假 API 报 TypeError。
+    expect(await folders.fileAt(root, '笔记.md/下面.md')).toBeNull()
+    // 最后一段是目录：getFileHandle 拿到目录名 → 假 API 报 TypeMismatchError。
+    expect(await folders.fileAt(root, '章节')).toBeNull()
   })
 })

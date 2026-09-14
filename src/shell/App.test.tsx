@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
 import { folders, type FolderEntry } from '../platform/folder'
-import { savedFolder } from '../platform/savedFolder'
+import { savedFolder, type SavedFolderStatus } from '../platform/savedFolder'
 import { stubSavedFolder } from '../test/platformStubs'
 import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
@@ -850,6 +850,8 @@ describe('侧栏打开文件夹', () => {
         '干草堆/章节/一.md',
       )
       expect(row(view, '一.md').classList.contains('is-active')).toBe(true)
+      // 点开的文件就是记忆里要留给下次重载的那一个。
+      expect(vi.mocked(savedFolder.rememberFile)).toHaveBeenCalledWith('章节/一.md')
 
       // Settle before the next switch. Without this the second swap loses: an
       // input/blur round-trip queued by the FIRST switch (and the write-back it
@@ -866,6 +868,7 @@ describe('侧栏打开文件夹', () => {
       expect(readDocumentSource(documentBody(view))).toBe('笔记正文\n')
       expect(row(view, '笔记.md').classList.contains('is-active')).toBe(true)
       expect(row(view, '一.md').classList.contains('is-active')).toBe(false)
+      expect(vi.mocked(savedFolder.rememberFile)).toHaveBeenCalledWith('笔记.md')
     } finally {
       vi.restoreAllMocks()
       view.unmount()
@@ -1032,9 +1035,23 @@ describe('侧栏记忆上次的文件夹', () => {
     vi.spyOn(folders, 'list').mockResolvedValue([
       { name: '笔记.md', path: '笔记.md', kind: 'file', handle: {} },
     ])
+    // 恢复「上次打开的文件」要过两条接缝：按路径找回句柄（folder 的 `fileAt`），
+    // 按句柄读内容（documents 的 `openEntry`）。都桩成「笔记.md 能找到、其他没有」。
+    vi.spyOn(folders, 'fileAt').mockImplementation(async (_root, path) =>
+      path === '笔记.md'
+        ? { name: '笔记.md', path: '笔记.md', kind: 'file', handle: NOTE.handle }
+        : null,
+    )
+    vi.spyOn(documents, 'openEntry').mockImplementation(async (doc) => ({
+      status: 'opened',
+      document: doc,
+      content: '笔记正文\n',
+      modifiedAt: 111,
+    }))
   })
 
   const ROOT = { name: '干草堆', handle: { dir: '干草堆' } }
+  const NOTE = { name: '笔记.md', handle: { file: '笔记.md' } }
 
   const sidebarAction = (view: ReturnType<typeof render>, label: string) =>
     [...view.container.querySelectorAll('.sidebar-action')].find(
@@ -1047,7 +1064,7 @@ describe('侧栏记忆上次的文件夹', () => {
     )
 
   it('授权还活着：重开页面直接恢复文件夹，没有按钮、树已经在', async () => {
-    stubSavedFolder({ status: 'restorable', root: ROOT })
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: null })
     // 静默恢复不抢面板（尊重记住的偏好）；把偏好设成「文件」才能看见树，
     // 与「offered」那条（按钮必须可见、自动切面板）对比。
     localStorage.setItem('taipola:sidebar-panel', 'files')
@@ -1064,7 +1081,7 @@ describe('侧栏记忆上次的文件夹', () => {
   })
 
   it('授权没了：出现「恢复上次的文件夹」，点一下树出来、按钮消失', async () => {
-    stubSavedFolder({ status: 'offered', root: ROOT })
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: null })
     const view = render(<App />)
     try {
       await act(async () => {})
@@ -1086,7 +1103,7 @@ describe('侧栏记忆上次的文件夹', () => {
   })
 
   it('点「恢复」被拒：按钮消失、树不出现，这一会话不再问', async () => {
-    stubSavedFolder({ status: 'offered', root: ROOT })
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: null })
     vi.mocked(savedFolder.authorize).mockResolvedValueOnce(false)
     const view = render(<App />)
     try {
@@ -1105,7 +1122,7 @@ describe('侧栏记忆上次的文件夹', () => {
   })
 
   it('点「恢复」时后台出错：提示一次，按钮消失、树不出现', async () => {
-    stubSavedFolder({ status: 'offered', root: ROOT })
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: null })
     vi.mocked(savedFolder.authorize).mockRejectedValueOnce(new Error('boom'))
     const view = render(<App />)
     try {
@@ -1117,6 +1134,236 @@ describe('侧栏记忆上次的文件夹', () => {
       expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('没有打开文件夹')
       expect(sidebarAction(view, '恢复上次的文件夹')).toBeUndefined()
       expect(view.container.querySelector('.toast')?.textContent).toContain('恢复文件夹失败')
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('文件夹回来了，上次打开的文件自己也打开（像一次树点击那样重读）', async () => {
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: '笔记.md' })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('笔记.md')
+      expect(readDocumentSource(documentBody(view))).toBe('笔记正文\n')
+      expect(vi.mocked(documents.openEntry)).toHaveBeenCalledWith(NOTE)
+      expect(view.container.querySelector('.toast')?.textContent).toContain('已打开 笔记.md')
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('记忆的文件不在了（改名/删除）：留在欢迎文档，不打扰、不提示', async () => {
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: '没了.md' })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+      expect(view.container.querySelector('.toast')).toBeNull()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('草稿回来的文档已经在同一文件夹里：记忆的文件不能把它顶掉', async () => {
+    // 上一会话有一份没写回文件的内容，住在这个文件夹的槽里——它只有这一份拷贝。
+    localStorage.setItem(
+      'taipola:draft:干草堆/章节/一.md',
+      JSON.stringify({
+        content: '没写回的内容\n',
+        name: '一.md',
+        savedAt: 1_000,
+        root: '干草堆',
+        path: '章节/一.md',
+      }),
+    )
+    localStorage.setItem('taipola:active-draft', '干草堆/章节/一.md')
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: '笔记.md' })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('章节/一.md')
+      expect(readDocumentSource(documentBody(view))).toBe('没写回的内容\n')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('授权要再问：不点「恢复」就保持欢迎文档，点了之后文件跟着回来', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: '笔记.md' })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+
+      await act(async () => {
+        sidebarAction(view, '恢复上次的文件夹')!.click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('笔记.md')
+      expect(readDocumentSource(documentBody(view))).toBe('笔记正文\n')
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('不点「恢复」、而是新开一个文件夹：上回的记忆文件不跟着来', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: '笔记.md' })
+    vi.spyOn(folders, 'pick').mockResolvedValue({ name: '另一个目录', handle: {} })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+
+      await act(async () => {
+        findButton(view, '打开文件夹').click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.sidebar-root-name')?.textContent).toBe('另一个目录')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('点「恢复」前在 welcome 里打过字：不顶掉那半篇没落盘的内容', async () => {
+    stubSavedFolder({ status: 'offered', root: ROOT, lastFile: '笔记.md' })
+    const confirm = vi.spyOn(window, 'confirm')
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await act(async () => {})
+      // 用户先往 welcome 里敲了字（草稿是它唯一的拷贝），然后才点「恢复」。
+      const doc = documentBody(view)
+      doc.focus({ preventScroll: true })
+      const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
+      if (!run?.firstChild) throw new Error('first run has no text node')
+      placeCaretAt(run.firstChild, 0)
+      await user.keyboard('X')
+
+      await act(async () => {
+        sidebarAction(view, '恢复上次的文件夹')!.click()
+      })
+      await act(async () => {})
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+      expect(confirm).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('上次的草稿被手动保存后：记忆的文件也不来顶（保存也是一次选择）', async () => {
+    // 另一文件夹 C 的槽位草稿在屏上；恢复的是文件夹干草堆，记忆文件是 笔记.md。
+    localStorage.setItem(
+      'taipola:draft:C/草稿.md',
+      JSON.stringify({
+        content: '另一文件夹的草稿\n',
+        name: '草稿.md',
+        savedAt: 1_000,
+        root: 'C',
+        path: '草稿.md',
+      }),
+    )
+    localStorage.setItem('taipola:active-draft', 'C/草稿.md')
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: '笔记.md' })
+    vi.spyOn(documents, 'save').mockResolvedValue({
+      status: 'saved',
+      document: { name: '草稿.md', handle: {} },
+    })
+    vi.spyOn(documents, 'modifiedAt').mockResolvedValue(1)
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      await act(async () => {})
+      // 草稿还在屏上时，dirty 守卫拦着自动重开。
+      expect(readDocumentSource(documentBody(view))).toBe('另一文件夹的草稿\n')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+
+      // 用户手动保存：内容有了第二份拷贝，dirty 变 false，effect 会重跑——
+      // 但"保存"本身就是一次选择，记忆无权再把它换掉。
+      await act(async () => {
+        findButton(view, '保存').click()
+      })
+      await act(async () => {})
+      expect(readDocumentSource(documentBody(view))).toBe('另一文件夹的草稿\n')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('找回句柄期间用户自己打开了文档：晚回来的记忆不顶掉人家的', async () => {
+    stubSavedFolder({ status: 'restorable', root: ROOT, lastFile: '笔记.md' })
+    // fileAt 悬着：probe 已落定、文件夹已恢复，但记忆的句柄还没找回来。
+    let settle!: (entry: FolderEntry | null) => void
+    vi.spyOn(folders, 'fileAt').mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    vi.spyOn(documents, 'open').mockResolvedValue({
+      status: 'opened',
+      document: { name: '自己开的.md', handle: {} },
+      content: '我自己打开的\n',
+      modifiedAt: 1,
+    })
+    const view = render(<App />)
+    try {
+      await act(async () => {})
+      // 窗口期里用户用选择器打开了一个文件（这次打开不翻转任何 effect 依赖，
+      // 只能靠 await 之后的重查拦住——修的就是这一刀）。
+      await act(async () => {
+        findButton(view, '打开').click()
+      })
+      expect(readDocumentSource(documentBody(view))).toBe('我自己打开的\n')
+
+      await act(async () => {
+        settle({ name: '笔记.md', path: '笔记.md', kind: 'file', handle: NOTE.handle })
+      })
+      await act(async () => {})
+      expect(readDocumentSource(documentBody(view))).toBe('我自己打开的\n')
+      expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+    }
+  })
+
+  it('恢复落定前用户已经自己打开过文档：记忆的文件不顶掉人家的', async () => {
+    stubSavedFolder()
+    let settle!: (status: SavedFolderStatus) => void
+    vi.spyOn(savedFolder, 'probe').mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve
+      }),
+    )
+    vi.spyOn(documents, 'open').mockResolvedValue({
+      status: 'opened',
+      document: { name: '自己开的.md', handle: {} },
+      content: '我自己打开的\n',
+      modifiedAt: 1,
+    })
+    const view = render(<App />)
+    try {
+      // 用户先自己打开了一个文件（probe 还在路上）。
+      await act(async () => {
+        findButton(view, '打开').click()
+      })
+      expect(readDocumentSource(documentBody(view))).toBe('我自己打开的\n')
+
+      // probe 这才落定：文件夹可静默恢复，还带着上次的文件。
+      await act(async () => {
+        settle({ status: 'restorable', root: ROOT, lastFile: '笔记.md' })
+      })
+      await act(async () => {})
+      expect(readDocumentSource(documentBody(view))).toBe('我自己打开的\n')
     } finally {
       view.unmount()
     }
