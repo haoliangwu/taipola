@@ -45,6 +45,19 @@
   /* --- shared metrics for the two editing layers (do not diverge) --- */
   --editor-font-size: 15px;
   --doc-line: 1.75;
+  /* The same line as a LENGTH. `min-height: var(--doc-line)` looked like a
+     one-line floor but was invalid at computed-value time — a unitless number is
+     not a length — so it computed to `auto` and every line box with no laid-out
+     text fell back to its own content: a `---` line measured 1px, a collapsed
+     fence line 12px, and a code block GREW by 26px the moment the caret entered
+     it (the revealed fence marker gave the line a text box). `line-height` needs
+     the bare number, so both forms exist and the length is derived from the
+     number (`.scratch/table-ops/issues/02`). */
+  --doc-line-size: calc(var(--doc-line) * 1em);
+  /* Vertical padding of a table cell. A cell with no text has to be exactly as
+     tall as a cell holding one line, or the row jumps when the first character
+     is typed into it — so the empty floor is derived from this and the line. */
+  --cell-pad-y: 6px;
   --editor-pad-x: 40px;
   --editor-pad-y: 32px;
   /* Page column: a stable, content-independent measure (~50 CJK chars). */
@@ -663,9 +676,14 @@ body {
   margin: 0;
 }
 
-/* One source line. Its height is whatever the browser needs — no constraint. */
+/* One source line. One line box tall, whatever the browser would do with its
+   content: a line whose text is collapsed (a `---`, a fence marker, an empty list
+   item) still owns its row on the page, which is what keeps the vertical position
+   of every following line — and the caret on it — from moving when the caret
+   enters or leaves the block. The table's rule row and the code block's fence
+   lines override this on purpose; see each. */
 .vl {
-  min-height: var(--doc-line);
+  min-height: var(--doc-line-size);
   line-height: var(--doc-line);
   margin: 0;
   padding: 0;
@@ -826,14 +844,15 @@ body {
    padding has to live on the lines: with none, the code sat flush against the edge
    of its own colour, which is what a code block looked like before this rule.
 
-   The VERTICAL padding is carried by the FENCE lines, because they are the only
-   lines that always bracket the code — the opening fence is above every content
-   line and the closing fence is below every one of them, so their padding becomes
-   the block's top and bottom padding. They bracket it even when there is no
-   content at all (```js immediately followed by ```, which is what ⌥⌘C leaves
-   behind before anything is typed), and even when the fence is nested inside a
-   list item — there the block reports `data-kind="list"` and carries the list's
-   other lines, which a block-level background would have painted as code too. */
+   The VERTICAL room is the FENCE lines' own line box — they are the only lines
+   that always bracket the code, so their height is the block's top and bottom
+   padding. They bracket it even when there is no content at all (```js
+   immediately followed by ```, which is what ⌥⌘C leaves behind before anything
+   is typed), and even when the fence is nested inside a list item — there the
+   block reports `data-kind="list"` and carries the list's other lines, which a
+   block-level background would have painted as code too. No `padding-block`: the
+   fence marker is revealed while the caret is in the block, and padding on top of
+   a line that then lays out its text made the block grow by 26px on a click. */
 .vl-code,
 .vl-fence {
   background: var(--code-bg);
@@ -844,8 +863,6 @@ body {
   /* The fence line keeps its box; its text shows only while the caret is in
      the block (revealed as a dim run). */
   color: var(--text-faint);
-  /* The code box's vertical padding — see the note above. */
-  padding-block: 0.4em;
 }
 
 /* Rounded outer corners. `:first-child`/`:last-child` rather than "the first fence
@@ -905,7 +922,7 @@ body {
   content: '';
   display: block;
   height: 1px;
-  margin: calc(var(--doc-line) / 2 - 1px) 0;
+  margin: calc(var(--doc-line-size) / 2 - 1px) 0;
   background: var(--border-strong);
 }
 
@@ -1112,8 +1129,13 @@ body {
 }
 
 .blk[data-kind='table'] .cell {
-  padding: 6px 12px;
-  min-height: 1.6em;
+  padding: var(--cell-pad-y) 12px;
+  /* One line box plus the cell's own padding and its bottom hairline, so an EMPTY
+     cell is exactly as tall as a cell holding one line of text. With the old
+     `1.6em` floor the inserted table's empty data row measured 24px against the
+     header row's 39.25px, and the row grew the moment the first character landed
+     in it (`.scratch/table-ops/issues/02`). */
+  min-height: calc(var(--doc-line-size) + var(--cell-pad-y) * 2 + 1px);
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }

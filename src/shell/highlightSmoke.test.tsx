@@ -146,14 +146,19 @@ describe('代码块的盒子：内边距加在行上，且不动逐行基线', (
     view.unmount()
   })
 
-  it('上下内边距由围栏行承担，所以空代码块也有盒子', async () => {
-    // ⌥⌘C 插入的正是这种块：两条围栏、还没有任何内容行。它的可见高度**完全**来自
-    // 围栏行的内边距——围栏行的内容是 0 高（run 是 display:none）。
+  it('空代码块也有盒子：围栏行自己就是一格行盒', async () => {
+    // ⌥⌘C 插入的正是这种块：两条围栏、还没有任何内容行。它的可见高度来自围栏行
+    // 自己的行盒——围栏行的内容是 0 高（run 是 display:none），所以上下留白是
+    // "一行源码 = 一个行盒"给的，不是 padding 给的。改成 padding 会让光标进入这个块
+    // 时（围栏标记显现成文字）整个块长高 26px：`table-ops/issues/02`。
     const { view, doc } = await renderWithDoc('```ts\n```')
     const fences = [...doc.querySelectorAll<HTMLElement>('[data-block="0"] .vl-fence')]
     expect(fences).toHaveLength(2)
-    expect(parseFloat(getComputedStyle(fences[0]).paddingTop)).toBeGreaterThan(0)
-    expect(fences[0].getBoundingClientRect().height).toBeGreaterThan(8)
+    const lineHeight = parseFloat(getComputedStyle(doc).lineHeight)
+    for (const fence of fences) {
+      expect(fence.getBoundingClientRect().height).toBeCloseTo(lineHeight, 1)
+      expect(parseFloat(getComputedStyle(fence).paddingTop)).toBe(0)
+    }
     view.unmount()
   })
 
