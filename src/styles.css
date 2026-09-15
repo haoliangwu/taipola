@@ -322,6 +322,110 @@ body {
   background: var(--border);
 }
 
+/* The keyboard reference, behind the titlebar's 帮助 button. Absolute against its
+   own anchor (like the export dropdown) rather than fixed at the click point: this
+   one belongs to a BUTTON, not to a place in the document. */
+.help-anchor {
+  position: relative;
+}
+
+.help-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  max-width: min(880px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+
+.help-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.help-close {
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 7px;
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  cursor: pointer;
+}
+
+.help-close:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Two columns of groups when there is room, one when there is not: the list is
+   long, and a panel taller than the window is worse than a wide one. */
+.help-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 4px 18px;
+  padding: 10px 14px 14px;
+  overflow: auto;
+}
+
+.help-group h2 {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.help-group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-group li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 13px;
+}
+
+.help-icon {
+  display: flex;
+  align-items: center;
+  color: var(--text-soft);
+}
+
+.help-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.help-group kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
 /* The drawer's backdrop. Rendered only while the outline is open, and only ever
    visible below the breakpoint — on desktop the outline is a permanent column
    and there is nothing to cover. */
@@ -435,18 +539,6 @@ body {
 .tool-button:hover {
   background: var(--accent-soft);
   color: var(--accent);
-}
-
-.tool-button.is-bold {
-  font-weight: 700;
-}
-
-.tool-button.is-italic {
-  font-style: italic;
-}
-
-.tool-button.is-strike {
-  text-decoration: line-through;
 }
 
 .text-button {
@@ -1134,14 +1226,22 @@ body {
 /* Every row is its own grid, so columns line up across rows (same container
    width, one `1fr` per column). Each CELL is one grid item; the runs inside it
    are plain inline spans, so a cell whose inline markers are revealed keeps its
-   single column. No column gap: the cell borders have to touch to read as a grid. */
+   single column. No column gap: the cell borders have to touch to read as a grid.
+
+   `align-items: stretch` (the grid default) is LOAD-BEARING: the vertical
+   hairline between two columns is the left cell's own `border-right`, so a cell
+   that was shorter than its row (wrapped text beside one short line) ended that
+   border early and the hairline read as broken mid-row. Stretching every cell to
+   the row's height makes the three borders of a row-span — left cell's right
+   border, each cell's bottom border, the row's frame — all run the full row
+   (`.scratch/table-ops/issues/05`). */
 .blk[data-kind='table'] .vl-table,
 .blk[data-kind='table'] .vl-table-delim {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
   gap: 0;
-  align-items: start;
+  align-items: stretch;
 }
 
 .blk[data-kind='table'] .cell {

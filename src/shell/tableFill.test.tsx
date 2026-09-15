@@ -128,6 +128,24 @@ describe('插入出来的表格', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('同一行的两个格子一样高：竖线不会在行中间断掉', async () => {
+    // 分隔两列的竖线是左格自己的 border-right，所以只要左格比这一行矮（左边一行
+    // 短文字，右边折成两行），竖线就在半中间断掉一小段。stretch 让每格都撑到行的
+    // 全高，竖线和横线一样整（`.scratch/table-ops/issues/05`）。
+    const r = renderEditor(
+      '| 快捷键 | 作用 |\n| --- | --- |\n' +
+        '| `Tab` / `⇧Tab` 一整行短文字 | 表格里：下一格 / 上一格（最后一格再按 `Tab` 加一行） |\n',
+    )
+    await flush()
+    const cells = [...r.container.querySelectorAll('[data-block="0"] [data-vline="2"] [data-cell]')]
+    expect(cells).toHaveLength(2)
+    const [left, right] = cells.map((c) => c.getBoundingClientRect().height)
+    expect(left).toBeCloseTo(right, 1)
+    // 两格上沿对齐（同属一行的格子盒），下沿也是。
+    const [lt, rt] = cells.map((c) => c.getBoundingClientRect().top)
+    expect(lt).toBeCloseTo(rt, 1)
+  })
+
   it('格子内容起点的退格不动表格结构', async () => {
     const r = renderEditor(SKELETON)
     await flush()
