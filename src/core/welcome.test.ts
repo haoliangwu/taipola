@@ -34,14 +34,18 @@ describe('欢迎文档', () => {
     }
   })
 
-  it('快捷键表解析成 11 行，含反引号的键位没被反引号弄坏', () => {
+  it('快捷键表解析成 14 行，含反引号的键位没被反引号弄坏', () => {
     const { blocks, offsets } = parseDocument(WELCOME_DOC)
     const table = blocks.find((block) => block.raw.startsWith('| 快捷键'))
     expect(table, '快捷键表不见了').toBeDefined()
     const text = viewText(table!.raw, offsets[table!.index], table!.endLine - table!.startLine)
-    expect(text.split('\n')).toHaveLength(13) // 表头 + 分隔行 + 11 行
+    expect(text.split('\n')).toHaveLength(16) // 表头 + 分隔行 + 14 行
     expect(text).toContain('⌃`')
     expect(text).toContain('⌥⌘Q')
+    // 表格自己的那几个键位也在表里：这张表既是演示，也是键位表的唯一副本。
+    expect(text).toContain('⇧⌘⌫')
+    expect(text).toContain('⇧Tab')
+    expect(text).toContain('格子里右键')
   })
 
   it('不再宣传已经移除的键位', () => {
@@ -60,7 +64,7 @@ describe('欢迎文档', () => {
   })
 
   it('新功能都在演示里出现', () => {
-    for (const feature of ['⌃M', '$E = mc^2$', '直接点它就能勾上', '⌥⌘Q', '⌘\\', '⌥⌘-']) {
+    for (const feature of ['⌃M', '$E = mc^2$', '直接点它就能勾上', '⌥⌘Q', '⌘\\', '⌥⌘-', '⇧⌘⌫']) {
       expect(WELCOME_DOC).toContain(feature)
     }
   })
