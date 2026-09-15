@@ -9,10 +9,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertDomMatchesSource,
+  caretInTableCell,
   clickInRun,
   flush,
   placeCaretAt,
   renderEditor,
+  tableCellEl,
   type Rendering,
 } from '../test/editorTestUtils'
 
@@ -25,21 +27,9 @@ function rowEl(r: Rendering, vline: number): HTMLElement {
   ) as HTMLElement
 }
 
-function cellEl(r: Rendering, vline: number, cell: number): HTMLElement {
-  return r.container.querySelector(
-    `[data-block="0"] [data-vline="${vline}"] [data-cell="${cell}"]`,
-  ) as HTMLElement
-}
-
 /** Focus the host for real (untrusted keys need it), then aim at the data row. */
 async function focusEditor(r: Rendering): Promise<void> {
   await clickInRun(r, 0, 0, 0, 'start')
-  await flush()
-}
-
-/** Put the caret in an empty cell the way a click there does. */
-async function caretInCell(r: Rendering, cell: number): Promise<void> {
-  placeCaretAt(cellEl(r, 2, cell), 0)
   await flush()
 }
 
@@ -58,15 +48,15 @@ describe('插入出来的表格', () => {
   it('每一格都带着自己的内容起点', async () => {
     const r = renderEditor(SKELETON)
     await flush()
-    expect(cellEl(r, 2, 0).dataset.cellSrc).toBe('31')
-    expect(cellEl(r, 2, 1).dataset.cellSrc).toBe('34')
+    expect(tableCellEl(r.container, 2, 0).dataset.cellSrc).toBe('31')
+    expect(tableCellEl(r.container, 2, 1).dataset.cellSrc).toBe('34')
   })
 
   it('空格子里打字：字进这一格，再打一个字也不会丢', async () => {
     const r = renderEditor(SKELETON)
     await flush()
     await focusEditor(r)
-    await caretInCell(r, 0)
+    await caretInTableCell(r, 2, 0)
     await r.user.keyboard('甲')
     await flush()
     expect(r.getDoc()).toContain('甲')
@@ -81,7 +71,7 @@ describe('插入出来的表格', () => {
     const r = renderEditor(SKELETON)
     await flush()
     await focusEditor(r)
-    await caretInCell(r, 1)
+    await caretInTableCell(r, 2, 1)
     await r.user.keyboard('丙')
     await flush()
     expect(r.getDoc()).toContain('丙')
@@ -92,7 +82,7 @@ describe('插入出来的表格', () => {
     const r = renderEditor(SKELETON)
     await flush()
     await focusEditor(r)
-    await caretInCell(r, 0)
+    await caretInTableCell(r, 2, 0)
     await r.user.keyboard('{Backspace}')
     await flush()
     // 修好之前这一步会把数据行并进 `| --- |` 行：`| --- | --- ||  |  |`。
@@ -115,7 +105,7 @@ describe('插入出来的表格', () => {
     const r = renderEditor('| 列 1 | 列 2 |\n| --- | --- |\n| ab |  |\n')
     await flush()
     await focusEditor(r)
-    placeCaretAt(cellEl(r, 2, 0).querySelector('[data-run]')!.firstChild as Node, 2)
+    placeCaretAt(tableCellEl(r.container, 2, 0).querySelector('[data-run]')!.firstChild as Node, 2)
     await flush()
     await r.user.keyboard('{Backspace}')
     await flush()

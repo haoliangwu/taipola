@@ -418,7 +418,6 @@ export class EditorKernel {
   /* DOM -> model                                                           */
   /* ---------------------------------------------------------------------- */
 
-  /** Source offset of the current DOM selection, or null when outside. */
   /**
    * The table the caret is in, or null — what the shell's table menu asks before
    * offering anything. The KERNEL answers it because it owns both halves of the
@@ -428,6 +427,7 @@ export class EditorKernel {
     return tableAt(this.doc, this.caret)
   }
 
+  /** Source offset of the current DOM selection, or null when outside. */
   private caretFromDom(): number | null {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0) return null

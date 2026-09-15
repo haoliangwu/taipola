@@ -12,11 +12,12 @@ import userEvent from '@testing-library/user-event'
 import { renderWithDoc } from '../test/appTestUtils'
 import { stubSavedFolder } from '../test/platformStubs'
 import {
+  caretInTableCell,
   clickInRun,
   flush,
   placeCaretAt,
   renderEditor,
-  type Rendering,
+  tableCellEl,
 } from '../test/editorTestUtils'
 import { readDocumentSource } from '../editor/render'
 
@@ -33,25 +34,12 @@ function caretCell(): { vline: string; cell: string } | null {
   return cell && line ? { vline: line.dataset.vline!, cell: cell.dataset.cell! } : null
 }
 
-/** Puts the caret in a cell of the rendered table. */
-function cellNode(container: HTMLElement, vline: number, cell: number): Node {
-  const el = container.querySelector(
-    `[data-vline="${vline}"] [data-cell="${cell}"]`,
-  ) as HTMLElement
-  return el.querySelector('[data-run]')?.firstChild ?? el
-}
-
 describe('Tab 走格子（编辑内核）', () => {
-  async function caretIn(r: Rendering, vline: number, cell: number): Promise<void> {
-    placeCaretAt(cellNode(r.container, vline, cell), 0)
-    await flush()
-  }
-
   it('Tab 进下一格，Shift+Tab 退回上一格', async () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 2, 0, 'start')
-    await caretIn(r, 2, 0)
+    await caretInTableCell(r, 2, 0)
     await r.user.keyboard('{Tab}')
     await flush()
     expect(caretCell()).toEqual({ vline: '2', cell: '1' })
@@ -67,7 +55,7 @@ describe('Tab 走格子（编辑内核）', () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 3, 1, 'start')
-    await caretIn(r, 3, 1)
+    await caretInTableCell(r, 3, 1)
     await r.user.keyboard('{Tab}')
     await flush()
     expect(r.getDoc().trimEnd().split('\n')).toHaveLength(5)
@@ -78,7 +66,7 @@ describe('Tab 走格子（编辑内核）', () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 0, 0, 'start')
-    await caretIn(r, 0, 0)
+    await caretInTableCell(r, 0, 0)
     await r.user.keyboard('{Shift>}{Tab}{/Shift}')
     await flush()
     expect(r.getDoc()).toBe(TABLE)
@@ -89,7 +77,7 @@ describe('Tab 走格子（编辑内核）', () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 2, 0, 'start')
-    await caretIn(r, 2, 0)
+    await caretInTableCell(r, 2, 0)
     await r.user.keyboard('{Tab}')
     await flush()
     await r.user.keyboard('{Control>}z{/Control}')
@@ -113,7 +101,7 @@ describe('⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫（外壳快捷键）', () => {
 
   it('⌘⏎ 在下方插一行', async () => {
     const { doc, user, source, view } = await withTable()
-    placeCaretAt(cellNode(doc, 2, 0), 0)
+    placeCaretAt(tableCellEl(doc, 2, 0), 0)
     await user.keyboard('{Control>}{Enter}{/Control}')
     expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n|  |  |\n| c | d |\n')
     view.unmount()
@@ -121,7 +109,7 @@ describe('⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫（外壳快捷键）', () => {
 
   it('⇧⌘⏎ 在上方插一行', async () => {
     const { doc, user, source, view } = await withTable()
-    placeCaretAt(cellNode(doc, 3, 0), 0)
+    placeCaretAt(tableCellEl(doc, 3, 0), 0)
     await user.keyboard('{Control>}{Shift>}{Enter}{/Shift}{/Control}')
     expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n|  |  |\n| c | d |\n')
     view.unmount()
@@ -129,7 +117,7 @@ describe('⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫（外壳快捷键）', () => {
 
   it('⇧⌘⌫ 删掉光标所在的行（以前这一步会把格子里的字删掉）', async () => {
     const { doc, user, source, view } = await withTable()
-    placeCaretAt(cellNode(doc, 2, 0), 0)
+    placeCaretAt(tableCellEl(doc, 2, 0), 0)
     await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
     expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| c | d |\n')
     view.unmount()
@@ -137,7 +125,7 @@ describe('⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫（外壳快捷键）', () => {
 
   it('表头行删不掉：文档不动', async () => {
     const { doc, user, source, view } = await withTable()
-    placeCaretAt(cellNode(doc, 0, 0), 0)
+    placeCaretAt(tableCellEl(doc, 0, 0), 0)
     await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
     expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| c | d |\n')
     view.unmount()

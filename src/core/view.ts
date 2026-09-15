@@ -728,9 +728,9 @@ function emptyLine(length: number, sourceStart = 0): ViewLine {
 /**
  * Builds a table row as its cells, with the pipes left out entirely.
  *
- * A delimiter row (`| --- |`) goes through the same path: every cell strips to
- * nothing, so the rule line occupies no visible space while still holding its
- * line box open.
+ * A rule row (`| --- |`) does NOT come through here: it is a line box with no
+ * cells at all (`buildLine` returns an empty line for it). Its own pipe shape is
+ * recovered from the DOM by a hidden run the renderer keeps on the line.
  *
  * The pipes are deliberately NOT emitted as hidden runs: a `display: grid` row
  * blockifies its direct children, and blockification overrides `display: none`,

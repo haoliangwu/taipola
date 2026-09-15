@@ -12,19 +12,10 @@ import { fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithDoc } from '../test/appTestUtils'
 import { stubSavedFolder } from '../test/platformStubs'
-import { placeCaretAt } from '../test/editorTestUtils'
+import { placeCaretAt, tableCellEl } from '../test/editorTestUtils'
 import { readDocumentSource } from '../editor/render'
 
 const TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| c | d |\n'
-
-function cellNode(container: HTMLElement, vline: number, cell: number): Node {
-  // No block index: the whole point of one of these tests is a table that is NOT
-  // the document's first block, and there is only ever one table here.
-  const el = container.querySelector(
-    `[data-vline="${vline}"] [data-cell="${cell}"]`,
-  ) as HTMLElement
-  return el.querySelector('[data-run]')?.firstChild ?? el
-}
 
 /** Right-clicks a cell: the caret lands there, then the menu opens. */
 async function rightClickCell(
@@ -32,10 +23,8 @@ async function rightClickCell(
   vline: number,
   cell: number,
 ): Promise<HTMLElement[]> {
-  placeCaretAt(cellNode(doc, vline, cell), 0)
-  const target = doc.querySelector(
-    `[data-vline="${vline}"] [data-cell="${cell}"]`,
-  ) as HTMLElement
+  const target = tableCellEl(doc, vline, cell)
+  placeCaretAt(target, 0)
   fireEvent.contextMenu(target, { clientX: 120, clientY: 200 })
   return [...doc.ownerDocument.querySelectorAll<HTMLElement>('.table-menu button')]
 }

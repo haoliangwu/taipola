@@ -643,9 +643,12 @@ export default function App() {
       // The same mutations the keyboard commands use — one definition of what
       // "insert a row below" means, whichever entry asked for it.
       applyDocumentEdit(TABLE_MUTATIONS[command])
+      // The caret placement focuses the root, but a command that DECLINED (删除本行
+      // on the header row) places no caret at all, and the focus is still on the
+      // menu button that is about to unmount.
       editorRef.current?.focus()
     },
-    [applyEdit],
+    [applyDocumentEdit],
   )
 
   const jumpToLine = useCallback((line: number) => {
@@ -668,7 +671,8 @@ export default function App() {
       deleteLine: () => applyEdit((b) => deleteLine(b)),
       table: () => applyEdit((b) => insertSnippet(b, TABLE_SNIPPET)),
       // Row commands, on the same road as every other command: a `{doc, caret}`
-      // from `core/tables.ts` applied to the buffer (and a no-op outside a table).
+      // from `core/tables.ts` applied to the document (and a no-op outside a
+      // table).
       tableRowAbove: () => applyDocumentEdit(TABLE_MUTATIONS.rowAbove),
       tableRowBelow: () => applyDocumentEdit(TABLE_MUTATIONS.rowBelow),
       tableRowDelete: () => applyDocumentEdit(TABLE_MUTATIONS.rowDelete),

@@ -74,9 +74,13 @@ export function blocksTableBackspace(doc: string, offset: number): boolean {
   if (!isTableRow(text)) return false
   if (isTableDelimiterRow(text)) return true
   const column = offset - start
-  return !tableRowCells(text).some(
+  // `<` on the left and `<=` on the right, deliberately: AT a cell's content start
+  // there is nothing of the cell's to delete, while AT its end the last character
+  // is. The asymmetry is the whole rule.
+  const insideCell = tableRowCells(text).some(
     (cell) => cell.contentStart < column && column <= cell.contentEnd,
   )
+  return !insideCell
 }
 
 /* -------------------------------------------------------------------------- */
@@ -121,24 +125,25 @@ export function tableAt(doc: string, offset: number): TableContext | null {
   let last = index
   while (last + 1 < lines.length && isTableRow(lines[last + 1])) last++
 
-  // Which cell the offset is in: the last one whose piece starts at or before it.
-  // A caret on a pipe, in a cell's padding, or before the first pipe therefore all
-  // belong to a real cell instead of to no cell at all.
-  const cells = tableRowCells(lines[index])
-  const column = offset - start
-  let cell = -1
-  if (index !== delimiter) {
-    cell = 0
-    for (let i = 0; i < cells.length; i++) if (cells[i].pieceStart <= column) cell = i
-  }
   return {
     headerLine: header,
     delimiterLine: delimiter,
     lastLine: last,
     columns: tableRowCells(lines[header]).length,
     line: index,
-    cell,
+    // The rule row holds no cells at all; on any other row the offset belongs to
+    // the last cell whose piece starts at or before it, so a caret on a pipe, in a
+    // cell's padding, or before the first pipe is still inside a real cell.
+    cell:
+      index === delimiter ? -1 : cellAt(tableRowCells(lines[index]), offset - start),
   }
+}
+
+/** The index of the cell whose piece contains `column` (clamped to the row). */
+function cellAt(cells: TableCell[], column: number): number {
+  let at = 0
+  for (let i = 0; i < cells.length; i++) if (cells[i].pieceStart <= column) at = i
+  return at
 }
 
 /* -------------------------------------------------------------------------- */
@@ -184,15 +189,11 @@ export function insertTableRow(
   const table = tableAt(doc, offset)
   if (!table) return null
   const lines = doc.split('\n')
+  let at = where === 'above' ? table.line : table.line + 1
   // On the rule row both directions mean the first body position: a row inserted
   // between the header and the rule would take over the rule row's slot, and the
   // table would stop being a table.
-  const at =
-    table.line === table.delimiterLine
-      ? table.delimiterLine + 1
-      : where === 'above'
-        ? table.line
-        : table.line + 1
+  if (table.line === table.delimiterLine) at = table.delimiterLine + 1
   lines.splice(at, 0, composeRow(new Array(table.columns).fill('')))
   return { doc: lines.join('\n'), caret: caretInCell(lines, at, 0) }
 }
@@ -254,8 +255,10 @@ export function deleteTableColumn(doc: string, offset: number): TableEdit | null
     if (cells.length > table.cell) cells.splice(table.cell, 1)
     lines[i] = composeRow(cells)
   }
-  const column = Math.min(table.cell, table.columns - 2)
-  return { doc: lines.join('\n'), caret: caretInCell(lines, table.line, column) }
+  // The caret stays in its own column, or moves to the new last one when it was
+  // sitting in the column that was just removed.
+  const caretCell = Math.min(table.cell, table.columns - 2)
+  return { doc: lines.join('\n'), caret: caretInCell(lines, table.line, caretCell) }
 }
 
 /**

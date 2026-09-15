@@ -45,9 +45,19 @@ export function isBlankLine(text: string): boolean {
   return /^[ \t]*$/.test(text)
 }
 
+/** A document split into lines, with the line an offset fell on. */
+export interface LineHit {
+  lines: string[]
+  /** 0-based index of the line holding the offset. */
+  index: number
+  /** Character offset where that line starts. */
+  start: number
+  /** That line's text. */
+  text: string
+}
+
 /**
- * The line an offset falls on: the whole document split into lines, the 0-based
- * line index, that line's start offset and its text.
+ * The line an offset falls on, as one of `LineHit`.
  *
  * An offset exactly AT a line's end (the newline's own position) belongs to that
  * line, which is what makes "where does this caret sit?" have one answer at a
@@ -55,12 +65,7 @@ export function isBlankLine(text: string): boolean {
  * rules; `tables.ts` needs the same answer about the same kind of offset, and a
  * second copy is how the table row predicates drifted in the first place.
  */
-export function lineAt(doc: string, offset: number): {
-  lines: string[]
-  index: number
-  start: number
-  text: string
-} {
+export function lineAt(doc: string, offset: number): LineHit {
   const lines = doc.split('\n')
   let start = 0
   let index = lines.length - 1

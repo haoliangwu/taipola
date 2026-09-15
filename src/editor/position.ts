@@ -32,7 +32,7 @@ function cellAround(node: Node | null): HTMLElement | null {
 }
 
 /** A cell's content-start source offset (block-local), or null when unset. */
-function cellSource(cell: HTMLElement | null): number | null {
+function cellSource(cell: HTMLElement | null | undefined): number | null {
   const raw = cell?.dataset.cellSrc
   if (raw === undefined) return null
   const value = Number(raw)
@@ -42,6 +42,27 @@ function cellSource(cell: HTMLElement | null): number | null {
 /** True when a cell holds no laid-out run — the case `data-cell-src` exists for. */
 function cellIsEmpty(cell: HTMLElement): boolean {
   return cell.querySelector('[data-run]') === null
+}
+
+/**
+ * `node`'s source offset counted from the start of `box`, or null when `node` is
+ * not one of that box's own children.
+ *
+ * A line box and a table cell box hold exactly the same two things — run spans,
+ * and the DIRECT text the browser types when there is no run to type into — so
+ * "how many characters come before this node" is one rule, not two. It was two,
+ * and the copies were already identical.
+ */
+function offsetInBox(box: Element, node: Node, offset: number, base: number): number | null {
+  let seen = 0
+  for (const child of Array.from(box.childNodes)) {
+    if (child === node) return base + seen + offset
+    if (child.nodeType === Node.TEXT_NODE) seen += child.textContent?.length ?? 0
+    else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
+      seen += child.textContent?.length ?? 0
+    }
+  }
+  return null
 }
 
 /**
@@ -271,16 +292,11 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   // row's first pipe, which stops the line being a row.
   const cell = cellAround(node)
   const cellSrc = cellSource(cell)
-  if (cell !== null && cellSrc !== null) {
-    let seen = 0
-    for (const child of Array.from(cell.childNodes)) {
-      if (child === node) return cellSrc + seen + offset
-      if (child.nodeType === Node.TEXT_NODE) seen += child.textContent?.length ?? 0
-      else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
-        seen += child.textContent?.length ?? 0
-      }
-    }
-    return cellSrc
+  if (cell && cellSrc !== null) {
+    // One of the cell's own children (a run, or the direct text the browser typed
+    // into the empty cell) or the cell box itself: both belong at the cell's
+    // content start rather than at the row's.
+    return offsetInBox(cell, node, offset, cellSrc) ?? cellSrc
   }
 
   // The caret sits in a DIRECT text node of the line box. That is what typing
@@ -289,17 +305,8 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   // mandatory — returning the line's start instead put the model caret back
   // before the character just typed, so the next keystroke landed in front of it
   // and input came out reversed (`二行第`).
-  if (node.nodeType === Node.TEXT_NODE) {
-    let seen = 0
-    for (const child of Array.from(lineEl.childNodes)) {
-      if (child === node) return base + seen + offset
-      if (child.nodeType === Node.TEXT_NODE) {
-        seen += child.textContent?.length ?? 0
-      } else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
-        seen += child.textContent?.length ?? 0
-      }
-    }
-  }
+  const loose = offsetInBox(lineEl, node, offset, base)
+  if (loose !== null) return loose
 
   // Caret anchored on the line element itself (empty line, or past the end).
   //
@@ -388,7 +395,7 @@ export function sourceOffsetAtPoint(
   const emptyCell = [cellAround(node), cellAround(fallback)].find(
     (cell): cell is HTMLElement => cell !== null && cellIsEmpty(cell),
   )
-  const emptyCellSrc = cellSource(emptyCell ?? null)
+  const emptyCellSrc = cellSource(emptyCell)
   if (emptyCellSrc !== null) return { block, local: emptyCellSrc }
 
   // Neither the resolved node nor the event's target names a cell (a synthetic

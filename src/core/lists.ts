@@ -199,8 +199,6 @@ export interface IndentResult {
   caret: number
 }
 
-/** The 0-based line holding `offset`, with the line's own start offset and text. */
-
 /** The line holding `offset`, and its `ListItem` (null when it is not one). */
 function locate(doc: string, offset: number) {
   const { lines, index } = lineAt(doc, offset)

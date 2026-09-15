@@ -265,8 +265,7 @@ function lineElement(
   // (`.scratch/table-ops/issues/03`).
   if (state?.kind === 'table-delim') {
     syncChildren(el, 1, (_index, current) => {
-      const run =
-        current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart)
+      const run = current?.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart)
       if (run.textContent !== raw) run.textContent = raw
       setAttr(run, 'data-src', String(line.sourceStart))
       return run

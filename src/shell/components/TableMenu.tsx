@@ -39,6 +39,15 @@ interface TableMenuProps {
   onClose: () => void
 }
 
+interface TableMenuItem {
+  command: TableMenuCommand
+  label: string
+  /** False when the table's own shape forbids it. */
+  enabled: boolean
+  /** A divider is drawn ABOVE this item. */
+  separator?: boolean
+}
+
 /**
  * The menu's items, in the order they are drawn.
  *
@@ -47,12 +56,7 @@ interface TableMenuProps {
  * `| --- |` row has no cells to add a column beside, and a table with one column
  * has none to delete.
  */
-function items(context: TableContext): Array<{
-  command: TableMenuCommand
-  label: string
-  enabled: boolean
-  separator?: boolean
-}> {
+function menuItems(context: TableContext): TableMenuItem[] {
   const onRule = context.cell < 0
   const inHeader = context.line === context.headerLine
   return [
@@ -107,9 +111,9 @@ export function TableMenu({ state, onCommand, onClose }: TableMenuProps) {
       ref={ref}
       style={{ left: state.x, top: state.y }}
     >
-      {items(state.context).map((item) => (
+      {menuItems(state.context).map((item) => (
         <div key={item.command}>
-          {item.separator === true && <div className="table-menu-sep" role="separator" />}
+          {item.separator && <div className="table-menu-sep" role="separator" />}
           <button
             type="button"
             role="menuitem"

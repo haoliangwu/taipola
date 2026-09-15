@@ -216,6 +216,34 @@ export async function clickAtLine(
   placeCaretAt(text ?? line, 0)
 }
 
+/**
+ * A table cell's element, wherever the table is on the page.
+ *
+ * No block index on purpose: a table is not always the document's first block
+ * (deleting one from between two paragraphs is a case that has to be tested), and
+ * a test that owns the whole document never has two of them.
+ */
+export function tableCellEl(container: HTMLElement, vline: number, cell: number): HTMLElement {
+  return container.querySelector(
+    `[data-vline="${vline}"] [data-cell="${cell}"]`,
+  ) as HTMLElement
+}
+
+/**
+ * Puts the caret in a table cell — where a click there leaves it.
+ *
+ * The cell ELEMENT, not a run: an empty cell renders no run at all, and that is
+ * the whole point of the cell carrying its own `data-cell-src`.
+ */
+export async function caretInTableCell(
+  r: Rendering,
+  vline: number,
+  cell: number,
+): Promise<void> {
+  placeCaretAt(tableCellEl(r.container, vline, cell), 0)
+  await flush()
+}
+
 /** Type text at the current caret — a REAL keystroke sequence. */
 export async function typeText(r: Rendering, text: string): Promise<void> {
   await r.user.type(r.container, text)

@@ -274,7 +274,9 @@ body {
 
 /* The table's right-click menu. Fixed rather than absolute: it is placed at the
    click point in viewport coordinates, and it is not inside the editor's own
-   subtree (the kernel owns that), so there is nothing to position against. */
+   subtree (the kernel owns that), so there is nothing to position against. Its
+   look is deliberately the same as the export dropdown's (`.mini-menu`) — those
+   two are the app's only menus, and they should not drift. */
 .table-menu {
   position: fixed;
   z-index: 40;
