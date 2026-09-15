@@ -352,6 +352,12 @@ function nextFootnoteNumber(doc: string): number {
   return nums.length ? Math.max(...nums) + 1 : 1
 }
 
+/** How to reach the end-of-document definition from `text`: exactly one blank
+ * line after it, reusing the trailing newline when there is one. */
+function blankLineBeforeDefinition(text: string): string {
+  return text.endsWith('\n') ? '\n' : '\n\n'
+}
+
 /**
  * Footnote (⌥⌘R): `[^n]` right after the selection (the text stays put), with
  * an empty `[^n]: ` definition at the end of the document.
@@ -361,8 +367,7 @@ export function insertFootnote(buffer: EditBuffers): void {
   const n = nextFootnoteNumber(value)
   const marker = `[^${n}]`
   const withRef = value.slice(0, end) + marker + value.slice(end)
-  const suffix = withRef.endsWith('\n') ? '\n' : '\n\n'
-  buffer.value = withRef + suffix + `[^${n}]: `
+  buffer.value = withRef + blankLineBeforeDefinition(withRef) + `[^${n}]: `
   buffer.start = end
   buffer.end = end + marker.length
 }
@@ -383,8 +388,7 @@ export function insertLinkReference(buffer: EditBuffers): void {
   const n = nextLinkRefNumber(value)
   const marker = `[${value.slice(start, end)}][${n}]`
   const withRef = value.slice(0, start) + marker + value.slice(end)
-  const suffix = withRef.endsWith('\n') ? '\n' : '\n\n'
-  buffer.value = withRef + suffix + `[${n}]: `
+  buffer.value = withRef + blankLineBeforeDefinition(withRef) + `[${n}]: `
   buffer.start = start
   buffer.end = start + marker.length
 }

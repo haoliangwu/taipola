@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import App from './App'
+import { renderWithDoc } from '../test/appTestUtils'
 import { stubSavedFolder } from '../test/platformStubs'
 import { placeCaretAt } from '../test/editorTestUtils'
 
@@ -9,25 +8,6 @@ import { placeCaretAt } from '../test/editorTestUtils'
  * inline-markers 票据 02 的行内数学浏览器冒烟：KaTeX 渲染往返、⌃M 三态、
  * 数学边界的光标编辑（ADR-0002 相邻 run 的边界 Backspace）。
  */
-
-function seedDoc(content: string) {
-  localStorage.setItem(
-    'taipola:draft:untitled.md',
-    JSON.stringify({ savedAt: 1_000, root: null, path: null, content, name: 'untitled.md' }),
-  )
-  localStorage.setItem('taipola:active-draft', 'untitled.md')
-}
-
-async function renderWithDoc(content: string) {
-  seedDoc(content)
-  const view = render(<App />)
-  const doc = view.container.querySelector('.doc') as HTMLElement
-  if (!doc) throw new Error('no .doc')
-  doc.focus({ preventScroll: true })
-  const run = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run="0"]')
-  if (!run?.firstChild) throw new Error('no first run')
-  return { view, doc, text: run.firstChild as Text }
-}
 
 describe('行内数学渲染（IM02 浏览器冒烟）', () => {
   beforeEach(() => {

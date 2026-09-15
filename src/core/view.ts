@@ -11,7 +11,7 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
-import { BRACKET_MATH_RE, DOLLAR_MATH_RE, FOOTNOTE_DEFINITION, PAREN_MATH_RE, isThematicBreak } from './inline'
+import { FOOTNOTE_DEFINITION, MATH_FORMS, isThematicBreak } from './inline'
 import { readImageSize } from './imageSize'
 import { isBlankLine } from './lines'
 import { exportableHref, md } from './markdownIt'
@@ -209,30 +209,24 @@ const EXTRA_PAIRED: Array<{
 ]
 
 /**
- * Mathematics this editor recognises: `$…$` (Pandoc rules), `\(…\)` and
- * `\[…\]` (Typora's legacy LaTeX delimiters, which it parses by default).
+ * One math construct at the start of `rest`, in LOCAL offsets.
  *
- * The dollar rule is Pandoc's verbatim (`internals.md` §3): no whitespace
- * after the opener (`(?!\s)`), `\$` inside, the closer may not follow a
- * space or a backslash (`[^\\\s]`), and no digit after the closer (`(?!\d)`).
- * `$$…$$` never matches — the content class cannot contain a raw `$` — so
- * display math stays literal (out of scope; README backlog).
+ * The rules (`$…$` Pandoc verbatim, `\(…\)` / `\[…\]`) and their one shared
+ * source of truth live in `inline.ts` (`MATH_FORMS`) — this scanner, the ⌃M
+ * toggle and clearFormat all walk the same table, so they cannot drift.
  */
-// The three delimiters live in `inline.ts` — stripInline, the ⌃M toggle and
-// this scanner are the same rule everywhere.
-
-/** One math construct at the start of `rest`, in LOCAL offsets. */
 function mathTokenAt(
   rest: string,
 ): { end: number; innerStart: number; innerEnd: number; math: string } | null {
-  for (const [re, opener] of [
-    [DOLLAR_MATH_RE, 1],
-    [PAREN_MATH_RE, 2],
-    [BRACKET_MATH_RE, 2],
-  ] as const) {
-    const m = re.exec(rest)
+  for (const form of MATH_FORMS) {
+    const m = form.re.exec(rest)
     if (!m) continue
-    return { end: m[0].length, innerStart: opener, innerEnd: opener + m[1].length, math: m[1] }
+    return {
+      end: m[0].length,
+      innerStart: form.openLen,
+      innerEnd: form.openLen + m[1].length,
+      math: m[1],
+    }
   }
   return null
 }
