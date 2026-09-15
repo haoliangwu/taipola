@@ -1401,3 +1401,65 @@ describe('侧栏记忆上次的文件夹', () => {
     }
   })
 })
+
+/**
+ * The format toolbar's icons.
+ *
+ * Reported: the 链接 button was visibly larger than every label beside it. It was
+ * the emoji `🔗`, and an emoji is the one thing that cannot be made to match a row
+ * of text: the colour-emoji font paints it at its own size and it ignores both
+ * `font-size` and `color`, so it was also the only coloured item in the row.
+ */
+describe('工具栏的图标', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  const linkButton = (view: ReturnType<typeof render>) =>
+    view.container.querySelector('[aria-label="链接 (Cmd/Ctrl+K)"]') as HTMLElement | null
+
+  it('链接按钮是画出来的 SVG，单色并且跟随按钮的 color', () => {
+    const view = render(<App />)
+    const button = linkButton(view)
+    expect(button).not.toBeNull()
+
+    const svg = button!.querySelector('svg') as SVGSVGElement | null
+    expect(svg, '链接按钮应当是一个画出来的图标，而不是一个 emoji').not.toBeNull()
+
+    // 这两条就是 emoji 做不到的事，也正是它偏大的原因。
+    expect(svg!.getAttribute('stroke')).toBe('currentColor')
+    expect(getComputedStyle(svg!).stroke).toBe(getComputedStyle(button!).color)
+    expect(button!.textContent).toBe('')
+
+    // 墨迹留在图标的标称尺寸之内 —— emoji 的墨迹是字形自己决定的，会撑满整个 em 框。
+    const paths = [...svg!.querySelectorAll('path')] as SVGGraphicsElement[]
+    expect(paths.length).toBeGreaterThan(0)
+    for (const path of paths) {
+      const ink = path.getBBox()
+      expect(ink.x).toBeGreaterThanOrEqual(1)
+      expect(ink.y).toBeGreaterThanOrEqual(1)
+      expect(ink.x + ink.width).toBeLessThanOrEqual(15)
+      expect(ink.y + ink.height).toBeLessThanOrEqual(15)
+    }
+    view.unmount()
+  })
+
+  it('换成 SVG 之后链接命令照旧（图标是外壳，命令没动）', async () => {
+    seedDraft('untitled.md', { content: '正文\n', name: 'untitled.md' })
+    const view = render(<App />)
+    const doc = documentBody(view)
+    // 先 focus 再设选区：反过来的话 focus() 会把刚设好的选区清掉（ADR-0002 §2 第 1 条）。
+    doc.focus({ preventScroll: true })
+    const run = doc.querySelector('[data-block="0"] [data-run="0"]') as HTMLElement
+    const range = document.createRange()
+    range.selectNodeContents(run)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    const user = userEvent.setup({ delay: null })
+    await user.click(linkButton(view)!)
+    expect(readDocumentSource(doc)).toContain('[链接文字](url)')
+    view.unmount()
+  })
+})

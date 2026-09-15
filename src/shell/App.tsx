@@ -791,7 +791,7 @@ export default function App() {
           <ToolButton label="☑" title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
           <ToolButton label="▦" title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
           <ToolButton label="{}" title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
-          <ToolButton label="🔗" title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
+          <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
         </div>
 
         <div className="titlebar-right">
@@ -960,7 +960,12 @@ export default function App() {
 }
 
 interface ToolButtonProps {
-  label: string
+  /**
+   * What the button shows. A string for the glyph labels (`B`, `H1`, `☑`), or an
+   * icon element for the one command with no glyph that fits (see `LinkIcon`).
+   * The accessible name always comes from `title`, never from this.
+   */
+  label: ReactNode
   title: string
   className?: string
   onClick: () => void
@@ -982,17 +987,19 @@ function ToolButton({ label, title, className = '', onClick }: ToolButtonProps) 
 }
 
 /**
- * The mini group's two icons, inline rather than from a font or a package.
+ * The app's icons, inline rather than from a font or a package.
  *
- * On a phone these are the only command entry points, and the glyphs the desktop
- * buttons use (`☀ ☾ ◐ ‹› 🔗`) render differently per platform and per font. Two
- * `<svg>` elements cost nothing and cannot fall back to a tofu box.
+ * The narrow-screen mini group is the only command entry point on a phone, and the
+ * glyphs the desktop buttons use (`☀ ☾ ◐ ‹› 🔗`) render differently per platform and
+ * per font — `🔗` worst of all, because it is an emoji and so ignores `font-size` and
+ * `color` outright. A handful of `<svg>` elements cost nothing, inherit
+ * `currentColor`, and cannot fall back to a tofu box.
  */
-function Glyph({ children }: { children: ReactNode }) {
+function Glyph({ children, size = 16 }: { children: ReactNode; size?: number }) {
   return (
     <svg
-      width="16"
-      height="16"
+      width={size}
+      height={size}
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
@@ -1003,6 +1010,29 @@ function Glyph({ children }: { children: ReactNode }) {
     >
       {children}
     </svg>
+  )
+}
+
+/**
+ * A chain link, for the toolbar's 链接 button.
+ *
+ * It was the emoji `🔗`, which is why it stood out: an emoji is painted by the
+ * colour-emoji font at its own size and ignores both `font-size` and `color`, so
+ * beside 12.5px monochrome labels it was the largest and the only coloured thing in
+ * the row. Drawing it puts it under the same `currentColor` and the same stroke
+ * weight as every other glyph in the app.
+ *
+ * Two hooks, each rotated 180° from the other about the centre — that offset is what
+ * makes them read as interlocking links rather than one bent line. The paths are
+ * inset to about 11.8 of the 16 units, so the ink lands near 11.8px: `☑` measures
+ * 11.3px and the letter glyphs about 9px, which is the row this has to sit in.
+ */
+function LinkIcon() {
+  return (
+    <Glyph>
+      <path d="M6.8 8.6a3 3 0 0 0 4.524.324l1.8-1.8a3 3 0 0 0-4.242-4.242l-1.032 1.026" />
+      <path d="M9.2 7.4a3 3 0 0 0-4.524-.324l-1.8 1.8a3 3 0 0 0 4.242 4.242l1.026-1.026" />
+    </Glyph>
   )
 }
 
