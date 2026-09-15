@@ -1025,16 +1025,39 @@ body {
   content: counter(vl-l5) '.';
 }
 
-/* Task items */
+/* Task items.
+ *
+ * The box is DRAWN, not a font glyph. It used to be `content: '☐'`, which made it
+ * the smallest thing on the line: a glyph advances one monospace cell — measured
+ * 9px — and since the click target is "everything left of the first text", the
+ * target was narrow for the same reason (16.5px wide). Enlarging the glyph does not
+ * help either: a monospace advance stays 0.6em however large the glyph is painted,
+ * so the text moves right and the target grows by a couple of pixels at most. An
+ * explicit box sizes the drawing and the target together. */
 .vl-task:not(.revealed)::before {
-  content: '☐';
-  margin-right: 0.5em;
-  color: var(--text-soft);
+  content: '';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.2em;
+  block-size: 1.2em;
+  margin-right: 0.45em;
+  border: 1.5px solid var(--text-soft);
+  border-radius: 4px;
+  /* Load-bearing (ADR-0002 §1): the caret arithmetic indexes by source line, so no
+     line box may end up taller than one source line. An atomic inline-level box is
+     measured into the line via its margin box, so it is placed with
+     `vertical-align` INSIDE the line's strut rather than straddling it — the
+     superscript's `line-height: 0` is the same kind of constraint. */
+  vertical-align: middle;
+  line-height: 1;
+  color: var(--bg);
 }
 
 .vl-task.vl-checked:not(.revealed)::before {
-  content: '☑';
-  color: var(--accent);
+  content: '✓';
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .vl-table-delim {
