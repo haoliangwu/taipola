@@ -149,11 +149,21 @@ interface Token {
   label?: string
 }
 
+/**
+ * The paired inline markers, longest opener first.
+ *
+ * Content is `+` (at least one character) on purpose: a bare `**` / `~~` /
+ * `` `` `` is NOT an empty construct, it is literal text waiting for its
+ * content. Matching it as an empty pair produced a marker pair with a
+ * zero-width inner range, whose source offsets have no addressable cell — so
+ * the caret after the stars had nowhere to land and the next keystroke was
+ * absorbed one run to the left (`caret-assertions/02`).
+ */
 const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
-  { kind: 'bold', re: /^(\*\*|__)([\s\S]*?)\1/ },
-  { kind: 'strike', re: /^(~~)([\s\S]*?)\1/ },
-  { kind: 'code', re: /^(`+)([\s\S]*?)\1/ },
-  { kind: 'italic', re: /^(\*|_)(?!\s)([\s\S]*?)\1/ },
+  { kind: 'bold', re: /^(\*\*|__)([\s\S]+?)\1/ },
+  { kind: 'strike', re: /^(~~)([\s\S]+?)\1/ },
+  { kind: 'code', re: /^(`+)([\s\S]+?)\1/ },
+  { kind: 'italic', re: /^(\*|_)(?!\s)([\s\S]+?)\1/ },
 ]
 
 /**

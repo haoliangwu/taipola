@@ -534,3 +534,21 @@ describe('EXTRA_INLINE 三族（IM01: == ^ ~，默认关）', () => {
     }
   })
 })
+
+describe('裸标记对是字面文本（caret-assertions/02）', () => {
+  it('`**` / `~~` / 空反引号不被当成空构造：无 marker、偏移全部可寻址', () => {
+    for (const raw of ['段落**', '段落~~', '段落``']) {
+      const line = view(raw).lines[0]
+      expect(line.markers).toHaveLength(0)
+      expect(line.runs.map((r) => r.text).join('')).toBe(raw)
+      // 每个源码偏移都有可见格可落——否则光标只能回退到标记之前
+      expect(line.sourceToVisible.every((cell) => cell !== -1)).toBe(true)
+    }
+  })
+
+  it('有内容的成对标记照旧解析', () => {
+    const line = view('**b**').lines[0]
+    expect(line.runs.map((r) => r.text).join('')).toBe('**b**')
+    expect(view('**b**').lines[0].text).toBe('b')
+  })
+})

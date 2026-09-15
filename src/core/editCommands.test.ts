@@ -30,12 +30,12 @@ function run(value: string, start: number, end: number, command: (b: EditBuffers
 }
 
 describe('toggleInline（粗体 / 斜体 / 删除线）', () => {
-  it('包裹选中的文字，选区留在文字上', () => {
+  it('包裹选中的文字，光标停在构造之后（继续打字不进构造）', () => {
     expect(run('hello', 0, 5, (b) => toggleInline(b, '**'))).toEqual({
       value: '**hello**',
-      start: 2,
-      end: 7,
-      selected: 'hello',
+      start: 9,
+      end: 9,
+      selected: '',
     })
   })
 

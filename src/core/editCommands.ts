@@ -52,9 +52,13 @@ export function toggleInline(buffer: EditBuffers, marker: string): void {
     return
   }
 
+  // Wrapping leaves the caret AFTER the closing marker, not inside the
+  // construct: the next keystroke then continues the sentence (`**bold**X`)
+  // instead of burrowing into the emphasis (`**Xbold**`). Collapsing to the
+  // selection start — the old behaviour — did the latter, because the kernel
+  // places the caret from `buffer.start` and the browser then inserts there.
   buffer.value = value.slice(0, start) + marker + selected + marker + value.slice(end)
-  buffer.start = start + len
-  buffer.end = end + len
+  buffer.start = buffer.end = end + len * 2
 }
 
 const URL_LIKE = /^(https?:\/\/|mailto:|www\.)\S+$/i
