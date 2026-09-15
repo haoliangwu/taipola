@@ -38,6 +38,42 @@ import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
 
+/**
+ * True when a COLLAPSED source run ends at or before the collapsed caret, inside
+ * the caret's own line box — the geometry Chromium's native delete-backward
+ * mishandles: at a boundary that touches a `display: none` run it deletes that
+ * whole run as well, so one Backspace at the end of `~~a~~z` removed `z` AND the
+ * closing `~~` (`caret-assertions/03`). `offsetParent === null` is the layout
+ * fact (not a class name) that says the run contributes no visible text.
+ */
+function hiddenSourceBeforeCaret(sel: Selection): boolean {
+  const anchor = sel.anchorNode
+  const line = (anchor instanceof Element ? anchor : anchor?.parentElement)?.closest('[data-vline]')
+  if (!line) return false
+  const caret = sel.getRangeAt(0)
+  for (const run of line.querySelectorAll<HTMLElement>('[data-run]')) {
+    if (run.offsetParent !== null) continue
+    if (!run.textContent) continue
+    const range = document.createRange()
+    range.selectNodeContents(run)
+    // The run's END at or before the caret's start: the browser would walk over it.
+    if (range.compareBoundaryPoints(Range.END_TO_START, caret) <= 0) return true
+  }
+  return false
+}
+
+/**
+ * The source offset of the grapheme before `at`, so Backspace never cuts an
+ * emoji or a combining sequence in half. (`Intl.Segmenter` is in every browser
+ * this editor targets; the fallback keeps older engines on one code unit.)
+ */
+function previousGraphemeStart(doc: string, at: number): number {
+  if (typeof Intl.Segmenter !== 'function') return at - 1
+  const segments = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(doc.slice(0, at))]
+  const last = segments[segments.length - 1]
+  return last ? last.index : at - 1
+}
+
 /** The source line holding an offset: where it starts and ends, and its text. */
 interface LineBounds {
   start: number
@@ -811,6 +847,23 @@ export class EditorKernel {
           this.commit(joined, caret)
           return
         }
+      }
+    }
+
+    // Backspace inside a line that carries COLLAPSED source runs: the browser
+    // deletes by DOM node, and at a boundary touching one of those hidden runs
+    // it takes the whole run with the character (`~~a~~z` lost `z` AND the
+    // closing `~~` — `caret-assertions/03`). One source character, deleted by
+    // the kernel, is what the key means; the native path stays for lines with
+    // nothing hidden in front of the caret, where it behaves.
+    if (event.key === 'Backspace' && live !== null && live > 0) {
+      const sel = window.getSelection()
+      if (sel && sel.rangeCount > 0 && sel.isCollapsed && hiddenSourceBeforeCaret(sel)) {
+        event.preventDefault()
+        const cut = previousGraphemeStart(this.doc, live)
+        this.pushUndo({ value: this.doc, caret: this.caret })
+        this.commit(this.doc.slice(0, cut) + this.doc.slice(live), cut)
+        return
       }
     }
   }
