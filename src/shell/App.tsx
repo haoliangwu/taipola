@@ -776,21 +776,27 @@ export default function App() {
         </div>
 
         <div className="toolbar" role="toolbar" aria-label="格式">
+          {/* Text labels stay text: the styling IS the meaning for bold and italic,
+              and `H1`–`H3` are clearer as letters than as any drawing could be. */}
           <ToolButton label="B" title="加粗 (Cmd/Ctrl+B)" className="is-bold" onClick={commands.bold} />
           <ToolButton label="I" title="斜体 (Cmd/Ctrl+I)" className="is-italic" onClick={commands.italic} />
           <ToolButton label="S" title="删除线 (Ctrl+Shift+`)" className="is-strike" onClick={commands.strike} />
-          <ToolButton label="‹›" title="行内代码 (Ctrl+`)" onClick={commands.code} />
           <span className="toolbar-sep" />
           <ToolButton label="H1" title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
           <ToolButton label="H2" title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
           <ToolButton label="H3" title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
           <span className="toolbar-sep" />
-          <ToolButton label="❝" title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
-          <ToolButton label="•" title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
-          <ToolButton label="1." title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
-          <ToolButton label="☑" title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
-          <ToolButton label="▦" title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
-          <ToolButton label="{}" title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
+          {/* Everything below is a PICTURE, so it is drawn. The glyphs they used to
+              be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and size — `▦` was a
+              solid block, `•` a speck, `❝` oversized — because a font glyph's ink is
+              whatever that font decides. See `Glyph`. */}
+          <ToolButton label={<InlineCodeIcon />} title="行内代码 (Ctrl+`)" onClick={commands.code} />
+          <ToolButton label={<QuoteIcon />} title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
+          <ToolButton label={<BulletListIcon />} title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
+          <ToolButton label={<OrderedListIcon />} title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
+          <ToolButton label={<TaskListIcon />} title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
+          <ToolButton label={<TableIcon />} title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
+          <ToolButton label={<CodeBlockIcon />} title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
           <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
         </div>
 
@@ -1010,6 +1016,116 @@ function Glyph({ children, size = 16 }: { children: ReactNode; size?: number }) 
     >
       {children}
     </svg>
+  )
+}
+
+/**
+ * The toolbar's picture commands, drawn on the same 16-unit grid.
+ *
+ * They were font glyphs (`‹› ❝ • ☑ ▦ {}`), and a glyph's ink is whatever the font
+ * decides: `▦` came out a solid block, `•` a speck, `❝` oversized and bold, `‹›`
+ * hairline — four different optical weights in one row, none of them chosen. Drawing
+ * them puts every one on the same stroke width, the same `currentColor` and the same
+ * roughly-11-unit ink box as the chain link beside them.
+ *
+ * `B`, `I`, `S` and `H1`–`H3` stay text on purpose: their styling IS their meaning
+ * (a drawn "bold" says nothing), and letters read better than any drawing of them.
+ */
+function InlineCodeIcon() {
+  return (
+    <Glyph>
+      <path d="M6.3 3.2 2.3 8l4 4.8" />
+      <path d="M9.7 3.2 13.7 8l-4 4.8" />
+    </Glyph>
+  )
+}
+
+/** Braces, because `{}` was already this button's label — just drawn now. */
+function CodeBlockIcon() {
+  return (
+    <Glyph>
+      <path d="M6.6 3c-1.4 0-2 .7-2 2v1.5c0 1-.6 1.5-1.9 1.5 1.3 0 1.9.5 1.9 1.5v1.5c0 1.3.6 2 2 2" />
+      <path d="M9.4 3c1.4 0 2 .7 2 2v1.5c0 1 .6 1.5 1.9 1.5-1.3 0-1.9.5-1.9 1.5v1.5c0 1.3-.6 2-2 2" />
+    </Glyph>
+  )
+}
+
+/**
+ * A bar with lines beside it — which is what a quote looks like in this editor:
+ * `.vl-quote::before` draws the same bar down the left of the line.
+ */
+function QuoteIcon() {
+  return (
+    <Glyph>
+      <path d="M3.4 2.6v10.8" strokeWidth="2" />
+      <path d="M7.4 5.4h6" />
+      <path d="M7.4 9.2h4" />
+    </Glyph>
+  )
+}
+
+/** The three list commands share a rhythm: markers at these y's, text after them. */
+const LIST_ROWS = [3.8, 8, 12.2]
+
+function BulletListIcon() {
+  return (
+    <Glyph>
+      {LIST_ROWS.map((y) => (
+        <circle key={y} cx="3.6" cy={y} r="1.15" fill="currentColor" stroke="none" />
+      ))}
+      {LIST_ROWS.map((y) => (
+        <path key={y} d={`M7.7 ${y}h5.3`} />
+      ))}
+    </Glyph>
+  )
+}
+
+function OrderedListIcon() {
+  return (
+    <Glyph>
+      {/* The numerals are TEXT, not paths: at this size a drawn `2` is a two-unit
+          squiggle, while 4.8px of the UI font is still a legible digit. */}
+      {LIST_ROWS.map((y, i) => (
+        <text
+          key={y}
+          x="2.3"
+          y={y + 1.7}
+          fontSize="4.8"
+          fill="currentColor"
+          stroke="none"
+          fontFamily="var(--font-ui)"
+        >
+          {i + 1}
+        </text>
+      ))}
+      {LIST_ROWS.map((y) => (
+        <path key={y} d={`M7.7 ${y}h5.3`} />
+      ))}
+    </Glyph>
+  )
+}
+
+function TaskListIcon() {
+  return (
+    <Glyph>
+      {/* The box replaces the first row's bullet, which is how a task list reads. */}
+      <rect x="2.3" y="1.6" width="4.4" height="4.4" rx="1.1" />
+      <path d="M3.5 3.8 4.4 4.7 5.6 3" />
+      <path d="M8.7 3.8h4.3" />
+      <path d="M8.7 8h4.3" />
+      <path d="M8.7 12.2h4.3" />
+    </Glyph>
+  )
+}
+
+function TableIcon() {
+  return (
+    <Glyph>
+      <rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1.2" />
+      <path d="M2.4 6.5h11.2" />
+      <path d="M2.4 9.6h11.2" />
+      <path d="M8 3.4v9.2" />
+    </Glyph>
   )
 }
 

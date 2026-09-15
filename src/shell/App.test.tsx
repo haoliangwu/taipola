@@ -1405,41 +1405,71 @@ describe('侧栏记忆上次的文件夹', () => {
 /**
  * The format toolbar's icons.
  *
- * Reported: the 链接 button was visibly larger than every label beside it. It was
- * the emoji `🔗`, and an emoji is the one thing that cannot be made to match a row
- * of text: the colour-emoji font paints it at its own size and it ignores both
- * `font-size` and `color`, so it was also the only coloured item in the row.
+ * Reported twice: first the 链接 button was visibly larger than every label beside
+ * it (it was the emoji `🔗`, which the colour-emoji font paints at its own size
+ * while ignoring both `font-size` and `color`), and then the rest of the row was
+ * still uneven — `▦` a solid block, `•` a speck, `❝` oversized — because a font
+ * glyph's ink is whatever that font decides.
+ *
+ * The row is deliberately TWO families, and that split is what these tests hold:
+ * the picture commands are drawn on one 16-unit grid at one stroke weight, and the
+ * six labels that stay text are the ones whose styling IS their meaning.
  */
 describe('工具栏的图标', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  const linkButton = (view: ReturnType<typeof render>) =>
-    view.container.querySelector('[aria-label="链接 (Cmd/Ctrl+K)"]') as HTMLElement | null
+  /** Drawn: these are pictures, and no glyph matched the rest of the row. */
+  const DRAWN = [
+    '行内代码',
+    '引用',
+    '无序列表',
+    '有序列表',
+    '任务列表',
+    '插入表格',
+    '代码块',
+    '链接',
+  ]
+  /** Text on purpose: a drawn "bold" says nothing, and `H1` beats any drawing. */
+  const TEXT = ['加粗', '斜体', '删除线', '一级标题', '二级标题', '三级标题']
 
-  it('链接按钮是画出来的 SVG，单色并且跟随按钮的 color', () => {
+  const buttonFor = (view: ReturnType<typeof render>, name: string) =>
+    view.container.querySelector(`[aria-label^="${name} "]`) as HTMLElement | null
+
+  it('图形命令一律画出来，文字命令一律不画', () => {
     const view = render(<App />)
-    const button = linkButton(view)
-    expect(button).not.toBeNull()
+    for (const name of DRAWN) {
+      const button = buttonFor(view, name)
+      expect(button, `${name} 不见了`).not.toBeNull()
+      expect(button!.querySelector('svg'), `${name} 应当是画出来的`).not.toBeNull()
+    }
+    for (const name of TEXT) {
+      const button = buttonFor(view, name)
+      expect(button, `${name} 不见了`).not.toBeNull()
+      expect(button!.querySelector('svg'), `${name} 应当仍然是文字`).toBeNull()
+    }
+    view.unmount()
+  })
 
-    const svg = button!.querySelector('svg') as SVGSVGElement | null
-    expect(svg, '链接按钮应当是一个画出来的图标，而不是一个 emoji').not.toBeNull()
+  it('每个图标单色、跟随按钮的 color，墨迹收在 16 单位的框内且大小相当', () => {
+    const view = render(<App />)
+    for (const name of DRAWN) {
+      const button = buttonFor(view, name)!
+      const svg = button.querySelector('svg') as SVGSVGElement
 
-    // 这两条就是 emoji 做不到的事，也正是它偏大的原因。
-    expect(svg!.getAttribute('stroke')).toBe('currentColor')
-    expect(getComputedStyle(svg!).stroke).toBe(getComputedStyle(button!).color)
-    expect(button!.textContent).toBe('')
+      // 单色 + 继承 currentColor：emoji 做不到的正是这两件事。
+      expect(svg.getAttribute('stroke'), name).toBe('currentColor')
+      expect(getComputedStyle(svg).stroke, name).toBe(getComputedStyle(button).color)
 
-    // 墨迹留在图标的标称尺寸之内 —— emoji 的墨迹是字形自己决定的，会撑满整个 em 框。
-    const paths = [...svg!.querySelectorAll('path')] as SVGGraphicsElement[]
-    expect(paths.length).toBeGreaterThan(0)
-    for (const path of paths) {
-      const ink = path.getBBox()
-      expect(ink.x).toBeGreaterThanOrEqual(1)
-      expect(ink.y).toBeGreaterThanOrEqual(1)
-      expect(ink.x + ink.width).toBeLessThanOrEqual(15)
-      expect(ink.y + ink.height).toBeLessThanOrEqual(15)
+      const ink = svg.getBBox()
+      expect(ink.x, `${name} 左`).toBeGreaterThanOrEqual(0)
+      expect(ink.y, `${name} 上`).toBeGreaterThanOrEqual(0)
+      expect(ink.x + ink.width, `${name} 右`).toBeLessThanOrEqual(16)
+      expect(ink.y + ink.height, `${name} 底`).toBeLessThanOrEqual(16)
+      // 大小相当 —— 排成一排时这一条就是"整齐"的定义。
+      expect(ink.width, `${name} 宽`).toBeGreaterThan(9)
+      expect(ink.height, `${name} 高`).toBeGreaterThan(9)
     }
     view.unmount()
   })
@@ -1458,7 +1488,7 @@ describe('工具栏的图标', () => {
     selection.addRange(range)
 
     const user = userEvent.setup({ delay: null })
-    await user.click(linkButton(view)!)
+    await user.click(buttonFor(view, '链接')!)
     expect(readDocumentSource(doc)).toContain('[链接文字](url)')
     view.unmount()
   })
