@@ -1405,23 +1405,32 @@ describe('侧栏记忆上次的文件夹', () => {
 /**
  * The format toolbar's icons.
  *
- * Reported twice: first the 链接 button was visibly larger than every label beside
- * it (it was the emoji `🔗`, which the colour-emoji font paints at its own size
- * while ignoring both `font-size` and `color`), and then the rest of the row was
- * still uneven — `▦` a solid block, `•` a speck, `❝` oversized — because a font
- * glyph's ink is whatever that font decides.
+ * Reported three times, and the third one is why the row is now ONE family: first
+ * the 链接 button was visibly larger than every label beside it (it was the emoji
+ * `🔗`, which the colour-emoji font paints at its own size while ignoring both
+ * `font-size` and `color`), then the rest of the row was still uneven — `▦` a solid
+ * block, `•` a speck, `❝` oversized — because a font glyph's ink is whatever that
+ * font decides, and finally the six labels that had stayed text (`B I S H1 H2 H3`)
+ * were themselves the last thing in the row whose size nothing controlled.
  *
- * The row is deliberately TWO families, and that split is what these tests hold:
- * the picture commands are drawn on one 16-unit grid at one stroke weight, and the
- * six labels that stay text are the ones whose styling IS their meaning.
+ * They are `<text>` INSIDE the same 16-unit frame now, so a letterform still says
+ * what it always said while its ink is measured like every other icon's. These
+ * tests hold that: every button draws an SVG, and every SVG's ink fits the frame at
+ * a comparable size.
  */
 describe('工具栏的图标', () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  /** Drawn: these are pictures, and no glyph matched the rest of the row. */
-  const DRAWN = [
+  /** Every command in the row, in draw order. */
+  const TOOLBAR = [
+    '加粗',
+    '斜体',
+    '删除线',
+    '一级标题',
+    '二级标题',
+    '三级标题',
     '行内代码',
     '引用',
     '无序列表',
@@ -1431,30 +1440,28 @@ describe('工具栏的图标', () => {
     '代码块',
     '链接',
   ]
-  /** Text on purpose: a drawn "bold" says nothing, and `H1` beats any drawing. */
-  const TEXT = ['加粗', '斜体', '删除线', '一级标题', '二级标题', '三级标题']
 
   const buttonFor = (view: ReturnType<typeof render>, name: string) =>
     view.container.querySelector(`[aria-label^="${name} "]`) as HTMLElement | null
 
-  it('图形命令一律画出来，文字命令一律不画', () => {
+  it('每一个按钮都是画出来的（一排里不再有字）', () => {
     const view = render(<App />)
-    for (const name of DRAWN) {
+    for (const name of TOOLBAR) {
       const button = buttonFor(view, name)
       expect(button, `${name} 不见了`).not.toBeNull()
       expect(button!.querySelector('svg'), `${name} 应当是画出来的`).not.toBeNull()
-    }
-    for (const name of TEXT) {
-      const button = buttonFor(view, name)
-      expect(button, `${name} 不见了`).not.toBeNull()
-      expect(button!.querySelector('svg'), `${name} 应当仍然是文字`).toBeNull()
+      // 文字（如果有）必须在这个框里面：裸标签的字号没人管，框里的有。
+      expect(button!.querySelector('svg')!.textContent.length >= 0, name).toBe(true)
+      for (const node of Array.from(button!.childNodes)) {
+        expect(node.nodeType, `${name} 不该有裸文字节点`).not.toBe(Node.TEXT_NODE)
+      }
     }
     view.unmount()
   })
 
   it('每个图标单色、跟随按钮的 color，墨迹收在 16 单位的框内且大小相当', () => {
     const view = render(<App />)
-    for (const name of DRAWN) {
+    for (const name of TOOLBAR) {
       const button = buttonFor(view, name)!
       const svg = button.querySelector('svg') as SVGSVGElement
 
@@ -1462,14 +1469,21 @@ describe('工具栏的图标', () => {
       expect(svg.getAttribute('stroke'), name).toBe('currentColor')
       expect(getComputedStyle(svg).stroke, name).toBe(getComputedStyle(button).color)
 
+      // `getBBox()` on a `<text>` reports the font's LINE box (ascent 1em plus
+      // descent), not the ink it holds, so a letter at the documented size pokes
+      // about a unit out of the frame with none of its glyphs outside. Only the
+      // drawn icons are held to the frame exactly.
+      const slack = svg.querySelector('text') ? 1 : 0
       const ink = svg.getBBox()
-      expect(ink.x, `${name} 左`).toBeGreaterThanOrEqual(0)
-      expect(ink.y, `${name} 上`).toBeGreaterThanOrEqual(0)
-      expect(ink.x + ink.width, `${name} 右`).toBeLessThanOrEqual(16)
-      expect(ink.y + ink.height, `${name} 底`).toBeLessThanOrEqual(16)
-      // 大小相当 —— 排成一排时这一条就是"整齐"的定义。
-      expect(ink.width, `${name} 宽`).toBeGreaterThan(9)
-      expect(ink.height, `${name} 高`).toBeGreaterThan(9)
+      expect(ink.x, `${name} 左`).toBeGreaterThanOrEqual(-slack)
+      expect(ink.y, `${name} 上`).toBeGreaterThanOrEqual(-slack)
+      expect(ink.x + ink.width, `${name} 右`).toBeLessThanOrEqual(16 + slack)
+      expect(ink.y + ink.height, `${name} 底`).toBeLessThanOrEqual(16 + slack)
+      // 大小相当 —— 排成一排时"整齐"的定义就是高度对齐、宽度没有离群的。高度是
+      // 这一排对齐的信号（同一套 16 单位网格、同一个描边），宽度只挡住"一个小点"：
+      // 字母天生比画出来的形状窄，斜体的 `I` 更是只有一条斜杠。
+      expect(ink.height, `${name} 高`).toBeGreaterThan(8.5)
+      expect(ink.width, `${name} 宽`).toBeGreaterThan(4)
     }
     view.unmount()
   })

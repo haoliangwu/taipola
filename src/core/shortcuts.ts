@@ -20,45 +20,56 @@
  * without — the section whose key it is must not depend on the keyboard.
  */
 
-export type ShellCommand =
-  | 'blur'
-  | 'bold'
-  | 'italic'
-  | 'strike'
-  | 'inlineCode'
-  | 'inlineMath'
-  | 'link'
-  | 'deleteLine'
-  | 'heading1'
-  | 'heading2'
-  | 'heading3'
-  | 'heading4'
-  | 'heading5'
-  | 'heading6'
-  | 'paragraph'
-  | 'headingIncrease'
-  | 'headingDecrease'
-  | 'clearFormat'
-  | 'quote'
-  | 'orderedList'
-  | 'unorderedList'
-  | 'taskList'
-  | 'indent'
-  | 'outdent'
-  | 'codeBlock'
-  | 'footnotes'
-  | 'linkReference'
-  | 'hr'
-  | 'table'
-  | 'tableRowAbove'
-  | 'tableRowBelow'
-  | 'tableRowDelete'
-  | 'save'
-  | 'saveAs'
-  | 'open'
-  | 'openFolder'
-  | 'newDocument'
-  | 'toggleOutline'
+/**
+ * Every command the shell can be asked to run — as a VALUE, not only as a type.
+ *
+ * The help panel has to document all of them (`shortcutHelp.ts`), and a test holds
+ * that list to this one in both directions: every command appears in the panel, and
+ * every key the panel prints really runs the command it is printed beside. A union
+ * type alone cannot be iterated, so the list is data and the type is derived.
+ */
+export const SHELL_COMMANDS = [
+  'blur',
+  'bold',
+  'italic',
+  'strike',
+  'inlineCode',
+  'inlineMath',
+  'link',
+  'deleteLine',
+  'heading1',
+  'heading2',
+  'heading3',
+  'heading4',
+  'heading5',
+  'heading6',
+  'paragraph',
+  'headingIncrease',
+  'headingDecrease',
+  'clearFormat',
+  'quote',
+  'orderedList',
+  'unorderedList',
+  'taskList',
+  'indent',
+  'outdent',
+  'codeBlock',
+  'footnotes',
+  'linkReference',
+  'hr',
+  'table',
+  'tableRowAbove',
+  'tableRowBelow',
+  'tableRowDelete',
+  'save',
+  'saveAs',
+  'open',
+  'openFolder',
+  'newDocument',
+  'toggleOutline',
+] as const
+
+export type ShellCommand = (typeof SHELL_COMMANDS)[number]
 
 /** The parts of a `KeyboardEvent` the table reads. */
 export interface KeyStroke {

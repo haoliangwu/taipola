@@ -1,7 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
 import { TableMenu, type TableMenuCommand, type TableMenuState } from './components/TableMenu'
+import { HelpPanel } from './components/HelpPanel'
 import { Sidebar } from './components/Sidebar'
+import {
+  BoldIcon,
+  BulletListIcon,
+  CodeBlockIcon,
+  ExportIcon,
+  FolderIcon,
+  HeadingIcon,
+  HelpIcon,
+  InlineCodeIcon,
+  ItalicIcon,
+  LinkIcon,
+  NewIcon,
+  OpenIcon,
+  OrderedListIcon,
+  QuoteIcon,
+  SaveIcon,
+  StrikeIcon,
+  TableIcon,
+  TaskListIcon,
+} from './components/icons'
 import { computeStats, extractHeadings } from '../core/markdown'
 import {
   deleteTable,
@@ -637,6 +658,9 @@ export default function App() {
    * anywhere else or by running one of its commands.
    */
   const [tableMenu, setTableMenu] = useState<TableMenuState | null>(null)
+
+  /** The keyboard reference, behind the titlebar's 帮助 button (desktop only). */
+  const [helpOpen, setHelpOpen] = useState(false)
   const runTableCommand = useCallback(
     (command: TableMenuCommand) => {
       setTableMenu(null)
@@ -845,15 +869,18 @@ export default function App() {
         </div>
 
         <div className="toolbar" role="toolbar" aria-label="格式">
-          {/* Text labels stay text: the styling IS the meaning for bold and italic,
-              and `H1`–`H3` are clearer as letters than as any drawing could be. */}
-          <ToolButton label="B" title="加粗 (Cmd/Ctrl+B)" className="is-bold" onClick={commands.bold} />
-          <ToolButton label="I" title="斜体 (Cmd/Ctrl+I)" className="is-italic" onClick={commands.italic} />
-          <ToolButton label="S" title="删除线 (Ctrl+Shift+`)" className="is-strike" onClick={commands.strike} />
+          {/* Every button in this row is an SVG on the one 16-unit grid. The text
+              labels (`B I S H1 H2 H3`) became `<text>` inside that same frame: a
+              letterform is the honest icon for "bold", but as bare labels their ink
+              was whatever the toolbar's own font-size made it — which is how `🔗`
+              and `☑` ended up in the same row at sizes nobody chose. */}
+          <ToolButton label={<BoldIcon />} title="加粗 (Cmd/Ctrl+B)" onClick={commands.bold} />
+          <ToolButton label={<ItalicIcon />} title="斜体 (Cmd/Ctrl+I)" onClick={commands.italic} />
+          <ToolButton label={<StrikeIcon />} title="删除线 (Ctrl+Shift+`)" onClick={commands.strike} />
           <span className="toolbar-sep" />
-          <ToolButton label="H1" title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
-          <ToolButton label="H2" title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
-          <ToolButton label="H3" title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
+          <ToolButton label={<HeadingIcon level={1} />} title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
+          <ToolButton label={<HeadingIcon level={2} />} title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
+          <ToolButton label={<HeadingIcon level={3} />} title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
           <span className="toolbar-sep" />
           {/* Everything below is a PICTURE, so it is drawn. The glyphs they used to
               be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and size — `▦` was a
@@ -903,6 +930,23 @@ export default function App() {
               {format.label}
             </button>
           ))}
+          {/* The keyboard reference, at the far right of the desktop header. Not in
+              the mini group: a phone has no keyboard to look keys up for, and the
+              panel needs width the narrow header does not have. */}
+          <div className="help-anchor">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setHelpOpen((open) => !open)}
+              title="快捷键"
+              aria-label="快捷键"
+              aria-expanded={helpOpen}
+              aria-haspopup="dialog"
+            >
+              <HelpIcon />
+            </button>
+            {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
+          </div>
         </div>
 
         {/* Narrow screens only (`.titlebar-mini`): the format toolbar is desktop
@@ -1067,229 +1111,5 @@ function ToolButton({ label, title, className = '', onClick }: ToolButtonProps) 
     >
       {label}
     </button>
-  )
-}
-
-/**
- * The app's icons, inline rather than from a font or a package.
- *
- * The narrow-screen mini group is the only command entry point on a phone, and the
- * glyphs the desktop buttons use (`☀ ☾ ◐ ‹› 🔗`) render differently per platform and
- * per font — `🔗` worst of all, because it is an emoji and so ignores `font-size` and
- * `color` outright. A handful of `<svg>` elements cost nothing, inherit
- * `currentColor`, and cannot fall back to a tofu box.
- */
-function Glyph({ children, size = 16 }: { children: ReactNode; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {children}
-    </svg>
-  )
-}
-
-/**
- * The toolbar's picture commands, drawn on the same 16-unit grid.
- *
- * They were font glyphs (`‹› ❝ • ☑ ▦ {}`), and a glyph's ink is whatever the font
- * decides: `▦` came out a solid block, `•` a speck, `❝` oversized and bold, `‹›`
- * hairline — four different optical weights in one row, none of them chosen. Drawing
- * them puts every one on the same stroke width, the same `currentColor` and the same
- * roughly-11-unit ink box as the chain link beside them.
- *
- * `B`, `I`, `S` and `H1`–`H3` stay text on purpose: their styling IS their meaning
- * (a drawn "bold" says nothing), and letters read better than any drawing of them.
- */
-function InlineCodeIcon() {
-  return (
-    <Glyph>
-      <path d="M6.3 3.2 2.3 8l4 4.8" />
-      <path d="M9.7 3.2 13.7 8l-4 4.8" />
-    </Glyph>
-  )
-}
-
-/** Braces, because `{}` was already this button's label — just drawn now. */
-function CodeBlockIcon() {
-  return (
-    <Glyph>
-      <path d="M6.6 3c-1.4 0-2 .7-2 2v1.5c0 1-.6 1.5-1.9 1.5 1.3 0 1.9.5 1.9 1.5v1.5c0 1.3.6 2 2 2" />
-      <path d="M9.4 3c1.4 0 2 .7 2 2v1.5c0 1 .6 1.5 1.9 1.5-1.3 0-1.9.5-1.9 1.5v1.5c0 1.3-.6 2-2 2" />
-    </Glyph>
-  )
-}
-
-/**
- * A bar with lines beside it — which is what a quote looks like in this editor:
- * `.vl-quote::before` draws the same bar down the left of the line.
- */
-function QuoteIcon() {
-  return (
-    <Glyph>
-      <path d="M3.4 2.6v10.8" strokeWidth="2" />
-      <path d="M7.4 5.4h6" />
-      <path d="M7.4 9.2h4" />
-    </Glyph>
-  )
-}
-
-/** The three list commands share a rhythm: markers at these y's, text after them. */
-const LIST_ROWS = [3.8, 8, 12.2]
-
-function BulletListIcon() {
-  return (
-    <Glyph>
-      {LIST_ROWS.map((y) => (
-        <circle key={y} cx="3.6" cy={y} r="1.15" fill="currentColor" stroke="none" />
-      ))}
-      {LIST_ROWS.map((y) => (
-        <path key={y} d={`M7.7 ${y}h5.3`} />
-      ))}
-    </Glyph>
-  )
-}
-
-function OrderedListIcon() {
-  return (
-    <Glyph>
-      {/* The numerals are TEXT, not paths: at this size a drawn `2` is a two-unit
-          squiggle, while 4.8px of the UI font is still a legible digit. */}
-      {LIST_ROWS.map((y, i) => (
-        <text
-          key={y}
-          x="2.3"
-          y={y + 1.7}
-          fontSize="4.8"
-          fill="currentColor"
-          stroke="none"
-          fontFamily="var(--font-ui)"
-        >
-          {i + 1}
-        </text>
-      ))}
-      {LIST_ROWS.map((y) => (
-        <path key={y} d={`M7.7 ${y}h5.3`} />
-      ))}
-    </Glyph>
-  )
-}
-
-function TaskListIcon() {
-  return (
-    <Glyph>
-      {/* The box replaces the first row's bullet, which is how a task list reads. */}
-      <rect x="2.3" y="1.6" width="4.4" height="4.4" rx="1.1" />
-      <path d="M3.5 3.8 4.4 4.7 5.6 3" />
-      <path d="M8.7 3.8h4.3" />
-      <path d="M8.7 8h4.3" />
-      <path d="M8.7 12.2h4.3" />
-    </Glyph>
-  )
-}
-
-function TableIcon() {
-  return (
-    <Glyph>
-      <rect x="2.4" y="3.4" width="11.2" height="9.2" rx="1.2" />
-      <path d="M2.4 6.5h11.2" />
-      <path d="M2.4 9.6h11.2" />
-      <path d="M8 3.4v9.2" />
-    </Glyph>
-  )
-}
-
-/**
- * A chain link, for the toolbar's 链接 button.
- *
- * It was the emoji `🔗`, which is why it stood out: an emoji is painted by the
- * colour-emoji font at its own size and ignores both `font-size` and `color`, so
- * beside 12.5px monochrome labels it was the largest and the only coloured thing in
- * the row. Drawing it puts it under the same `currentColor` and the same stroke
- * weight as every other glyph in the app.
- *
- * Two hooks, each rotated 180° from the other about the centre — that offset is what
- * makes them read as interlocking links rather than one bent line. The paths are
- * inset to about 11.8 of the 16 units, so the ink lands near 11.8px: `☑` measures
- * 11.3px and the letter glyphs about 9px, which is the row this has to sit in.
- */
-function LinkIcon() {
-  return (
-    <Glyph>
-      <path d="M6.8 8.6a3 3 0 0 0 4.524.324l1.8-1.8a3 3 0 0 0-4.242-4.242l-1.032 1.026" />
-      <path d="M9.2 7.4a3 3 0 0 0-4.524-.324l-1.8 1.8a3 3 0 0 0 4.242 4.242l1.026-1.026" />
-    </Glyph>
-  )
-}
-
-function SaveIcon() {
-  return (
-    <Glyph>
-      <path d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5Z" />
-      <path d="M5.5 2.5v4h5v-4" />
-      <path d="M5.5 13.5v-3h5v3" />
-    </Glyph>
-  )
-}
-
-/**
- * An arrow coming DOWN into a tray: 导出.
- *
- * It pointed the other way at first, which is the classic upload/share glyph —
- * wrong way round for a command that hands the browser a file to download, and
- * easy to confuse with the floppy beside it. The tray is the same either way;
- * the arrow is what decides what a reader thinks the button does.
- */
-function ExportIcon() {
-  return (
-    <Glyph>
-      <path d="M8 2.5v8" />
-      <path d="M4.8 7.3 8 10.5l3.2-3.2" />
-      <path d="M3 13.5h10" />
-    </Glyph>
-  )
-}
-
-/** A sheet with a plus on it: 新建. */
-function NewIcon() {
-  return (
-    <Glyph>
-      <path d="M9.5 2.5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6z" />
-      <path d="M9.5 2.5V6H13" />
-      <path d="M8 8.5v3.5M6.2 10.2h3.6" />
-    </Glyph>
-  )
-}
-
-/** A folder: 打开. */
-function OpenIcon() {
-  return (
-    <Glyph>
-      <path d="M2.5 4.2a1 1 0 0 1 1-1h2.7l1.2 1.6h5.1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" />
-    </Glyph>
-  )
-}
-
-/**
- * A folder with a line under it: 打开文件夹.
- *
- * The open glyph is already a folder, so the two would be indistinguishable at
- * 16px. The line underneath is what makes this one mean "the folder as a whole"
- * — the list of documents, rather than one of them.
- */
-function FolderIcon() {
-  return (
-    <Glyph>
-      <path d="M2.5 3.8a1 1 0 0 1 1-1h2.6l1.2 1.5h5.2a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1z" />
-      <path d="M3 14h10" />
-    </Glyph>
   )
 }
