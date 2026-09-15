@@ -7,7 +7,7 @@
  */
 
 import { parseLine } from './inline'
-import { offsetForLine } from './lines'
+import { lineAt, offsetForLine } from './lines'
 
 export interface ListItem {
   /** Line index, 0-based. */
@@ -200,20 +200,6 @@ export interface IndentResult {
 }
 
 /** The 0-based line holding `offset`, with the line's own start offset and text. */
-function lineAt(doc: string, offset: number) {
-  const lines = doc.split('\n')
-  let start = 0
-  let index = lines.length - 1
-  for (let i = 0; i < lines.length; i++) {
-    const end = start + lines[i].length
-    if (offset <= end) {
-      index = i
-      break
-    }
-    start = end + 1
-  }
-  return { lines, index, start, text: lines[index] }
-}
 
 /** The line holding `offset`, and its `ListItem` (null when it is not one). */
 function locate(doc: string, offset: number) {

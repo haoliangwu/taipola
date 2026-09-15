@@ -256,6 +256,27 @@ describe('嵌套与表格结构', () => {
     const v = view('| --- | --- |')
     expect(v.lines[0].runs).toEqual([])
     expect(v.lines[0].text).toBe('')
+    expect(v.lines[0].cellRuns).toBeUndefined()
+  })
+
+  it('空数据行是一行格子，不是分隔行（table-ops/01）', () => {
+    // 工具栏插出来的骨架就是这个数据行。它曾经被当成 `| --- |` 分隔行：没有 runs、
+    // 没有格子、渲染成 0 高度，光标进不去，打进去的第一个字还被丢掉。
+    const v = view('|  |  |')
+    expect(v.lines[0].runs).toEqual([])
+    expect(v.lines[0].cellRuns).toEqual([[], []])
+    expect(v.lines[0].cellSrcs).toEqual([3, 6])
+  })
+
+  it('有内容的格子带着自己的内容起点（空格子的落点也在这里）', () => {
+    const v = view('| a | b |')
+    expect(v.lines[0].cellSrcs).toEqual([2, 6])
+  })
+
+  it('少一根尾管道时最后一格仍然在视图里', () => {
+    const v = view('| a | b')
+    expect(v.lines[0].text).toBe('ab')
+    expect(v.lines[0].cellRuns).toEqual([[0], [1]])
   })
 
   it('空块按官方行跨度补足行盒', () => {

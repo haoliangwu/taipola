@@ -44,3 +44,33 @@ export function lineOfOffset(text: string, offset: number): number {
 export function isBlankLine(text: string): boolean {
   return /^[ \t]*$/.test(text)
 }
+
+/**
+ * The line an offset falls on: the whole document split into lines, the 0-based
+ * line index, that line's start offset and its text.
+ *
+ * An offset exactly AT a line's end (the newline's own position) belongs to that
+ * line, which is what makes "where does this caret sit?" have one answer at a
+ * boundary. It moved here from `lists.ts`, where a private copy served the list
+ * rules; `tables.ts` needs the same answer about the same kind of offset, and a
+ * second copy is how the table row predicates drifted in the first place.
+ */
+export function lineAt(doc: string, offset: number): {
+  lines: string[]
+  index: number
+  start: number
+  text: string
+} {
+  const lines = doc.split('\n')
+  let start = 0
+  let index = lines.length - 1
+  for (let i = 0; i < lines.length; i++) {
+    const end = start + lines[i].length
+    if (offset <= end) {
+      index = i
+      break
+    }
+    start = end + 1
+  }
+  return { lines, index, start, text: lines[index] }
+}

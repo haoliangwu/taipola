@@ -42,16 +42,51 @@ export function isThematicBreak(raw: string): boolean {
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(.*)$/
 const TASK_RE = /^(\[[ xX]\])(\s+)(.*)$/
 const QUOTE_RE = /^(\s*)(>+)(\s?)(.*)$/
-const TABLE_DELIM_RE = /^\s*\|?[\s:|-]+\|[\s:|-]*$/
+/**
+ * True when a line is a table ROW — `| a | b |`.
+ *
+ * Two pipes minimum, because a single pipe has no cell between them and the line
+ * would render as a row with nothing in it. It used to accept any line that
+ * merely ENDED in a pipe (`a | b |`), which made an ordinary paragraph a "table
+ * row": the line kind said `table` while the view drew it as plain text, and
+ * `computeLineStates` treats a table row as un-splittable, so Enter on that
+ * paragraph was a silent no-op. One predicate now, and `view.ts` imports it
+ * instead of keeping the near-copy that had already drifted from this one.
+ */
+export function isTableRow(raw: string): boolean {
+  const t = raw.trim()
+  return t.startsWith('|') && (t.match(/\|/g)?.length ?? 0) >= 2
+}
+
+/** One cell of a GFM delimiter row: `---`, `:--`, `--:`, `:-:`. */
+const TABLE_DELIM_CELL_RE = /^:?-+:?$/
+
+/**
+ * True when a line IS a table's `| --- | --- |` rule row.
+ *
+ * GFM spells a delimiter cell `:?-+:?`, so **the dash is not optional**. The
+ * regex this replaces (`/^\|?[\s:|-]+\|[\s:|-]*$/`) accepted any run of pipes,
+ * spaces and colons — which includes the empty data row the toolbar's own
+ * skeleton inserts, `|  |  |`. That row was therefore classified as the rule row
+ * and rendered as one: a zero-height line with no cells in it, unreachable by the
+ * caret, where the first character typed (landing after the trailing pipe) was
+ * dropped rather than drawn (`.scratch/table-ops/issues/01`).
+ */
+export function isTableDelimiterRow(raw: string): boolean {
+  if (!isTableRow(raw)) return false
+  const cells = raw.trim().replace(/^\|/, '').replace(/\|$/, '').split('|')
+  return cells.length > 0 && cells.every((cell) => TABLE_DELIM_CELL_RE.test(cell.trim()))
+}
 
 /** Splits a raw line into its block markup and its content. */
 export function parseLine(raw: string): LineParts {
+  const isRow = isTableRow(raw)
   const parts: LineParts = {
     prefix: '',
     isFence: false,
     isRule: isThematicBreak(raw),
     isTableDelimiter: false,
-    isTableRow: raw.trim().startsWith('|') || (raw.includes('|') && raw.trim().endsWith('|')),
+    isTableRow: isRow,
   }
 
   if (parts.isRule) return parts
@@ -64,7 +99,7 @@ export function parseLine(raw: string): LineParts {
     return parts
   }
 
-  parts.isTableDelimiter = parts.isTableRow && TABLE_DELIM_RE.test(raw)
+  parts.isTableDelimiter = isRow && isTableDelimiterRow(raw)
 
   let rest = raw
   let prefix = ''

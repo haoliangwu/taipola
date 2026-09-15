@@ -11,9 +11,16 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
-import { FOOTNOTE_DEFINITION, MATH_FORMS, isThematicBreak } from './inline'
+import {
+  FOOTNOTE_DEFINITION,
+  MATH_FORMS,
+  isTableDelimiterRow,
+  isTableRow,
+  isThematicBreak,
+} from './inline'
 import { readImageSize } from './imageSize'
 import { isBlankLine } from './lines'
+import { tableRowCells } from './tables'
 import { exportableHref, md } from './markdownIt'
 import { fenceLanguage, highlightCode, tokensByLine, type CodeToken } from './codeHighlight'
 
@@ -125,6 +132,17 @@ interface ViewLine {
    * a cell whose inline markers are revealed into several columns.
    */
   cellRuns?: number[][]
+  /**
+   * Table rows only: block-local source offset where each cell's CONTENT starts,
+   * one per cell, parallel to `cellRuns`.
+   *
+   * An empty cell renders no run, so it has no `run.src` to read a caret position
+   * from — and the caret still has to be able to sit in it, or the cell is not
+   * editable at all. This is that position, and it is also what the row's leading
+   * and trailing spaces are excluded from, so it is the same offset a non-empty
+   * cell's first run reports.
+   */
+  cellSrcs?: number[]
   /** `visibleToSource[i]` = block-local source offset of laid-out cell i. */
   visibleToSource: number[]
   /** `sourceToVisible[local]` = laid-out cell index, or -1 for no width. */
@@ -652,26 +670,18 @@ function blockPrefixRange(raw: string): { start: number; end: number } | null {
   return end > 0 ? { start: 0, end } : null
 }
 
-function isTableRow(raw: string): boolean {
-  const t = raw.trim()
-  return t.startsWith('|') && t.length > 1
-}
-
 /**
  * Builds the view of a single source line.
  *
  * Table rows take a separate path, because a grid row cannot host collapsed
  * marker runs — see `buildTableLine`.
  */
-const TABLE_DELIMITER_RE = /^\|?[\s:|-]+\|[\s:|-]*$/
-
-/** A table's `| --- |` rule line renders as an empty line box. */
-function isTableDelimiter(raw: string): boolean {
-  return isTableRow(raw) && TABLE_DELIMITER_RE.test(raw.trim())
-}
-
 function buildLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
-  if (isTableDelimiter(raw)) return emptyLine(raw.length, sourceStart)
+  // Both predicates come from `./inline`, which is also what gives a line its
+  // KIND. The private copies that used to sit here had drifted from those — and
+  // the disagreement is what made an empty data row render as a rule row
+  // (`.scratch/table-ops/issues/01`). A rule row is a line box with no cells.
+  if (isTableDelimiterRow(raw)) return emptyLine(raw.length, sourceStart)
   // A whitespace-only line is BLANK to Markdown, but its characters are the
   // user's source. The parser keeps them in the block's raw now, so the view has
   // to carry them too — otherwise the renderer would have to reach into
@@ -729,44 +739,39 @@ function emptyLine(length: number, sourceStart = 0): ViewLine {
  * per-cell source offsets keep the caret mapping exact.
  */
 function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
-  const pieces = raw.split('|')
+  const cells = tableRowCells(raw)
   const runs: ViewRun[] = []
   const cellRuns: number[][] = []
+  const cellSrcs: number[] = []
   const visibleToSource: number[] = []
   const sourceToVisible = new Array(raw.length).fill(-1) as number[]
   const sourceToMarker = new Array(raw.length).fill(-1) as number[]
   const markers: MarkerCell[] = []
 
-  let at = 0
-  for (let pi = 0; pi < pieces.length; pi++) {
-    const piece = pieces[pi]
-    const pieceStart = at
-    at += piece.length + 1 // this piece plus the pipe that followed it
-
-    // The leading and trailing pieces are the two edge pipes themselves, not
-    // cells; a middle piece may be an empty cell and must keep its column.
-    const isEdge = pi === 0 || pi === pieces.length - 1
-
+  for (const cell of cells) {
+    const { contentStart, contentEnd } = cell
+    // Surrounding spaces are padding, not content. Dropping them is what makes
+    // each column's text start at the same x on every row. For an all-padding
+    // cell the two are equal, so the cell's caret position is the END of its
+    // piece — right before the closing pipe, which is where its first typed
+    // character belongs.
     const cellStart = runs.length
-    const trimmed = piece.trim()
-    if (trimmed !== '' && !isEdge) {
-      // Surrounding spaces are padding, not content. Dropping them is what makes
-      // each column's text start at the same x on every row.
-      const lead = piece.length - piece.trimStart().length
+    const trimmed = raw.slice(contentStart, contentEnd)
+    if (trimmed !== '') {
       const inner = buildInlineLine(
         trimmed,
-        revealFrom === null ? null : revealFrom - pieceStart - lead,
-        sourceStart + pieceStart + lead,
+        revealFrom === null ? null : revealFrom - contentStart,
+        sourceStart + contentStart,
         { revealInBlock: opts.revealInBlock, cell: true },
       )
       for (const run of inner.runs) {
-        // `run.src` already includes `sourceStart + pieceStart + lead` — the
-        // cell's block-relative origin — so it must NOT be shifted again. Adding
-        // `pieceStart + lead` a second time double-counted the cell offset and
-        // broke data-src for every cell after the first.
+        // `run.src` already includes `sourceStart + contentStart` — the cell's
+        // block-relative origin — so it must NOT be shifted again. Adding it a
+        // second time double-counted the cell offset and broke data-src for every
+        // cell after the first.
         runs.push(run)
         if (run.marker) {
-          const cell = markers.length
+          const marker = markers.length
           markers.push({
             openStart: run.src,
             openEnd: run.src + run.text.length,
@@ -776,26 +781,26 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0,
           // `sourceToMarker` indexes the row's own characters, so the block
           // origin has to come back out.
           const rowLocal = run.src - sourceStart
-          for (let k = 0; k < run.text.length; k++) sourceToMarker[rowLocal + k] = cell
+          for (let k = 0; k < run.text.length; k++) sourceToMarker[rowLocal + k] = marker
         }
       }
       for (let k = 0; k < trimmed.length; k++) {
         const local = inner.sourceToVisible[k]
-        sourceToVisible[pieceStart + lead + k] = local === -1 ? -1 : visibleToSource.length + local
+        sourceToVisible[contentStart + k] = local === -1 ? -1 : visibleToSource.length + local
       }
-      for (const src of inner.visibleToSource) visibleToSource.push(src + pieceStart + lead)
+      for (const src of inner.visibleToSource) visibleToSource.push(src + contentStart)
     }
-    if (!isEdge) {
-      const indices: number[] = []
-      for (let i = cellStart; i < runs.length; i++) indices.push(i)
-      cellRuns.push(indices)
-    }
+    const indices: number[] = []
+    for (let i = cellStart; i < runs.length; i++) indices.push(i)
+    cellRuns.push(indices)
+    cellSrcs.push(sourceStart + contentStart)
   }
 
   return {
     sourceStart,
     runs,
     cellRuns,
+    cellSrcs,
     visibleToSource,
     sourceToVisible,
     sourceToMarker,

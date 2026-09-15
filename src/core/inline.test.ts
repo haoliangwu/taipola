@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { computeLineStates, parseLine, stripInline, visibleToSourceIndex } from './inline'
+import {
+  computeLineStates,
+  isTableDelimiterRow,
+  isTableRow,
+  parseLine,
+  stripInline,
+  visibleToSourceIndex,
+} from './inline'
 
 /** One helper so each syntax case is one line of test data. */
 function state(line: string) {
@@ -35,6 +42,54 @@ describe('parseLine：块级前缀', () => {
     expect(parseLine('| a | b |').isTableRow).toBe(true)
     expect(parseLine('| --- | --- |').isTableDelimiter).toBe(true)
     expect(parseLine('| a | b |').isTableDelimiter).toBe(false)
+  })
+})
+
+/**
+ * 表格的两个判据：一条行、一条分隔行（`.scratch/table-ops/issues/01`）。
+ *
+ * 它们曾经是散在三处的正则副本，而且两份"这是分隔行吗"都只要求"管道、空格、冒号、
+ * 减号"，不要求减号 —— 于是工具栏自己插出来的空数据行 `|  |  |` 被当成了 `| --- |`
+ * 分隔行：渲染成 0 高度、没有格子、光标进不去的一行。
+ */
+describe('表格行与分隔行的判据', () => {
+  it.each([
+    ['| a | b |', true],
+    ['|  |  |', true],
+    ['||', true],
+    ['| a |', true],
+    ['| a | b', true],
+    ['|', false],
+    ['a | b |', false],
+    ['|x', false],
+    ['正文', false],
+  ])('%j 是表格行：%s', (line, expected) => {
+    expect(isTableRow(line)).toBe(expected)
+  })
+
+  it.each([
+    ['| --- | --- |', true],
+    ['|---|---|', true],
+    ['|-|-|', true],
+    ['| --- |', true],
+    ['| :--- | ---: |', true],
+    ['|  |  |', false],
+    ['||', false],
+    ['|-- --|', false],
+    ['| --- | --- |x', false],
+    ['| a | b |', false],
+  ])('%j 是分隔行：%s', (line, expected) => {
+    expect(isTableDelimiterRow(line)).toBe(expected)
+  })
+
+  it('空数据行的行种是 table，不是 table-delim', () => {
+    expect(state('|  |  |').kind).toBe('table')
+    expect(state('| --- | --- |').kind).toBe('table-delim')
+  })
+
+  it('结尾是管道的普通段落不再被当成表格行（那一行曾经连 Enter 都按不动）', () => {
+    expect(parseLine('a | b |').isTableRow).toBe(false)
+    expect(state('a | b |').kind).toBe('text')
   })
 })
 

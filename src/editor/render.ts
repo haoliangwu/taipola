@@ -14,7 +14,12 @@
  *   `[data-block]`  one per source block, carries `data-src-start` and `data-kind`
  *   `[data-vline]`  one per source line inside a block, carries `data-src`
  *   `[data-run]`    one per non-empty run of view characters, carries `data-src`
- *   `[data-cell]`   one per table cell, holding that row's run spans
+ *   `[data-cell]`   one per table cell, holding that row's run spans, and carrying
+ *                   `data-cell-src` — the cell's content start. A cell with no
+ *                   runs has no `data-src` to read a caret position from, and
+ *                   without one the caret fell to the ROW's start, i.e. in front
+ *                   of the first pipe, where the next typed character stopped the
+ *                   line being a row at all.
  *
  * Empty lines render a single `<br data-br>`: without a text position inside the
  * line box, the browser resolves a caret anchored there back to the end of the
@@ -287,6 +292,12 @@ function lineElement(
       const cellEl = current && current.hasAttribute('data-cell') ? current : document.createElement('span')
       if (cellEl.className !== 'cell') cellEl.className = 'cell'
       setAttr(cellEl, 'data-cell', String(cellIndex))
+      // The cell's CONTENT start, so that a cell with no runs is still an
+      // addressable position (see `ViewLine.cellSrcs`). Without it a click on an
+      // empty cell fell through to the line-start fallback and the next typed
+      // character landed BEFORE the row's first pipe, which stops the line being
+      // a row at all.
+      setAttr(cellEl, 'data-cell-src', String(line.cellSrcs?.[cellIndex] ?? line.sourceStart))
       const cell = line.cellRuns![cellIndex] ?? []
       syncChildren(cellEl, cell.length, (i, runEl) => runElement(runEl, line.runs[cell[i]], cell[i], state))
       return cellEl
@@ -470,37 +481,34 @@ function runSource(run: HTMLElement): string {
 }
 
 /**
+ * The characters a box holds, in DOM order: its run spans plus any DIRECT text
+ * node the browser inserted into it.
+ *
+ * Both sources are mandatory. A box with runs is the normal case, but the browser
+ * types straight into the box when there is no run to type into — an empty line,
+ * and an empty table CELL — and skipping those silently ate the keystroke.
+ */
+function boxSource(box: HTMLElement): string {
+  let text = ''
+  for (const node of box.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) text += node.textContent ?? ''
+    else if (node instanceof HTMLElement && node.hasAttribute('data-run')) text += runSource(node)
+  }
+  return text
+}
+
+/**
  * The characters a line box currently holds, in DOM order.
  *
- * Span text is the common case. A line box can also hold DIRECT text nodes: the
- * browser inserts typing into an empty line (which renders no child of its own)
- * straight into the box, before any run span exists. Skipping them silently ate
- * every keystroke typed into an empty line, so both sources are read.
- *
- * TABLE lines are different: the DOM renders a grid of CELLS whose pipes are
- * deliberately not present as text (blockified grid children would each claim a
- * column). To rebuild the SOURCE from the DOM they must be re-inserted — the
- * canonical `| a | b |` form.
+ * TABLE lines are different from every other line: the DOM renders a grid of
+ * CELLS whose pipes are deliberately not present as text (blockified grid
+ * children would each claim a column). To rebuild the SOURCE from the DOM they
+ * must be re-inserted — the canonical `| a | b |` form.
  */
 function textOfLine(lineEl: HTMLElement): string {
   const cells = [...lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')]
-  if (cells.length > 0) {
-    const parts = cells.map((cell) =>
-      [...cell.querySelectorAll<HTMLElement>('[data-run]')].map(runSource).join(''),
-    )
-    return `| ${parts.join(' | ')} |`
-  }
-
-  let text = ''
-  for (const node of lineEl.childNodes) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.textContent ?? ''
-    } else if (node instanceof HTMLElement) {
-      if (node.hasAttribute('data-run')) text += runSource(node)
-      // `<br>` and other foreign elements contribute no characters.
-    }
-  }
-  return text
+  if (cells.length > 0) return `| ${cells.map(boxSource).join(' | ')} |`
+  return boxSource(lineEl)
 }
 
 /**

@@ -170,6 +170,73 @@ describe('sourceOffsetAtPoint', () => {
   })
 })
 
+/**
+ * 表格格子：空格子也是一个落点（`.scratch/table-ops/issues/01`）。
+ *
+ * 空格子渲染不出 run，也就没有 `run.src` 可以读落点。整行的兜底是"行首"，而行首
+ * 在表格行上是**第一根管道之前** —— 往那里打字会把行变成普通段落，表格就散了。
+ * 所以每格自己带一个 `data-cell-src`（它的内容起点），落点和光标回读都走它。
+ */
+describe('表格格子：空格子也是一个落点', () => {
+  const TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |'
+
+  /**
+   * `mount` 传进去的行种是空数组，于是块上没有 `data-kind` —— 而表格的网格 CSS 认
+   * 的就是它（`.blk[data-kind='table'] .vl-table`）。少了它，格子退化成一排零宽的
+   * 行内 span，"点在哪一格"就无从量起。补上它，量的是真的格子盒。
+   */
+  function mountTable() {
+    const m = mount(TABLE, null, 3)
+    m.host.querySelector('[data-block]')?.setAttribute('data-kind', 'table')
+    return m
+  }
+
+  it('点到左边空格子：落点是这一格的内容起点，不是整行行首', () => {
+    const { host } = mountTable()
+    const cell = host.querySelector<HTMLElement>('[data-vline="2"] [data-cell="0"]')!
+    const rect = cell.getBoundingClientRect()
+    // 第三行起始于 28：`|` + 两个空格之后是 31。
+    expect(sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, cell)).toEqual({
+      block: 0,
+      local: 31,
+    })
+  })
+
+  it('点到右边空格子：落的是那一格', () => {
+    const { host } = mountTable()
+    const cell = host.querySelector<HTMLElement>('[data-vline="2"] [data-cell="1"]')!
+    const rect = cell.getBoundingClientRect()
+    expect(sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, cell)).toEqual({
+      block: 0,
+      local: 34,
+    })
+  })
+
+  it('派发事件时 target 是整行也不影响：按格子盒判断', () => {
+    const { host } = mountTable()
+    const cell = host.querySelector<HTMLElement>('[data-vline="2"] [data-cell="1"]')!
+    const row = host.querySelector<HTMLElement>('[data-vline="2"]')!
+    const rect = cell.getBoundingClientRect()
+    expect(sourceOffsetAtPoint(rect.left + 1, rect.top + rect.height / 2, row)).toEqual({
+      block: 0,
+      local: 34,
+    })
+  })
+
+  it('applyCaret 把光标放进空格子，而不是行盒上', () => {
+    const { host, view } = mountTable()
+    expect(applyCaret(host, 0, view, 0, 31)).toBe(true)
+    const anchor = window.getSelection()?.anchorNode as HTMLElement
+    expect(anchor.getAttribute('data-cell-src')).toBe('31')
+  })
+
+  it('空格子上的光标回读成这一格的内容起点', () => {
+    const { host, view } = mountTable()
+    applyCaret(host, 0, view, 0, 31)
+    expect(caretOffset(view)).toBe(31)
+  })
+})
+
 describe('软换行的命中测试', () => {
   it('同一个段落里的第二个源码行，点它给出的仍是它自己的偏移', () => {
     // 两行各占一个视觉行（源码一行＝屏幕一行），命中测试要按行盒算。

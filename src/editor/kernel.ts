@@ -40,6 +40,7 @@ import {
   sanitizeDom,
 } from './render'
 import { isBlankLine, lineOfOffset, offsetForLine } from '../core/lines'
+import { blocksTableBackspace } from '../core/tables'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -760,6 +761,18 @@ export class EditorKernel {
     if (event.key === 'Backspace' && live !== null) {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        // A TABLE's structure is not the caret's to delete. Backspace inside a
+        // cell's own text is an ordinary character delete and falls through, but
+        // at a cell's content start — and anywhere in the pipes, the padding, or
+        // the `| --- |` rule row — it would delete the source the row is made of
+        // rather than a row or a column: measured, one Backspace at a cell's left
+        // edge joined the row onto the rule line above and the data row was gone
+        // (`.scratch/table-ops/issues/01`). A no-op takes no undo snapshot,
+        // exactly like the other guarded no-ops, so Cmd+Z never dead-steps.
+        if (blocksTableBackspace(this.doc, live)) {
+          event.preventDefault()
+          return
+        }
         const left = this.leavingEmptyItem(live) ?? backspaceAtContentStart(this.doc, live)
         if (left) {
           event.preventDefault()

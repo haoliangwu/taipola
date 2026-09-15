@@ -18,6 +18,46 @@
 import type { BlockView } from '../core/view'
 
 /**
+ * The `[data-cell]` a node sits in, or null — table rows only.
+ *
+ * A cell's box is a caret position in its own right (`data-cell-src`, its content
+ * start), which is what makes a cell with no runs editable at all: an empty cell
+ * renders no run to read an offset from, and falling through to the line-start
+ * fallback put the caret before the row's first pipe, where typing stops the line
+ * being a row.
+ */
+function cellAround(node: Node | null): HTMLElement | null {
+  const el = node instanceof Element ? node : node?.parentElement
+  return el?.closest?.<HTMLElement>('[data-cell]') ?? null
+}
+
+/** A cell's content-start source offset (block-local), or null when unset. */
+function cellSource(cell: HTMLElement | null): number | null {
+  const raw = cell?.dataset.cellSrc
+  if (raw === undefined) return null
+  const value = Number(raw)
+  return Number.isNaN(value) ? null : value
+}
+
+/** True when a cell holds no laid-out run — the case `data-cell-src` exists for. */
+function cellIsEmpty(cell: HTMLElement): boolean {
+  return cell.querySelector('[data-run]') === null
+}
+
+/**
+ * The cell a run-less table row should take the caret in.
+ *
+ * The last cell whose content starts at or before `local`, so a caret anywhere
+ * inside a cell's box lands in that cell and a caret before the first cell's
+ * content lands in the first cell rather than nowhere.
+ */
+function cellIndexForSource(cellSrcs: number[], local: number): number {
+  let best = 0
+  for (let i = 0; i < cellSrcs.length; i++) if (cellSrcs[i] <= local) best = i
+  return best
+}
+
+/**
  * Where a source offset lands on screen: which line box holds it, which run
  * inside that box, and how far into the run's text.
  *
@@ -172,6 +212,17 @@ export function applyCaret(
     } else {
       range.selectNodeContents(span)
     }
+  } else if (lineEl.querySelector(':scope > [data-cell]')) {
+    // A table row whose target cell holds no runs: the cell's own BOX is the
+    // caret position (see `ViewLine.cellSrcs`). Anchoring on the row element
+    // instead lets the browser resolve the caret against the nearest text it can
+    // find — the header row above — and the read-back then drags both the caret
+    // and the next typed character out of the row, which stops the line being a
+    // row at all.
+    const line = view.lines[target.lineIndex]
+    const cellEls = lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')
+    const index = cellIndexForSource(line?.cellSrcs ?? [], want - blockStart)
+    range.setStart(cellEls[Math.min(index, cellEls.length - 1)], 0)
   } else {
     // An EMPTY or fully collapsed line (a blank block, a whitespace-only line, the
     // blank line left by exiting an empty list item) has no run span that can hold
@@ -211,6 +262,26 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   const runs = [...lineEl.querySelectorAll<HTMLElement>('[data-run]')]
   const inside = offsetInsideRuns(runs, node, offset)
   if (inside !== null) return inside
+
+  // A table cell: `data-cell-src` is the cell's content start, and the browser
+  // types straight into the cell box when there is no run to type into — so the
+  // caret can be anchored on the cell, on a direct text node inside it, or on the
+  // line box itself. Counting from the cell's own origin keeps every one of those
+  // inside the cell; the line-start fallback below would put them before the
+  // row's first pipe, which stops the line being a row.
+  const cell = cellAround(node)
+  const cellSrc = cellSource(cell)
+  if (cell !== null && cellSrc !== null) {
+    let seen = 0
+    for (const child of Array.from(cell.childNodes)) {
+      if (child === node) return cellSrc + seen + offset
+      if (child.nodeType === Node.TEXT_NODE) seen += child.textContent?.length ?? 0
+      else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
+        seen += child.textContent?.length ?? 0
+      }
+    }
+    return cellSrc
+  }
 
   // The caret sits in a DIRECT text node of the line box. That is what typing
   // into an empty line produces: the line renders no run span of its own, so the
@@ -308,6 +379,32 @@ export function sourceOffsetAtPoint(
   if (node) {
     const inside = offsetInsideRuns(runs, node, offset)
     if (inside !== null) return { block, local: inside }
+  }
+
+  // A table cell with no runs: its box IS the caret position, and the only one
+  // that keeps characters inside the row. Checked against the point's own cell
+  // first (the browser resolves a click on empty space to a nearby text node),
+  // then against the event's target, which is the cell the user actually hit.
+  const emptyCell = [cellAround(node), cellAround(fallback)].find(
+    (cell): cell is HTMLElement => cell !== null && cellIsEmpty(cell),
+  )
+  const emptyCellSrc = cellSource(emptyCell ?? null)
+  if (emptyCellSrc !== null) return { block, local: emptyCellSrc }
+
+  // Neither the resolved node nor the event's target names a cell (a synthetic
+  // click carries whatever target its dispatcher chose), so the CELL BOXES
+  // decide: a row with no runs at all is a grid of boxes, and the point's own box
+  // is the cell the user meant.
+  const cellBoxes = [...lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')]
+  if (cellBoxes.length > 0 && cellBoxes.every(cellIsEmpty)) {
+    const hit = cellBoxes.find((cell) => {
+      const rect = cell.getBoundingClientRect()
+      return (
+        clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
+      )
+    })
+    const boxSrc = cellSource(hit ?? cellBoxes[0])
+    if (boxSrc !== null) return { block, local: boxSrc }
   }
 
   // Fallback: measure horizontally against the line's runs.
