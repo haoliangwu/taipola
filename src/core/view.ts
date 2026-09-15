@@ -15,6 +15,7 @@ import { FOOTNOTE_DEFINITION, MATH_FORMS, isThematicBreak } from './inline'
 import { readImageSize } from './imageSize'
 import { isBlankLine } from './lines'
 import { exportableHref, md } from './markdownIt'
+import { fenceLanguage, highlightCode, tokensByLine, type CodeToken } from './codeHighlight'
 
 interface MarkerCell {
   /** Source range of the opening marker, e.g. the `**` of `**bold**`. */
@@ -59,6 +60,18 @@ interface Mark {
   superscript?: boolean
   subscript?: boolean
   img?: ImageMark
+  /**
+   * Code-block token classes (`hljs-keyword`, `hljs-title function_`, …) from
+   * `./codeHighlight`. Present only on code content lines whose fence named a
+   * language highlight.js knows.
+   *
+   * This is the ONE mark that does not come from a Markdown construct: it
+   * describes how the line is *painted*, and it is derived from the line's own
+   * text, so — like every other mark — it depends on nothing but the source. The
+   * collapsed and revealed states therefore share one segmentation, which
+   * ADR-0002 §1 requires.
+   */
+  hl?: string
 }
 
 /** A run of characters sharing one styling and one visibility. */
@@ -88,6 +101,12 @@ interface BuildOptions {
   cell?: boolean
   /** True when the PREVIOUS line ended in a soft break (a paragraph continuation). */
   continues?: boolean
+  /**
+   * This code line's share of the block's highlight token stream, already cut to
+   * the line by `tokensByLine`. Absent when nothing is highlighted (no language,
+   * an unknown one, or a block over the size ceiling).
+   */
+  codeTokens?: CodeToken[]
 }
 
 interface ViewLine {
@@ -797,11 +816,60 @@ function buildTableLine(raw: string, revealFrom: number | null, sourceStart = 0,
  * block and are revealed while the caret is anywhere inside it, which is what
  * makes `# Title` behave like Typora's headings.
  */
+/**
+ * A code content line built straight from highlight.js's tokens.
+ *
+ * A fence's interior has no syntax of its own: nothing collapses, nothing is
+ * hidden, and every character is laid out. So the whole scanning loop below —
+ * token boundaries, marker ranges, hidden runs — has nothing to contribute here,
+ * and running it would be actively wrong, because `findTokens` must NOT read a
+ * `**` inside a fence as a construct.
+ *
+ * Returns null when the tokens do not tile the line exactly, and the caller then
+ * renders plain source. That check is what makes this feature unable to corrupt
+ * the model: a highlighter bug costs colour, never characters.
+ */
+function codeLineView(raw: string, sourceStart: number, tokens: CodeToken[]): ViewLine | null {
+  if (tokens.map((token) => token.text).join('') !== raw) return null
+  const runs: ViewRun[] = []
+  let at = 0
+  for (const token of tokens) {
+    runs.push({
+      text: token.text,
+      src: sourceStart + at,
+      mark: token.cls ? { hl: token.cls } : {},
+      marker: false,
+    })
+    at += token.text.length
+  }
+  // With no collapsed marker on the line, laid-out cell `i` IS source character
+  // `i` — the identity mapping, which is also what `sourceToMarker` being empty
+  // implies.
+  const sourceToVisible = Array.from({ length: raw.length }, (_, i) => i)
+  return {
+    sourceStart,
+    runs,
+    visibleToSource: sourceToVisible.slice(),
+    sourceToVisible,
+    sourceToMarker: new Array(raw.length).fill(-1) as number[],
+    markers: [],
+    text: raw,
+  }
+}
+
 function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0, opts: BuildOptions = {}): ViewLine {
   const revealInBlock = opts.revealInBlock === true
   const inCode = opts.inCode === true
   const isTableCell = opts.cell === true
   const isFenceLine = !inCode && !isTableCell && /^\s*(`{3,}|~{3,})/.test(raw)
+
+  // A highlighted code line takes the short path. It has to be decided here,
+  // before the token scan, because the scan is what would misread the line's
+  // content as Markdown.
+  if (inCode && opts.codeTokens) {
+    const codeLine = codeLineView(raw, sourceStart, opts.codeTokens)
+    if (codeLine) return codeLine
+  }
 
   // Code content and fence lines are literal: a `**` inside a fence is text,
   // and a fence opener must not be misread as an inline-code construct.
@@ -1037,29 +1105,98 @@ export function buildBlockView(
   const revealInBlock = reveals.length > 0
   const lines: ViewLine[] = []
   let base = 0
-  // Only a fence with the SAME marker character closes the open one, so ``` inside
-  // a ~~~ block is code content (this must match `computeLineStates`).
-  let openFence: string | null = null
 
   const rawLines = raw === '' ? [] : raw.split('\n')
   const total = Math.max(rawLines.length, lineCount ?? (rawLines.length || 1))
+  const lineText = (li: number) => (li < rawLines.length ? rawLines[li] : '')
+
+  // Fence structure FIRST, and separately from building the lines. Highlighting
+  // has to see a whole code region at once: a block comment, a template literal
+  // or a Python triple-quoted string spans lines, and colouring each line on its
+  // own would highlight the first line of such a construct and give up on the
+  // rest. Only a fence with the SAME marker character closes the open one, so
+  // ``` inside a ~~~ block is code content (this must match `computeLineStates`).
+  const inCode: boolean[] = []
+  const codeLang: (string | null)[] = []
+  let openFence: string | null = null
+  let openLang: string | null = null
   for (let li = 0; li < total; li++) {
-    const line = li < rawLines.length ? rawLines[li] : ''
+    const fence = fenceInfo(lineText(li))
+    const closes = fence !== null && fence.marker === openFence
+    if (openFence !== null && !closes) {
+      inCode.push(true)
+      codeLang.push(openLang)
+      continue
+    }
+    inCode.push(false)
+    codeLang.push(null)
+    // A matching marker closes the open fence; with nothing open, this line opens one.
+    if (closes) {
+      openFence = null
+      openLang = null
+    } else if (openFence === null && fence !== null) {
+      openFence = fence.marker
+      openLang = fenceLanguage(fence.info)
+    }
+  }
+
+  const codeTokens = highlightCodeLines(lineText, inCode, codeLang, total)
+
+  for (let li = 0; li < total; li++) {
+    const line = lineText(li)
     const local = reveals.filter((r) => r >= base && r <= base + line.length)
-    const fenceMarker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1][0] ?? null
-    const closes = fenceMarker !== null && fenceMarker === openFence
-    const inCode = openFence !== null && !closes
     lines.push(
       buildLine(line, local.length ? local[0] - base : null, base, {
         revealInBlock,
-        inCode,
+        inCode: inCode[li],
         continues: softBreaks.has(li - 1),
+        codeTokens: codeTokens[li],
       }),
     )
-    // A matching marker closes the open fence; with nothing open, this line opens one.
-    if (closes) openFence = null
-    else if (openFence === null && fenceMarker !== null) openFence = fenceMarker
     base += line.length + 1
   }
   return { lines }
+}
+
+/** A fence line's marker character and info string, or null when it is not one. */
+function fenceInfo(line: string): { marker: string; info: string } | null {
+  const match = /^\s*(`{3,}|~{3,})(.*)$/.exec(line)
+  return match ? { marker: match[1][0], info: match[2] } : null
+}
+
+/**
+ * Tokenizes every code region in the block, one region at a time.
+ *
+ * A region is the run of lines between a fence and its closer; it is highlighted
+ * as a single string (lines joined by `\n`, which is exactly how the source reads
+ * to the highlighter) and then cut back apart, so each line gets its own share
+ * with the classes the region-wide analysis produced.
+ *
+ * Anything that cannot be split back exactly is dropped, and those lines render
+ * as plain source — the caller's fallback.
+ */
+function highlightCodeLines(
+  lineText: (li: number) => string,
+  inCode: boolean[],
+  codeLang: (string | null)[],
+  total: number,
+): Array<CodeToken[] | undefined> {
+  const perLine: Array<CodeToken[] | undefined> = new Array(total).fill(undefined)
+  let li = 0
+  while (li < total) {
+    if (!inCode[li]) {
+      li++
+      continue
+    }
+    let end = li
+    while (end < total && inCode[end]) end++
+
+    const texts = Array.from({ length: end - li }, (_, i) => lineText(li + i))
+    const tokens = highlightCode(texts.join('\n'), codeLang[li] ?? null)
+    const split = tokens && tokensByLine(tokens, texts)
+    if (split) for (let i = 0; i < split.length; i++) perLine[li + i] = split[i]
+
+    li = end
+  }
+  return perLine
 }

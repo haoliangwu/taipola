@@ -26,6 +26,7 @@ function runs(v: BlockView, line = 0) {
     ...(run.mark.code ? { code: true } : {}),
     ...(run.mark.link ? { link: run.mark.link } : {}),
     ...(run.mark.math ? { math: run.mark.math } : {}),
+    ...(run.mark.hl ? { hl: run.mark.hl } : {}),
     ...(run.mark.footnoteRef ? { footnoteRef: run.mark.footnoteRef } : {}),
     ...(run.mark.img ? { img: run.mark.img.src } : {}),
   }))
@@ -550,5 +551,80 @@ describe('裸标记对是字面文本（caret-assertions/02）', () => {
     const line = view('**b**').lines[0]
     expect(line.runs.map((r) => r.text).join('')).toBe('**b**')
     expect(view('**b**').lines[0].text).toBe('b')
+  })
+})
+
+describe('代码块高亮', () => {
+  it('带语言的围栏：内容行按 token 分段，且仍然逐字拼回源码', () => {
+    const raw = '```ts\ninterface B {\n  startLine: number\n}\n```'
+    const v = view(raw)
+    expect(reconstruct(v)).toBe(raw)
+
+    const code = runs(v, 1)
+    expect(code.length).toBeGreaterThan(1)
+    expect(code.find((r) => r.text === 'interface')?.hl).toBe('hljs-keyword')
+    expect(code.map((r) => r.text).join('')).toBe('interface B {')
+  })
+
+  it('分段之后每个 run 的 src 仍然首尾相接（否则光标映射会错位）', () => {
+    const raw = '```ts\nlet a = 1\nlet b = 2\n```'
+    const v = view(raw)
+    for (const line of v.lines.slice(1, 3)) {
+      let at = line.runs[0].src
+      for (const run of line.runs) {
+        expect(run.src).toBe(at)
+        at += run.text.length
+      }
+    }
+    // 第二行从自己的起点算块内偏移，不是从 0
+    expect(v.lines[2].runs[0].src).toBe(raw.indexOf('let b'))
+  })
+
+  it('折叠态与显现态的分段完全一致：显现只换可见性，不换文本节点', () => {
+    // ADR-0002 §1。光标在块内时围栏行由一个 marker run 变成 dim run，但代码内容
+    // 行的边界与文本必须一模一样，否则锚在里面的光标会被挪走。
+    const raw = '```ts\nconst a: number = 1\n```'
+    const shape = (v: BlockView) =>
+      v.lines.map((line) => line.runs.map((r) => ({ text: r.text, src: r.src, hl: r.mark.hl })))
+    expect(shape(view(raw, [1]))).toEqual(shape(view(raw)))
+  })
+
+  it('跨行的块注释两行都带同一个 class——整块高亮，不是逐行', () => {
+    const raw = '```js\nlet a = 1\n/* one\n   two */\n```'
+    const v = view(raw)
+    expect(reconstruct(v)).toBe(raw)
+    expect(runs(v, 2).every((r) => r.hl === 'hljs-comment')).toBe(true)
+    expect(runs(v, 3).every((r) => r.hl === 'hljs-comment')).toBe(true)
+  })
+
+  it('不带语言或语言不认识：整行一个 run，不着色', () => {
+    for (const raw of ['```nope\nconst a = 1\n```', '```\nconst a = 1\n```']) {
+      const code = runs(view(raw), 1)
+      expect(code).toHaveLength(1)
+      expect(code[0].hl).toBeUndefined()
+      expect(code[0].text).toBe('const a = 1')
+    }
+  })
+
+  it('超过高亮上限的块整行退回，不留半截 token', () => {
+    const body = Array.from({ length: 1001 }, (_, i) => `const v${i} = 1`).join('\n')
+    const v = view('```js\n' + body + '\n```')
+    expect(v.lines[1].runs).toHaveLength(1)
+    expect(v.lines[1].runs[0].mark.hl).toBeUndefined()
+    expect(reconstruct(v)).toBe('```js\n' + body + '\n```')
+  })
+
+  it('围栏行本身不是内容行：折叠态是一个 marker run', () => {
+    const v = view('```js\nconst a = 1\n```')
+    expect(runs(v, 0)).toEqual([{ text: '```js', marker: true, dim: false }])
+    expect(runs(v, 2)).toEqual([{ text: '```', marker: true, dim: false }])
+  })
+
+  it('围栏内的 Markdown 语法仍然是字面量（高亮不会把它变回构造）', () => {
+    const v = view('```js\nconst a = **x**\n```')
+    const code = runs(v, 1)
+    expect(code.map((r) => r.text).join('')).toBe('const a = **x**')
+    expect(code.some((r) => r.bold)).toBe(false)
+    expect(code.every((r) => r.marker === false)).toBe(true)
   })
 })

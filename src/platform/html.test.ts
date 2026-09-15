@@ -4,7 +4,7 @@
  * browser project — which is exactly the point of keeping it out of `core/`.
  */
 import { describe, expect, it } from 'vitest'
-import { renderDocumentHtml } from './html'
+import { renderDocumentHtml, renderStandaloneHtml } from './html'
 import { buildBlockView } from '../core/view'
 
 describe('renderDocumentHtml（导出用）', () => {
@@ -105,5 +105,47 @@ describe('脚注导出不变', () => {
     // 彻底不存在。编辑器**不能**照做：它是编辑器，凭空吞掉一行源码是最坏的结果，
     // 所以那一行仍然显示（`Editor.test.tsx` 里有对应用例）。这是两处刻意的不同之一。
     expect(renderDocumentHtml('[^unused]: 没人引用。\n')).toBe('')
+  })
+})
+
+/**
+ * The exported FILE, not just its body.
+ *
+ * `renderDocumentHtml` emits `hljs-*` classes on every code token, and the page a
+ * reader opens has no access to this app's CSS — so unless the theme travels with
+ * the file, those classes style nothing and exported code blocks are syntax-marked
+ * but uncoloured. They were, for the whole life of the feature, because the export's
+ * inline `<style>` only ever carried body/pre/code/table rules.
+ */
+describe('renderStandaloneHtml（导出的整份文件）', () => {
+  /** The contents of the file's own `<style>` element. */
+  const inlineStyle = (source: string) => {
+    const html = renderStandaloneHtml(source, '标题')
+    const from = html.indexOf('<style>')
+    return { html, css: html.slice(from, html.indexOf('</style>', from)) }
+  }
+
+  it('内联了 highlight.js 主题，代码 token 才有颜色', () => {
+    const { css } = inlineStyle('```js\nconst a = 1 // c\n```')
+    expect(css).toContain('.hljs-keyword')
+    expect(css).toContain('.hljs-comment')
+    expect(css).toContain('.hljs-number')
+    // 主题自带的 base 规则依赖 `.hljs` 类，而围栏渲染器只给 `language-js`
+    // （`markdownIt.ts` 用的是 highlight 选项，不是 highlightElement），
+    // 所以 .hljs{background:#fff} 不会命中，不会和内联的 pre 底色打架。
+    expect(renderDocumentHtml('```js\nconst a = 1\n```')).not.toContain('class="hljs"')
+  })
+
+  it('样式在 body 之前，正文里带 hljs token 类', () => {
+    const { html } = inlineStyle('```js\nconst a = 1\n```')
+    expect(html).toContain('<span class="hljs-keyword">')
+    expect(html.indexOf('<style>')).toBeLessThan(html.indexOf('<body>'))
+    expect(html.indexOf('.hljs-keyword')).toBeLessThan(html.indexOf('<body>'))
+  })
+
+  it('没有代码块时也不必为空，标题里的尖括号不会跑进标签', () => {
+    const html = renderStandaloneHtml('正文\n', '<img src=x>')
+    expect(html).toContain('<title>img src=x</title>')
+    expect(html).not.toContain('<title><img')
   })
 })

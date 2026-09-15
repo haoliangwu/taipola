@@ -9,6 +9,10 @@
 import DOMPurify from 'dompurify'
 import type { Config as DOMPurifyConfig } from 'dompurify'
 import { md } from '../core/markdownIt'
+// `?inline` hands back the stylesheet's TEXT instead of injecting it, which is
+// what lets the exported file carry it. The app itself gets the same sheet
+// through the `@import` at the top of `styles.css`.
+import codeTheme from 'highlight.js/styles/github.css?inline'
 
 const SANITIZE_CONFIG: DOMPurifyConfig = {
   ADD_ATTR: ['target', 'rel', 'disabled', 'align'],
@@ -36,6 +40,17 @@ export function renderDocumentHtml(source: string): string {
  * The whole exported file: the sanitized body plus the stylesheet that makes it
  * readable on its own. The page a reader opens has no access to our app CSS, so
  * this is the export's real presentation layer.
+ *
+ * The code theme is inlined for the same reason, and it is not optional: the
+ * `highlight` option on the shared markdown-it instance emits `hljs-*` classes on
+ * every token, and without these rules the exported code blocks were syntax-marked
+ * but completely uncoloured. DOMPurify cannot carry it either — it forbids
+ * `<style>` inside the body — so it has to come from here.
+ *
+ * Only the `.hljs-*` token rules end up doing work: the theme's own
+ * `pre code.hljs` / `code.hljs` rules need a `.hljs` class that the fence renderer
+ * never adds (it emits `language-js`), so they stay inert and cannot fight the
+ * `pre`/`code` rules above.
  */
 export function renderStandaloneHtml(source: string, title: string): string {
   return `<!doctype html>
@@ -52,6 +67,7 @@ export function renderStandaloneHtml(source: string, title: string): string {
   blockquote { margin: 0; padding-left: 1rem; border-left: 3px solid #d8d8d6; color: #6b6b70; }
   table { border-collapse: collapse; } th, td { border: 1px solid #e2e2df; padding: .4em .8em; }
   img { max-width: 100%; }
+${codeTheme}
 </style>
 </head>
 <body>

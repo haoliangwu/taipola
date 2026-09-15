@@ -92,63 +92,65 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
-/* highlight.js ships a light theme in the base import; re-tint its tokens for
-   the dark palette so code blocks keep their contrast in either theme.
+/* highlight.js ships a light theme in the base import at the top of this file;
+   re-tint its tokens for the dark palette so code blocks keep their contrast in
+   either theme.
+
+   The scope is `.vl-code`, the line class a code content line carries — that is
+   where the token runs live. It used to be `.ln-code`, a class that appears
+   NOWHERE else in this repository (it arrived with the first commit, and the
+   kernel stopped emitting it when the DOM contract was settled), so every rule
+   below matched nothing and dark code blocks were never re-tinted at all.
+
+   The base colour/background rule that used to sit here is gone with it. The
+   editor deliberately does NOT put `.hljs` on a run — the imported theme declares
+   `.hljs { background: #fff }`, which would paint a white box inside the dark
+   line box — and there is no `<code>` element in the editor. Code text inherits
+   `--text` from its line box, which is already theme-aware.
+
    Each rule is written twice — once for an explicit dark choice, once inside
    the system-preference query — because CSS cannot merge an at-rule into a
    selector list. */
-:root[data-theme='dark'] .ln-code .hljs,
-:root[data-theme='dark'] .ln-code code {
-  color: #e4e4e7;
-  background: transparent;
-}
-
-:root[data-theme='dark'] .ln-code .hljs-keyword,
-:root[data-theme='dark'] .ln-code .hljs-built_in,
-:root[data-theme='dark'] .ln-code .hljs-type {
+:root[data-theme='dark'] .vl-code .hljs-keyword,
+:root[data-theme='dark'] .vl-code .hljs-built_in,
+:root[data-theme='dark'] .vl-code .hljs-type {
   color: #ff9db1;
 }
 
-:root[data-theme='dark'] .ln-code .hljs-string,
-:root[data-theme='dark'] .ln-code .hljs-attr {
+:root[data-theme='dark'] .vl-code .hljs-string,
+:root[data-theme='dark'] .vl-code .hljs-attr {
   color: #a8d8a0;
 }
 
-:root[data-theme='dark'] .ln-code .hljs-comment,
-:root[data-theme='dark'] .ln-code .hljs-quote {
+:root[data-theme='dark'] .vl-code .hljs-comment,
+:root[data-theme='dark'] .vl-code .hljs-quote {
   color: #7d7d88;
 }
 
-:root[data-theme='dark'] .ln-code .hljs-number,
-:root[data-theme='dark'] .ln-code .hljs-literal {
+:root[data-theme='dark'] .vl-code .hljs-number,
+:root[data-theme='dark'] .vl-code .hljs-literal {
   color: #d3b0ff;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .ln-code .hljs,
-  :root:not([data-theme='light']) .ln-code code {
-    color: #e4e4e7;
-    background: transparent;
-  }
-
-  :root:not([data-theme='light']) .ln-code .hljs-keyword,
-  :root:not([data-theme='light']) .ln-code .hljs-built_in,
-  :root:not([data-theme='light']) .ln-code .hljs-type {
+  :root:not([data-theme='light']) .vl-code .hljs-keyword,
+  :root:not([data-theme='light']) .vl-code .hljs-built_in,
+  :root:not([data-theme='light']) .vl-code .hljs-type {
     color: #ff9db1;
   }
 
-  :root:not([data-theme='light']) .ln-code .hljs-string,
-  :root:not([data-theme='light']) .ln-code .hljs-attr {
+  :root:not([data-theme='light']) .vl-code .hljs-string,
+  :root:not([data-theme='light']) .vl-code .hljs-attr {
     color: #a8d8a0;
   }
 
-  :root:not([data-theme='light']) .ln-code .hljs-comment,
-  :root:not([data-theme='light']) .ln-code .hljs-quote {
+  :root:not([data-theme='light']) .vl-code .hljs-comment,
+  :root:not([data-theme='light']) .vl-code .hljs-quote {
     color: #7d7d88;
   }
 
-  :root:not([data-theme='light']) .ln-code .hljs-number,
-  :root:not([data-theme='light']) .ln-code .hljs-literal {
+  :root:not([data-theme='light']) .vl-code .hljs-number,
+  :root:not([data-theme='light']) .vl-code .hljs-literal {
     color: #d3b0ff;
   }
 }
@@ -723,9 +725,17 @@ body {
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
-.rn-codeblock {
-  color: var(--text);
-}
+/* `.rn-codeblock` (a code content run) is deliberately NOT given a `color`.
+ *
+ * Declaring `color: var(--text)` here was silently fatal to syntax highlighting:
+ * the token rules come from the imported theme and are single-class selectors
+ * (`.hljs-keyword { color: #d73a49 }`), so this class — same specificity, later in
+ * the file — won on every run that carried both, and a highlighted run measured
+ * exactly the same colour as a plain one. Inheriting gives untokened code the same
+ * colour (the line box chain ends at `:root`) while leaving the theme free to win.
+ *
+ * The class is still emitted by `render.ts` as a hook; it simply has no
+ * declarations of its own. */
 
 /* A footnote definition, rendered where it STANDS (option A).
 

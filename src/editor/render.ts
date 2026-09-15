@@ -60,6 +60,9 @@ function runClass(run: ViewRun, state: LineState | undefined): string {
   if (run.mark.footnoteRef !== undefined) cls.push('rn-footnote-ref')
   if (run.mark.math !== undefined) cls.push('rn-math')
   if (state?.kind === 'code' && !run.marker) cls.push('rn-codeblock')
+  // highlight.js token classes, appended whole: a tiered scope arrives as several
+  // classes at once (`hljs-title function_`), not as one class name.
+  if (run.mark.hl) cls.push(run.mark.hl)
   return cls.join(' ')
 }
 
@@ -401,6 +404,7 @@ export function markupSignature(
           `${run.mark.highlight ? 'h' : ''}${run.mark.superscript ? 'p' : ''}${run.mark.subscript ? 'q' : ''}` +
           `${run.mark.link !== undefined ? `l${run.mark.link}` : ''}` +
           `${run.mark.math !== undefined ? `M${run.mark.math}` : ''}` +
+          `${run.mark.hl ? `H${run.mark.hl}` : ''}` +
           `${run.mark.img ? `g${run.mark.img.src}` : ''}`
         parts.push(`${run.src}${flags}=${run.text}`)
       }
