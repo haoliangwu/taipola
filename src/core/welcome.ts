@@ -30,7 +30,7 @@ export const WELCOME_DOC = `# 你好呀，我是 taipola
 
 ## 行内样式
 
-**粗体**、*斜体*、~~删除线~~、\`行内代码\`、[链接](https://example.com)，还有脚注[^1]，这些我都认得。
+**粗体**、*斜体*、~~删除线~~、\`行内代码\`、[链接](https://github.com/haoliangwu/taipola)，还有脚注[^1]，这些我都认得。
 
 选中一段文字按 \`⌘\\\`（清除格式），粗体、斜体、删除线、行内代码、链接都会剥掉，只留下文字本身。
 
@@ -132,7 +132,9 @@ echo "hello, taipola"
 
 ![taipola 的自拍](https://raw.githubusercontent.com/haoliangwu/taipola/main/docs/logo.webp){width=160}
 
-你随手打出来的网址我也认：https://example.com 就像这样，夹在句子里的 https://example.net 也跑不掉。
+你随手打出来的网址我也认：https://github.com/haoliangwu/taipola 就像这样，夹在句子里的 https://example.net 也跑不掉。
+
+那个 GitHub 网址就是我的家。要是你觉得我还算好用，回家的时候顺手给我点一颗小星星好不好呀？就一颗，我能偷偷开心一整天。
 
 ## 分割线
 
@@ -140,5 +142,5 @@ echo "hello, taipola"
 
 ---
 
-好啦，接下来就交给你了。这篇可以直接删掉，也可以干脆改成你自己的第一句话。
+好啦，接下来就交给你了。这篇可以直接删掉，也可以干脆改成你自己的第一句话。星星的事，我偷偷等着哦。
 `

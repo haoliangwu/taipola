@@ -48,6 +48,16 @@ describe('欢迎文档', () => {
     expect(WELCOME_DOC).not.toContain('Cmd/Ctrl + E')
   })
 
+  it('演示链接指向仓库，并留了一句求 star 的话', () => {
+    // The demo links used to point at example.com — a placeholder a reader cannot
+    // act on. They now point at the repo, so the one place the reader is invited to
+    // click is the place that actually exists.
+    expect(WELCOME_DOC).not.toContain('example.com')
+    expect(WELCOME_DOC).toContain('[链接](https://github.com/haoliangwu/taipola)')
+    expect(WELCOME_DOC).toContain('https://github.com/haoliangwu/taipola')
+    expect(WELCOME_DOC).toContain('小星星')
+  })
+
   it('新功能都在演示里出现', () => {
     for (const feature of ['⌃M', '$E = mc^2$', '直接点它就能勾上', '⌥⌘Q', '⌘\\', '⌥⌘-']) {
       expect(WELCOME_DOC).toContain(feature)
