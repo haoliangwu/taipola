@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { renderWithDoc } from '../test/appTestUtils'
+import { readDocumentSource } from '../editor/render'
 import { stubSavedFolder } from '../test/platformStubs'
 import { placeCaretAt } from '../test/editorTestUtils'
 
@@ -69,6 +70,65 @@ describe('行内数学渲染（IM02 浏览器冒烟）', () => {
     placeCaretAt(content, content.textContent?.length ?? 0)
     await user.keyboard('{Backspace}')
     expect(doc.querySelector('[data-block="0"]')?.textContent).toBe('前 x$ 后')
+    view.unmount()
+  })
+})
+describe('打字输入数学不损坏模型（inline-markers/03）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    stubSavedFolder()
+  })
+
+  it('$…$：输入 $a$ 后继续打字，模型与草稿槽逐字一致', async () => {
+    const { view, doc, text } = await renderWithDoc('x\n')
+    const user = userEvent.setup({ delay: null })
+    placeCaretAt(text, 1)
+    await user.keyboard(' $a$ y')
+    await user.keyboard('z')
+    // 模型（DOM 吸收）不能吞掉 KaTeX 的渲染文本：数学 run 里 .rn-src 才是真源
+    expect(readDocumentSource(doc)).toBe('x $a$ yz\n')
+    // 草稿槽是端到端锚：页面刷新后回到的正是这份内容
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    const draft = JSON.parse(localStorage.getItem('taipola:draft:untitled.md') ?? '{}')
+    expect(draft.content).toBe('x $a$ yz\n')
+    view.unmount()
+  })
+
+  it('\\(…\\)：输入 \\(a\\) 后模型逐字一致', async () => {
+    const { view, doc, text } = await renderWithDoc('p\n')
+    const user = userEvent.setup({ delay: null })
+    placeCaretAt(text, 1)
+    await user.keyboard(' \\(a\\) tail')
+    expect(readDocumentSource(doc)).toBe('p \\(a\\) tail\n')
+    view.unmount()
+  })
+
+  it('\\[…\\]：输入 \\[a\\] 后模型逐字一致', async () => {
+    const { view, doc, text } = await renderWithDoc('r\n')
+    const user = userEvent.setup({ delay: null })
+    placeCaretAt(text, 1)
+    // userEvent 的键盘语法里 `[[` 是一个字面 `[`（`[` 是描述符起始）
+    await user.keyboard(' \\[[a\\] tail')
+    expect(readDocumentSource(doc)).toBe('r \\[a\\] tail\n')
+    view.unmount()
+  })
+
+  it('同一行两个构造（票面复现）：继续打字不损坏', async () => {
+    const { view, doc, text } = await renderWithDoc('s\n')
+    const user = userEvent.setup({ delay: null })
+    placeCaretAt(text, 1)
+    await user.keyboard(' $E=mc^2$ and $x_1^2$')
+    await user.keyboard('!')
+    expect(readDocumentSource(doc)).toBe('s $E=mc^2$ and $x_1^2$!\n')
+    view.unmount()
+  })
+
+  it('普通文本（含 ==/^/~ 字面标记）不损坏', async () => {
+    const { view, doc, text } = await renderWithDoc('q\n')
+    const user = userEvent.setup({ delay: null })
+    placeCaretAt(text, 1)
+    await user.keyboard(' == ^ ~')
+    expect(readDocumentSource(doc)).toBe('q == ^ ~\n')
     view.unmount()
   })
 })

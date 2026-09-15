@@ -450,6 +450,22 @@ export function readLooseText(root: HTMLElement): string {
 }
 
 /**
+ * The SOURCE text of one rendered run.
+ *
+ * Most runs are their own text, but two rendered forms keep their source in a
+ * hidden `.rn-src` beside what they DRAW: an image (the `<img>`, no text of its
+ * own) and inline math (KaTeX's output, which carries text — `$a$` renders an
+ * `a`, and more than once, since the MathML and the visual spans both hold it).
+ * Reading `textContent` on those runs absorbs the source AND the rendering, so
+ * the model grew on every keystroke (`inline-markers/03`). Whenever the hidden
+ * span exists it is the run's truth; the picture and the formula are decoration.
+ */
+function runSource(run: HTMLElement): string {
+  const hidden = run.querySelector<HTMLElement>(':scope > .rn-src')
+  return (hidden ?? run).textContent ?? ''
+}
+
+/**
  * The characters a line box currently holds, in DOM order.
  *
  * Span text is the common case. A line box can also hold DIRECT text nodes: the
@@ -466,7 +482,7 @@ function textOfLine(lineEl: HTMLElement): string {
   const cells = [...lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')]
   if (cells.length > 0) {
     const parts = cells.map((cell) =>
-      [...cell.querySelectorAll<HTMLElement>('[data-run]')].map((run) => run.textContent ?? '').join(''),
+      [...cell.querySelectorAll<HTMLElement>('[data-run]')].map(runSource).join(''),
     )
     return `| ${parts.join(' | ')} |`
   }
@@ -476,7 +492,7 @@ function textOfLine(lineEl: HTMLElement): string {
     if (node.nodeType === Node.TEXT_NODE) {
       text += node.textContent ?? ''
     } else if (node instanceof HTMLElement) {
-      if (node.hasAttribute('data-run')) text += node.textContent ?? ''
+      if (node.hasAttribute('data-run')) text += runSource(node)
       // `<br>` and other foreign elements contribute no characters.
     }
   }
