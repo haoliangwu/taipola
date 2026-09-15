@@ -89,6 +89,17 @@ export interface CaretAnchor {
   lineIndex: number
   runIndex: number
   offsetInRun: number
+  /**
+   * Table rows only: which cell the caret belongs to.
+   *
+   * A row's runs belong to cells, and a cell can hold no run at all (an empty
+   * cell). The run scan then falls back to "the last run at or before the target"
+   * — the PREVIOUS cell — and the caret sat there instead: with `| 甲 |  |`, Tab
+   * from cell 0 left the caret at the end of `甲` and the next keystroke went back
+   * into cell 0. The cell's own box is the position then, the same
+   * `data-cell-src` box the renderer and `domToLocal` already use.
+   */
+  cellIndex?: number
 }
 
 /**
@@ -165,7 +176,27 @@ export function anchorForSource(
   }
 
   // Past the end of the line's visible text.
-  return runIndexAtCursor(line, cursor, lineIndex)
+  return anchorInCell(line, local, runIndexAtCursor(line, cursor, lineIndex))
+}
+
+/**
+ * Keeps the caret inside the table cell the offset belongs to.
+ *
+ * Everything else about a caret is already decided by the time this runs; this
+ * only answers "that run is in a DIFFERENT cell than the offset, so the cell box
+ * takes the caret instead" (see `CaretAnchor.cellIndex`).
+ */
+function anchorInCell(
+  line: BlockView['lines'][number],
+  local: number,
+  anchor: CaretAnchor,
+): CaretAnchor {
+  const cellSrcs = line.cellSrcs
+  const runsPerCell = line.cellRuns
+  if (!cellSrcs || !runsPerCell) return anchor
+  const cell = cellIndexForSource(cellSrcs, local)
+  if (anchor.runIndex >= 0 && runsPerCell[cell]?.includes(anchor.runIndex)) return anchor
+  return { lineIndex: anchor.lineIndex, runIndex: -1, offsetInRun: 0, cellIndex: cell }
 }
 
 /**
@@ -233,17 +264,14 @@ export function applyCaret(
     } else {
       range.selectNodeContents(span)
     }
-  } else if (lineEl.querySelector(':scope > [data-cell]')) {
-    // A table row whose target cell holds no runs: the cell's own BOX is the
-    // caret position (see `ViewLine.cellSrcs`). Anchoring on the row element
-    // instead lets the browser resolve the caret against the nearest text it can
-    // find — the header row above — and the read-back then drags both the caret
-    // and the next typed character out of the row, which stops the line being a
-    // row at all.
-    const line = view.lines[target.lineIndex]
-    const cellEls = lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')
-    const index = cellIndexForSource(line?.cellSrcs ?? [], want - blockStart)
-    range.setStart(cellEls[Math.min(index, cellEls.length - 1)], 0)
+  } else if (target.cellIndex !== undefined) {
+    // A table row whose target cell holds no run: the cell's own BOX takes the
+    // caret. Anchoring on the row element instead lets the browser resolve the
+    // caret against the nearest text it can find — the header row above — and the
+    // read-back then drags both the caret and the next typed character out of the
+    // row, which stops the line being a row at all.
+    const cells = lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')
+    range.setStart(cells[target.cellIndex] ?? lineEl, 0)
   } else {
     // An EMPTY or fully collapsed line (a blank block, a whitespace-only line, the
     // blank line left by exiting an empty list item) has no run span that can hold

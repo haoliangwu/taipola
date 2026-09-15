@@ -152,6 +152,25 @@ describe('增删行', () => {
     expect(cellsAt(edit.doc)[2]).toBe('|')
   })
 
+  it('表头上方插不了行（表头就是第一行）', () => {
+    expect(insertTableRow(TABLE, at(TABLE, '| 列 1 | 列 2 |') + 2, 'above')).toBeNull()
+  })
+
+  it('表头下方插行：进的是第一行正文，不是分隔行的位置', () => {
+    // 插在表头与分隔行之间的话，分隔行就不再是第二行，整张表会变成一个段落
+    // （每一行都失去边框）。
+    const edit = insertTableRow(TABLE, at(TABLE, '| 列 1 | 列 2 |') + 2, 'below')!
+    expect(cellsAt(edit.doc)[1]).toBe('---|---')
+    expect(cellsAt(edit.doc)[2]).toBe('|')
+    expect(tableAt(edit.doc, 0)).toMatchObject({ delimiterLine: 1 })
+  })
+
+  it('删掉唯一一行正文之后，光标回到表头，不是落在分隔行上', () => {
+    const one = '| 列 1 | 列 2 |\n| --- | --- |\n| a | b |'
+    const edit = deleteTableRow(one, at(one, '| a | b |') + 2)!
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 0, cell: 0 })
+  })
+
   it('删一行：格子从表里消失，光标留在原列', () => {
     const edit = deleteTableRow(TABLE, at(TABLE, '| a | b |') + 6)!
     expect(cellsAt(edit.doc)).toEqual(['列 1|列 2', '---|---', 'c|d'])

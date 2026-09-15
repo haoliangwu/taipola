@@ -1,6 +1,7 @@
 import { indentListItem, renumberLists } from './lists'
 import { EXTRA_INLINE } from './view'
 import { findMathAt } from './inline'
+import { inTable } from './tables'
 
 export interface EditBuffers {
   value: string
@@ -172,8 +173,14 @@ export function deleteLine(buffer: EditBuffers): void {
   buffer.start = buffer.end = Math.min(lineStart, buffer.value.length)
 }
 
-/** Inserts a newline-joined snippet, e.g. a table skeleton, at the caret. */
+/**
+ * Inserts a newline-joined snippet, e.g. a table skeleton, at the caret.
+ *
+ * Declines inside a table cell: a row is one source line, so a snippet's newlines
+ * would split the row and take the table apart (`inTable`).
+ */
 export function insertSnippet(buffer: EditBuffers, snippet: string): void {
+  if (snippet.includes('\n') && inTable(buffer.value, buffer.start)) return
   const { value, start, end } = buffer
   const needsLeading = start > 0 && value[start - 1] !== '\n'
   const prefix = needsLeading ? '\n' : ''
@@ -369,6 +376,9 @@ function blankLineBeforeDefinition(text: string): string {
  */
 export function insertFootnote(buffer: EditBuffers): void {
   const { value, end } = buffer
+  // The `[^n]` itself would fit in a cell; the DEFINITION would not, and a marker
+  // with no definition is worse than nothing (`inTable`).
+  if (inTable(value, end)) return
   const n = nextFootnoteNumber(value)
   const marker = `[^${n}]`
   const withRef = value.slice(0, end) + marker + value.slice(end)
@@ -390,6 +400,7 @@ function nextLinkRefNumber(doc: string): number {
 export function insertLinkReference(buffer: EditBuffers): void {
   const { value, start, end } = buffer
   if (start === end) return
+  if (inTable(value, start)) return
   const n = nextLinkRefNumber(value)
   const marker = `[${value.slice(start, end)}][${n}]`
   const withRef = value.slice(0, start) + marker + value.slice(end)
@@ -400,6 +411,7 @@ export function insertLinkReference(buffer: EditBuffers): void {
 
 /** Horizontal rule (⌥⌘-): a `---` block right after the current line. */
 export function insertHr(buffer: EditBuffers): void {
+  if (inTable(buffer.value, buffer.start)) return
   const { value, start } = buffer
   const lineEndRaw = value.indexOf('\n', start)
   if (lineEndRaw === -1) {

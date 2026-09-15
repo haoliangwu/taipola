@@ -507,6 +507,29 @@ function boxSource(box: HTMLElement): string {
 }
 
 /**
+ * A table CELL's text.
+ *
+ * A cell is one source line by construction — a row IS a line — so text that
+ * arrives with a newline in it is flattened to spaces instead of being written
+ * into the row. Pasting a copied line is the everyday case: the clipboard carries
+ * the newline with it, and `white-space: pre-wrap` puts it in the cell verbatim.
+ * A newline there does not make a taller cell, it splits the ROW: the row's source
+ * gains `\n`, the block reports two lines, and the table falls apart into
+ * pipe-shaped paragraphs with no cell boxes at all — which is what "the last
+ * row's border disappeared" turned out to be
+ * (`.scratch/table-ops/issues/04`).
+ */
+function cellSource(cell: HTMLElement): string {
+  // A newline run and the spaces around it become ONE space, and the cell's own
+  // padding goes: the spaces beside a cell's text are the column's padding, not
+  // its content — `tableRowCells` trims exactly the same characters on the way
+  // back in, so this is the same rule and not a second opinion.
+  return boxSource(cell)
+    .replace(/[ \t]*\r?\n[ \t]*/g, ' ')
+    .trim()
+}
+
+/**
  * The characters a line box currently holds, in DOM order.
  *
  * TABLE lines are different from every other line: the DOM renders a grid of
@@ -516,7 +539,7 @@ function boxSource(box: HTMLElement): string {
  */
 function textOfLine(lineEl: HTMLElement): string {
   const cells = [...lineEl.querySelectorAll<HTMLElement>(':scope > [data-cell]')]
-  if (cells.length > 0) return `| ${cells.map(boxSource).join(' | ')} |`
+  if (cells.length > 0) return `| ${cells.map(cellSource).join(' | ')} |`
   return boxSource(lineEl)
 }
 

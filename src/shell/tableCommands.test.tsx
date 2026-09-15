@@ -62,6 +62,38 @@ describe('Tab 走格子（编辑内核）', () => {
     expect(caretCell()).toEqual({ vline: '4', cell: '0' })
   })
 
+  it('Tab 从有字的格子进空格子：光标真的进去了，接着打字的字也落在那里', async () => {
+    // 行的 run 属于各自的格子，而空格子一个 run 都没有：光标回落到"前一个 run 的末
+    // 尾"就会留在上一格，Tab 看起来毫无反应，下一个字还写进上一格
+    // （`| 甲 |  |` 打字变成 `| 甲一 |  |`）。
+    const r = renderEditor('| 列 1 | 列 2 |\n| --- | --- |\n| 甲 |  |\n')
+    await flush()
+    await clickInRun(r, 0, 2, 0, 'start')
+    await caretInTableCell(r, 2, 0)
+    await r.user.keyboard('{Tab}')
+    await flush()
+    expect(caretCell()).toEqual({ vline: '2', cell: '1' })
+    await r.user.keyboard('一')
+    await flush()
+    expect(r.getDoc()).toContain('| 甲 | 一 |')
+  })
+
+  it('光标落到分隔行上：打字进的是正文格子，不是分隔行本身', async () => {
+    // 从表头按方向键下就到这里。以前在这里打字会把分隔行写成 `一| --- | --- |`，
+    // 于是第二行不再是分隔行，整张表变成一个段落。
+    const r = renderEditor('| 列 1 | 列 2 |\n| --- | --- |\n| 甲 | 乙 |\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    placeCaretAt(r.container.querySelector('[data-block="0"] [data-vline="1"]') as Node, 0)
+    await flush()
+    await r.user.keyboard('一')
+    await flush()
+    const doc = r.getDoc()
+    expect(doc).not.toContain('一| ---')
+    expect(doc.split('\n')[1]).toBe('| --- | --- |')
+    expect(doc).toContain('一')
+  })
+
   it('表头第一格 Shift+Tab 不会再往回走', async () => {
     const r = renderEditor(TABLE)
     await flush()

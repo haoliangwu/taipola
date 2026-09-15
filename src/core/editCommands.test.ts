@@ -164,6 +164,31 @@ describe('insertSnippet', () => {
   })
 })
 
+/**
+ * 块级命令在表格格子里一律不动手（`.scratch/table-ops/issues/04`）。
+ *
+ * 一行表格 = 一个源码行，所以带换行的片段进入格子不是"把格子撑高"，而是把这一行
+ * 劈开：实测 `⌥⌘T` 在格子里会把这一行写成 `|  \n| 列 1 | …`，整张表随即塌成没有
+ * 格子的普通段落 —— 屏幕上就是"最后一行边框消失"。
+ */
+describe('块级命令在表格里让路', () => {
+  const TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |'
+
+  it.each([
+    ['插入表格', (b: EditBuffers) => insertSnippet(b, '| 列 1 | 列 2 |\n| --- | --- |\n|  |  |')],
+    ['代码块', (b: EditBuffers) => insertSnippet(b, '```\n\n```')],
+    ['脚注', (b: EditBuffers) => insertFootnote(b)],
+    ['链接引用', (b: EditBuffers) => insertLinkReference(b)],
+    ['水平线', (b: EditBuffers) => insertHr(b)],
+  ])('%s：格子里的文档不动', (_label, command) => {
+    expect(run(TABLE, 31, 33, command).value).toBe(TABLE)
+  })
+
+  it('表格外面照常插入', () => {
+    expect(run('正文', 2, 2, (b) => insertSnippet(b, '> ')).value).toBe('正文\n> ')
+  })
+})
+
 describe('toggleHeading level 0（Typora ⌘0：清除标题）', () => {
   it('标题行变为普通段落', () => {
     expect(run('## 标题', 4, 4, (b) => toggleHeading(b, 0)).value).toBe('标题')

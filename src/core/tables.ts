@@ -83,6 +83,21 @@ export function blocksTableBackspace(doc: string, offset: number): boolean {
   return !insideCell
 }
 
+/**
+ * True when `offset` sits inside a table — where a BLOCK-level command must not
+ * run.
+ *
+ * A row is one source line, so anything that brings a newline with it (a snippet,
+ * a footnote definition, a thematic break) does not make a taller cell: it splits
+ * the row, and the table falls apart into pipe-shaped paragraphs with no cell
+ * boxes at all — measured, `⌥⌘T` with the caret in a cell left the row as
+ * `|  \n| 列 1 | …` (`.scratch/table-ops/issues/04`). Those commands decline here
+ * instead of damaging the document.
+ */
+export function inTable(doc: string, offset: number): boolean {
+  return tableAt(doc, offset) !== null
+}
+
 /* -------------------------------------------------------------------------- */
 /* reading a table                                                            */
 /* -------------------------------------------------------------------------- */
@@ -188,14 +203,17 @@ export function insertTableRow(
 ): TableEdit | null {
   const table = tableAt(doc, offset)
   if (!table) return null
+  // A new row is ALWAYS a body row: the header is the first line and the rule row
+  // is the second, so a row inserted at either of those slots stops the table
+  // being a table (measured: `⌘⏎` on the header row put `|  |  |` between the
+  // header and the rule row and every pipe line became one paragraph). "Above" the
+  // header has no answer at all, so it declines.
+  if (table.line === table.headerLine && where === 'above') return null
+  const bodyStart = table.delimiterLine + 1
+  const wanted = Math.max(where === 'above' ? table.line : table.line + 1, bodyStart)
   const lines = doc.split('\n')
-  let at = where === 'above' ? table.line : table.line + 1
-  // On the rule row both directions mean the first body position: a row inserted
-  // between the header and the rule would take over the rule row's slot, and the
-  // table would stop being a table.
-  if (table.line === table.delimiterLine) at = table.delimiterLine + 1
-  lines.splice(at, 0, composeRow(new Array(table.columns).fill('')))
-  return { doc: lines.join('\n'), caret: caretInCell(lines, at, 0) }
+  lines.splice(wanted, 0, composeRow(new Array(table.columns).fill('')))
+  return { doc: lines.join('\n'), caret: caretInCell(lines, wanted, 0) }
 }
 
 /**
@@ -213,7 +231,13 @@ export function deleteTableRow(doc: string, offset: number): TableEdit | null {
   const lines = doc.split('\n')
   const column = Math.max(0, table.cell)
   lines.splice(table.line, 1)
-  const next = Math.min(table.line, lines.length - 1)
+  // The row that took its place — except when the deleted row was the last body
+  // row, where that slot is now the rule row: the header is the honest place for
+  // the caret, and the rule row is not a text position at all.
+  const next =
+    table.line === table.lastLine && table.line === table.delimiterLine + 1
+      ? table.headerLine
+      : Math.min(table.line, lines.length - 1)
   return { doc: lines.join('\n'), caret: caretInCell(lines, next, column) }
 }
 

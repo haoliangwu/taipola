@@ -419,6 +419,16 @@ export class EditorKernel {
   /* ---------------------------------------------------------------------- */
 
   /**
+   * `offset`, unless it sits on a table's `| --- |` rule row — then the first body
+   * cell of that table, which is the nearest real text position (see the caller).
+   */
+  private offRuleRow(offset: number): number {
+    const table = tableAt(this.doc, offset)
+    if (!table || table.line !== table.delimiterLine) return offset
+    return moveTableCell(this.doc, offset, 'next')?.caret ?? offset
+  }
+
+  /**
    * The table the caret is in, or null — what the shell's table menu asks before
    * offering anything. The KERNEL answers it because it owns both halves of the
    * question (the document and the caret); the shell only decides where to draw.
@@ -462,12 +472,20 @@ export class EditorKernel {
     if (this.composing) return
     const source = this.caretFromDom()
     if (source === null) return
-    this.caret = source
+    // A caret that lands on a table's `| --- |` row is not a text position: the row
+    // is the table's structure, and TYPING there wrote into it — the rule row came
+    // back as `一| --- | --- |` and the table stopped being a table at all. Arrow
+    // down from the header row is enough to get there. The row's own first body
+    // cell is where the caret belongs instead.
+    const safe = this.offRuleRow(source)
+    this.caret = safe
     this.recompute()
     // Revealing or collapsing markers around the new caret rewrites the DOM,
     // which would leave the browser's selection on a detached text node — so the
-    // caret is re-applied in the same frame.
-    if (this.render()) this.placeCaret(source)
+    // caret is re-applied in the same frame. A REDIRECTED caret is re-applied even
+    // when the rendering did not change: the browser types at its own selection,
+    // so leaving it on the rule row would put the next character there anyway.
+    if (this.render() || safe !== source) this.placeCaret(safe)
     this.reportLine()
   }
 

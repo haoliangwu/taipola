@@ -78,6 +78,56 @@ describe('插入出来的表格', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('中文输入法往空格子里合成：字进这一格，不会另起一行', async () => {
+    // 用户报的现象（截图）：打了一个字之后，表格最后一行"边框消失"——其实是那一行
+    // 变成了没有管道的普通段落。空格子没有 run，输入法的拼音是直接写进 cell 的。
+    const r = renderEditor(SKELETON)
+    await flush()
+    await focusEditor(r)
+    await caretInTableCell(r, 2, 0)
+    const cell = tableCellEl(r.container, 2, 0)
+    cell.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const composing = document.createTextNode('y')
+    cell.appendChild(composing)
+    cell.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    cell.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'y' }))
+    await flush()
+    composing.textContent = '一'
+    cell.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    cell.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
+    cell.dispatchEvent(new InputEvent('input', { bubbles: true, data: '一' }))
+    await flush()
+    // The character is committed INTO the cell: nothing is lost and no line
+    // appears that is not a table row.
+    expect(r.getDoc()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| 一 |  |\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('往格子里粘贴带换行的文字：不把这一行劈成两行', async () => {
+    // 复制一行文字时剪贴板通常自带换行，而格子是 `white-space: pre-wrap`：换行会
+    // 原样进到这一行的源码里。一行表格就是一个源码行，于是它被劈开、整块塌成普通
+    // 段落——屏幕上就是"最后一行边框消失了"（`.scratch/table-ops/issues/04`）。
+    const r = renderEditor(SKELETON)
+    await flush()
+    await focusEditor(r)
+    await caretInTableCell(r, 2, 0)
+    await r.user.paste('甲\n一')
+    await flush()
+    expect(r.getDoc()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| 甲 一 |  |\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('粘贴一整行（结尾自带换行）也只落进格子', async () => {
+    const r = renderEditor(SKELETON)
+    await flush()
+    await focusEditor(r)
+    await caretInTableCell(r, 2, 0)
+    await r.user.paste('一\n')
+    await flush()
+    expect(r.getDoc()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| 一 |  |\n')
+    await assertDomMatchesSource(r)
+  })
+
   it('格子内容起点的退格不动表格结构', async () => {
     const r = renderEditor(SKELETON)
     await flush()
