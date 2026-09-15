@@ -822,15 +822,42 @@ body {
   border-radius: 4px;
 }
 
+/* A code block has room around it. The box IS the lines' own background, so the
+   padding has to live on the lines: with none, the code sat flush against the edge
+   of its own colour, which is what a code block looked like before this rule.
+
+   The VERTICAL padding is carried by the FENCE lines, because they are the only
+   lines that always bracket the code — the opening fence is above every content
+   line and the closing fence is below every one of them, so their padding becomes
+   the block's top and bottom padding. They bracket it even when there is no
+   content at all (```js immediately followed by ```, which is what ⌥⌘C leaves
+   behind before anything is typed), and even when the fence is nested inside a
+   list item — there the block reports `data-kind="list"` and carries the list's
+   other lines, which a block-level background would have painted as code too. */
 .vl-code,
 .vl-fence {
   background: var(--code-bg);
+  padding-inline: 0.85em;
 }
 
 .vl-fence {
   /* The fence line keeps its box; its text shows only while the caret is in
      the block (revealed as a dim run). */
   color: var(--text-faint);
+  /* The code box's vertical padding — see the note above. */
+  padding-block: 0.4em;
+}
+
+/* Rounded outer corners. `:first-child`/`:last-child` rather than "the first fence
+   in the block": with a top-level code block those two lines ARE the block's first
+   and last, and a fence nested among a list's other lines keeps square corners
+   instead of claiming a corner it does not own. */
+.blk > .vl-fence:first-child {
+  border-radius: 6px 6px 0 0;
+}
+
+.blk > .vl-fence:last-child {
+  border-radius: 0 0 6px 6px;
 }
 
 .vl-heading .rn,

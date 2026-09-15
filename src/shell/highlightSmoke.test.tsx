@@ -130,6 +130,60 @@ describe('代码块高亮：光标仍在用户看到的位置', () => {
   })
 })
 
+describe('代码块的盒子：内边距加在行上，且不动逐行基线', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    stubSavedFolder()
+  })
+
+  it('代码文字不贴着自己背景的边缘', async () => {
+    const { view, doc } = await renderWithDoc(DOC)
+    const line = doc.querySelector<HTMLElement>('[data-block="0"] .vl-code')!
+    const run = line.querySelector<HTMLElement>('.rn')!
+    const inset = run.getBoundingClientRect().left - line.getBoundingClientRect().left
+    expect(inset).toBeGreaterThan(6)
+    expect(parseFloat(getComputedStyle(line).paddingLeft)).toBeGreaterThan(6)
+    view.unmount()
+  })
+
+  it('上下内边距由围栏行承担，所以空代码块也有盒子', async () => {
+    // ⌥⌘C 插入的正是这种块：两条围栏、还没有任何内容行。它的可见高度**完全**来自
+    // 围栏行的内边距——围栏行的内容是 0 高（run 是 display:none）。
+    const { view, doc } = await renderWithDoc('```ts\n```')
+    const fences = [...doc.querySelectorAll<HTMLElement>('[data-block="0"] .vl-fence')]
+    expect(fences).toHaveLength(2)
+    expect(parseFloat(getComputedStyle(fences[0]).paddingTop)).toBeGreaterThan(0)
+    expect(fences[0].getBoundingClientRect().height).toBeGreaterThan(8)
+    view.unmount()
+  })
+
+  it('围栏嵌在列表里时，列表自己的行不会被刷成代码背景', async () => {
+    // 嵌套围栏归属**列表**的块（`core/markdown.ts` 只收 depth-0），所以把背景画在
+    // 块上会连列表项和空行一起刷成代码色。背景留在行上就没有这个问题。
+    const { view, doc } = await renderWithDoc('- 项\n\n  ```js\n  const a = 1\n  ```\n')
+    const listLine = doc.querySelector<HTMLElement>('[data-block="0"] .vl-list')!
+    expect(getComputedStyle(listLine).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+    const codeLine = doc.querySelector<HTMLElement>('[data-block="0"] .vl-code')!
+    expect(getComputedStyle(codeLine).backgroundColor).not.toBe('rgba(0, 0, 0, 0)')
+    // 而且它照样有内边距
+    expect(parseFloat(getComputedStyle(codeLine).paddingLeft)).toBeGreaterThan(6)
+    view.unmount()
+  })
+
+  it('代码行的高度仍然等于文档行高——内边距不能撑高行盒', async () => {
+    // ADR-0002 §1：光标算术按源码行建索引、按行累加基线。行高一旦被内边距改变，
+    // 每多一行就多累积一点偏移。所以纵向内边距只给围栏行，内容行只有横向的。
+    const { view, doc } = await renderWithDoc('```ts\nconst a = 1\nlet b = 2\n```')
+    const lineHeight = parseFloat(getComputedStyle(doc).lineHeight)
+    const heights = [...doc.querySelectorAll<HTMLElement>('[data-block="0"] .vl-code')].map(
+      (line) => line.getBoundingClientRect().height,
+    )
+    expect(heights).toHaveLength(2)
+    for (const height of heights) expect(height).toBeCloseTo(lineHeight, 1)
+    view.unmount()
+  })
+})
+
 describe('代码 token 的配色不会被吞掉（层叠契约）', () => {
   beforeEach(() => {
     localStorage.clear()
