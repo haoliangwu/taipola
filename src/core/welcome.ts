@@ -132,7 +132,7 @@ echo "hello, taipola"
 
 ![taipola 的自拍](https://raw.githubusercontent.com/haoliangwu/taipola/main/docs/logo.webp){width=160}
 
-你随手打出来的网址我也认：https://github.com/haoliangwu/taipola 就像这样，夹在句子里的 https://example.net 也跑不掉。
+你随手打出来的网址我也认：https://github.com/haoliangwu/taipola 就像这样，夹在句子里的 https://haoliangwu.github.io/taipola/ 也跑不掉。
 
 那个 GitHub 网址就是我的家。要是你觉得我还算好用，回家的时候顺手给我点一颗小星星好不好呀？就一颗，我能偷偷开心一整天。
 

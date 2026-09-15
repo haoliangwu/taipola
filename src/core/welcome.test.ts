@@ -48,13 +48,14 @@ describe('欢迎文档', () => {
     expect(WELCOME_DOC).not.toContain('Cmd/Ctrl + E')
   })
 
-  it('演示链接指向仓库，并留了一句求 star 的话', () => {
-    // The demo links used to point at example.com — a placeholder a reader cannot
-    // act on. They now point at the repo, so the one place the reader is invited to
-    // click is the place that actually exists.
-    expect(WELCOME_DOC).not.toContain('example.com')
+  it('演示链接全部指向真实地址，并留了一句求 star 的话', () => {
+    // The demos used to point at example.com / example.net — placeholders a reader
+    // cannot act on. They now point at the repo and at the live app, so every link
+    // the welcome document invites a click on is one that actually exists.
+    expect(WELCOME_DOC).not.toContain('example.')
     expect(WELCOME_DOC).toContain('[链接](https://github.com/haoliangwu/taipola)')
     expect(WELCOME_DOC).toContain('https://github.com/haoliangwu/taipola')
+    expect(WELCOME_DOC).toContain('https://haoliangwu.github.io/taipola/')
     expect(WELCOME_DOC).toContain('小星星')
   })
 
