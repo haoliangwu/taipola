@@ -422,3 +422,33 @@ export function backspaceAtContentStart(doc: string, offset: number): IndentResu
   const renumbered = renumberLists(lines.join('\n'))
   return { doc: renumbered, caret: offsetForLine(renumbered, index + 1) + column }
 }
+
+/**
+ * Flips a task item's check box on `offset`'s line: `[ ]` → `[x]`, `[x]` → `[ ]`.
+ *
+ * One character inside the marker, so the line keeps its shape and every other
+ * offset keeps its meaning — which is what lets the caller commit this as an
+ * ordinary edit and leave the caret where it was (a click on the decorated box
+ * must not move the caret into the line).
+ *
+ * Returns the new document, or null when the line is not a task item (a plain
+ * bullet, a paragraph, or a fence's contents).
+ */
+export function flipTaskCheckboxAt(doc: string, offset: number): string | null {
+  const found = locate(doc, offset)
+  if (!found) return null
+  const { lines, index, item } = found
+  // A fence's contents are text: a `- [ ]` inside one is an example, not a box
+  // (the same guard `indentListItem` and `backspaceAtContentStart` use).
+  if (inFence(lines, index)) return null
+  const box = /\[[ xX]\]/.exec(item.marker)
+  if (!box) return null
+  const next = box[0] === '[ ]' ? '[x]' : '[ ]'
+  lines[index] =
+    item.indent +
+    item.marker.slice(0, box.index) +
+    next +
+    item.marker.slice(box.index + box[0].length) +
+    item.body
+  return lines.join('\n')
+}

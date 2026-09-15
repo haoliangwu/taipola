@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { backspaceAtContentStart, indentListItem, parseListItem, renumberLists } from './lists'
+import {
+  backspaceAtContentStart,
+  flipTaskCheckboxAt,
+  indentListItem,
+  parseListItem,
+  renumberLists,
+} from './lists'
 import { md } from './markdownIt'
 
 /** markdown-it's own structure for `source`, with whitespace folded away. */
@@ -382,5 +388,28 @@ describe('backspaceAtContentStart', () => {
   it('不是块前缀行（普通段落、续行）让开', () => {
     expect(backspaceAtContentStart('甲\n  乙\n', 5)).toBeNull()
     expect(backspaceAtContentStart('1. aaa\n   cont\n', 11)).toBeNull()
+  })
+})
+
+describe('flipTaskCheckboxAt（点击勾选框）', () => {
+  it('未勾选 → 勾选，勾选 → 未勾选', () => {
+    expect(flipTaskCheckboxAt('- [ ] 甲', 4)).toBe('- [x] 甲')
+    expect(flipTaskCheckboxAt('- [x] 甲', 4)).toBe('- [ ] 甲')
+    expect(flipTaskCheckboxAt('- [X] 甲', 4)).toBe('- [ ] 甲')
+  })
+
+  it('嵌套缩进与有序任务都保留形状', () => {
+    expect(flipTaskCheckboxAt('  - [ ] 子项', 6)).toBe('  - [x] 子项')
+    expect(flipTaskCheckboxAt('1. [ ] 甲\n2. [ ] 乙', 3)).toBe('1. [x] 甲\n2. [ ] 乙')
+  })
+
+  it('只改光标所在行', () => {
+    expect(flipTaskCheckboxAt('- [ ] 甲\n- [x] 乙', 10)).toBe('- [ ] 甲\n- [ ] 乙')
+  })
+
+  it('非任务行返回 null（普通列表 / 段落 / 围栏内容）', () => {
+    expect(flipTaskCheckboxAt('- 甲', 2)).toBeNull()
+    expect(flipTaskCheckboxAt('段落', 1)).toBeNull()
+    expect(flipTaskCheckboxAt('```\n- [ ] 甲\n```', 10)).toBeNull()
   })
 })

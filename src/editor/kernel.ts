@@ -25,7 +25,13 @@ import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
 import type { EditBuffers } from '../core/editCommands'
-import { backspaceAtContentStart, indentListItem, parseListItem, renumberLists } from '../core/lists'
+import {
+  backspaceAtContentStart,
+  flipTaskCheckboxAt,
+  indentListItem,
+  parseListItem,
+  renumberLists,
+} from '../core/lists'
 import {
   markupSignature,
   readDocumentSource,
@@ -971,6 +977,19 @@ export class EditorKernel {
     if (this.composing) return
     const host = this.host
     if (!host || this.readOnly) return
+
+    // A click on a rendered task item's check box TOGGLES it instead of placing
+    // the caret (Typora does the same). It has to be decided before the hit
+    // test below: the box is a pseudo-element with no text of its own, so the
+    // hit test would drop the caret into the line and reveal the source.
+    const flipped = this.checkboxFlipAt(event)
+    if (flipped !== null) {
+      event.preventDefault()
+      this.pushUndo({ value: this.doc, caret: this.caret })
+      this.commit(flipped, this.caret)
+      return
+    }
+
     const hit = sourceOffsetAtPoint(event.clientX, event.clientY, event.target as Element | null)
     if (!hit) return
 
@@ -1001,6 +1020,55 @@ export class EditorKernel {
   private handleMouseUp = (): void => {
     // A drag-select ends here: let the browser's final selection reach the model.
     this.placedByUs = false
+  }
+
+  /**
+   * The document with a task item's check box flipped, when the click landed on
+   * the box's decoration — null for every other click.
+   *
+   * The box is drawn by CSS (`.vl-task:not(.revealed)::before`), so there is no
+   * element to hit-test: the band between the line box's left edge and its first
+   * visible text IS the box. That also dates the interaction: only in the
+   * RENDERED state — with the source revealed the `[ ]` is editable text, and a
+   * click there means "put the caret in it", like every other line.
+   */
+  private checkboxFlipAt(event: MouseEvent): string | null {
+    const target = event.target instanceof Element ? event.target : null
+    const lineEl = target?.closest<HTMLElement>('[data-vline]')
+    const blockEl = lineEl?.closest<HTMLElement>('[data-block]')
+    if (!lineEl || !blockEl) return null
+    const blockIndex = Number(blockEl.dataset.block)
+    const lineIndex = Number(lineEl.dataset.vline)
+    const block = this.blocks[blockIndex]
+    const viewLine = this.views[blockIndex]?.lines[lineIndex]
+    if (!block || !viewLine) return null
+    // Rendered state: the line's prefix (`- [ ] `) is a COLLAPSED marker run.
+    // Revealed, it is dim source text and the caret belongs in the line.
+    if (!viewLine.runs.some((run) => run.marker)) return null
+    if (this.lineStates[block.startLine + lineIndex]?.checked == null) return null
+
+    const textLeft = this.firstVisibleTextLeft(lineEl, viewLine)
+    if (textLeft === null) return null
+    const rect = lineEl.getBoundingClientRect()
+    if (event.clientY < rect.top || event.clientY > rect.bottom) return null
+    if (event.clientX >= textLeft) return null
+
+    return flipTaskCheckboxAt(this.doc, this.offsets[blockIndex] + viewLine.sourceStart)
+  }
+
+  /** Left edge of a line's first run that draws text, or null when it has none. */
+  private firstVisibleTextLeft(
+    lineEl: HTMLElement,
+    viewLine: BlockView['lines'][number],
+  ): number | null {
+    const first = viewLine.runs.findIndex((run) => !run.marker && run.text.length > 0)
+    if (first < 0) return null
+    const runEl = lineEl.querySelector<HTMLElement>(`[data-run="${first}"]`)
+    if (!runEl) return null
+    const range = document.createRange()
+    range.selectNodeContents(runEl)
+    const rect = range.getBoundingClientRect()
+    return rect.width > 0 ? rect.left : null
   }
 
   /**
