@@ -188,3 +188,9 @@ describe('脚注定义行', () => {
     expect(states[1].kind).toBe('code')
   })
 })
+
+describe('stripInline 与行内数学', () => {
+  it('$…$ 剥掉定界符、保留表达式', () => {
+    expect(stripInline('标题 $E=mc^2$ 结尾')).toBe('标题 E=mc^2 结尾')
+  })
+})

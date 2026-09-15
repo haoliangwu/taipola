@@ -1,3 +1,7 @@
+import { indentListItem, renumberLists } from './lists'
+import { EXTRA_INLINE } from './view'
+import { findMathAt } from './inline'
+
 export interface EditBuffers {
   value: string
   start: number
@@ -139,7 +143,8 @@ export function toggleHeading(buffer: EditBuffers, level: number): void {
   const current = match ? match[1].length : 0
   const body = match ? line.slice(match[0].length) : line
 
-  const next = current === level ? body : `${'#'.repeat(level)} ${body}`
+  // Level 0 strips the heading back to a paragraph (Typora's ⌘0).
+  const next = level === 0 || current === level ? body : `${'#'.repeat(level)} ${body}`
   const deltaChars = next.length - line.length
 
   buffer.value = value.slice(0, lineStart) + next + value.slice(lineEnd)
@@ -176,3 +181,258 @@ export function insertSnippet(buffer: EditBuffers, snippet: string): void {
 export const TABLE_SNIPPET = `| 列 1 | 列 2 |
 | --- | --- |
 |  |  |`
+
+/* ------------------------------------------------------------------------ */
+/* Typora paragraph/format parity (typora-menus spec, tickets 01/02)        */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Clear Format (⌘\): strip INLINE markers from the selection, keep the text.
+ *
+ * Inline-only on purpose (spec Q5): block prefixes (`#`, `> `, `- `) are the
+ * block-toggle commands' business, and a collapsed caret changes nothing — the
+ * command must never eat literal text around the caret.
+ */
+export function clearFormat(buffer: EditBuffers): void {
+  const { value, start, end } = buffer
+  if (start === end) return
+  let selected = value.slice(start, end)
+  for (let round = 0; round < 8; round++) {
+    let next = selected
+      // Links keep their text; images survive untouched (the `!` guard).
+      .replace(/(?<!!)\[([^\[\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/~~([^~]+)~~/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+    // The extra families strip only when their syntax is ON: when the gate is
+    // closed they are literal text, and stripping literals is eating the user's
+    // writing (spec Q6b).
+    if (EXTRA_INLINE.highlight) next = next.replace(/==([^=]+)==/g, '$1')
+    if (EXTRA_INLINE.superscript) next = next.replace(/\^([^^\s]+)\^/g, '$1')
+    if (EXTRA_INLINE.subscript) next = next.replace(/~([^~\s]+)~/g, '$1')
+    // Math is always on: `$…$`, `\(…\)` and `\[…\]` lose their delimiters
+    // wherever they sit in the selection — the anchored scanner has to be
+    // walked, since these are start-anchored forms.
+    let math = findMathAt(next)
+    while (math) {
+      next = next.slice(0, math.openStart) + math.inner + next.slice(math.closeEnd)
+      math = findMathAt(next)
+    }
+    if (next === selected) break
+    selected = next
+  }
+  buffer.value = value.slice(0, start) + selected + value.slice(end)
+  buffer.end = start + selected.length
+  // start unchanged: the stripped text begins where the selection began.
+}
+
+/** Change the caret line's heading by ±1; every boundary is a silent no-op. */
+export function changeHeadingLevel(buffer: EditBuffers, delta: 1 | -1): void {
+  const { value, start } = buffer
+  const lineStart = value.lastIndexOf('\n', start - 1) + 1
+  const lineEndRaw = value.indexOf('\n', start)
+  const lineEnd = lineEndRaw === -1 ? value.length : lineEndRaw
+  const line = value.slice(lineStart, lineEnd)
+
+  const match = HEADING_RE.exec(line)
+  const current = match ? match[1].length : 0
+  // A paragraph has no level to move; h1 cannot rise, h6 cannot fall. (Typora
+  // turns a paragraph into H6 on ⌘= — a quirk we deliberately do not copy.)
+  if (current === 0) return
+  const nextLevel = current + delta
+  if (nextLevel < 1 || nextLevel > 6) return
+
+  const body = line.slice(match![0].length)
+  const next = `${'#'.repeat(nextLevel)} ${body}`
+  const deltaChars = next.length - line.length
+  buffer.value = value.slice(0, lineStart) + next + value.slice(lineEnd)
+  buffer.start = Math.max(lineStart, start + deltaChars)
+  buffer.end = Math.max(buffer.start, buffer.end + deltaChars)
+}
+
+/* ------------------------- block prefixes -------------------------------- */
+
+/** One kind of block prefix the toggle commands add/remove. */
+export type BlockPrefixKind = 'quote' | 'ul' | 'ol' | 'task'
+
+const UL_RE = /^- /
+const OL_RE = /^\d+[.)] /
+const TASK_RE = /^- \[[ xX]\] /
+const QUOTE_RE = /^> /
+
+function toggleOne(line: string, kind: BlockPrefixKind): string {
+  switch (kind) {
+    case 'quote':
+      return QUOTE_RE.test(line) ? line.replace(/^>\s?/, '') : `> ${line}`
+    case 'ul': {
+      if (UL_RE.test(line)) return line.slice(2)
+      if (OL_RE.test(line)) return line.replace(OL_RE, '- ')
+      return `- ${line}`
+    }
+    case 'ol': {
+      if (OL_RE.test(line)) return line.replace(OL_RE, '')
+      // Bullet and task lines both carry `- `: swap the marker, keep the text
+      // (a task's checkbox stays put).
+      if (UL_RE.test(line)) return line.replace(/^[-*+] /, '1. ')
+      return `1. ${line}`
+    }
+    case 'task': {
+      if (TASK_RE.test(line)) return line.replace(TASK_RE, '')
+      if (OL_RE.test(line)) return line.replace(OL_RE, '$&[ ] ')
+      if (UL_RE.test(line)) return line.replace(/^[-*+] /, '$&[ ] ')
+      return '- [ ] ' + line
+    }
+  }
+}
+
+/**
+ * Selection-aware block toggles (⌥⌘Q/U/O/X): each line the selection covers
+ * (the caret line when collapsed) gets its prefix added, swapped or removed —
+ * see `toggleOne`. Ordered toggles renumber the document once, so `1. 甲`
+ * followed by a new `1.` becomes `1. 甲\n2.` instead of two lists.
+ */
+export function toggleBlockPrefix(buffer: EditBuffers, kind: BlockPrefixKind): void {
+  const { value, start, end } = buffer
+  const lineStartOf = (pos: number): number => value.lastIndexOf('\n', pos - 1) + 1
+  const lineEndOf = (pos: number): number => {
+    const i = value.indexOf('\n', pos)
+    return i === -1 ? value.length : i
+  }
+
+  const firstStart = lineStartOf(start)
+  const lastStart = lineStartOf(end > start ? end - 1 : end)
+  const edits: Array<{ start: number; end: number; text: string }> = []
+  for (let at = firstStart; at <= lastStart; ) {
+    const lineEnd = lineEndOf(at)
+    const line = value.slice(at, lineEnd)
+    const text = toggleOne(line, kind)
+    if (text !== line) edits.push({ start: at, end: lineEnd, text })
+    at = lineEnd + 1
+  }
+  if (edits.length === 0) return
+
+  const offsetOf = (offset: number): number => {
+    let delta = 0
+    for (const e of edits) {
+      if (e.end <= offset) delta += e.text.length - (e.end - e.start)
+      else if (e.start < offset) return offset + delta
+      else break
+    }
+    return offset + delta
+  }
+
+  let next = ''
+  let cursor = 0
+  for (const e of edits) {
+    next += value.slice(cursor, e.start) + e.text
+    cursor = e.end
+  }
+  next += value.slice(cursor)
+  if (kind === 'ol') next = renumberLists(next)
+
+  buffer.value = next
+  buffer.start = offsetOf(start)
+  buffer.end = offsetOf(end)
+}
+
+/** ⌘]/⌘[: the kernel's list indent, exactly the semantics Tab already has. */
+export function indentSelection(buffer: EditBuffers, direction: 'in' | 'out'): void {
+  const result = indentListItem(buffer.value, buffer.start, direction)
+  if (!result) return // fence or impossible move: the key does nothing
+  buffer.value = result.doc
+  buffer.start = buffer.end = result.caret
+}
+
+/* ------------------------------ inserts ---------------------------------- */
+
+/** Next free footnote number across both refs (`[^n]`) and definitions. */
+function nextFootnoteNumber(doc: string): number {
+  const nums = [...doc.matchAll(/\[\^(\d+)\]/g)].map((m) => Number(m[1]))
+  return nums.length ? Math.max(...nums) + 1 : 1
+}
+
+/**
+ * Footnote (⌥⌘R): `[^n]` right after the selection (the text stays put), with
+ * an empty `[^n]: ` definition at the end of the document.
+ */
+export function insertFootnote(buffer: EditBuffers): void {
+  const { value, end } = buffer
+  const n = nextFootnoteNumber(value)
+  const marker = `[^${n}]`
+  const withRef = value.slice(0, end) + marker + value.slice(end)
+  const suffix = withRef.endsWith('\n') ? '\n' : '\n\n'
+  buffer.value = withRef + suffix + `[^${n}]: `
+  buffer.start = end
+  buffer.end = end + marker.length
+}
+
+/** Next free reference id across definitions (`[n]: `). */
+function nextLinkRefNumber(doc: string): number {
+  const nums = [...doc.matchAll(/^\s*\[(\d+)\]:/gm)].map((m) => Number(m[1]))
+  return nums.length ? Math.max(...nums) + 1 : 1
+}
+
+/**
+ * Link Reference (⌥⌘L): wrap the selection as `[text][n]` and append an empty
+ * `[n]: ` definition. No selection → nothing: never leave a half-made `[][n]`.
+ */
+export function insertLinkReference(buffer: EditBuffers): void {
+  const { value, start, end } = buffer
+  if (start === end) return
+  const n = nextLinkRefNumber(value)
+  const marker = `[${value.slice(start, end)}][${n}]`
+  const withRef = value.slice(0, start) + marker + value.slice(end)
+  const suffix = withRef.endsWith('\n') ? '\n' : '\n\n'
+  buffer.value = withRef + suffix + `[${n}]: `
+  buffer.start = start
+  buffer.end = start + marker.length
+}
+
+/** Horizontal rule (⌥⌘-): a `---` block right after the current line. */
+export function insertHr(buffer: EditBuffers): void {
+  const { value, start } = buffer
+  const lineEndRaw = value.indexOf('\n', start)
+  if (lineEndRaw === -1) {
+    const at = value.length
+    buffer.value = value + '\n---'
+    buffer.start = buffer.end = at + 4
+    return
+  }
+  const at = lineEndRaw + 1
+  buffer.value = value.slice(0, at) + '---\n' + value.slice(at)
+  buffer.start = buffer.end = at + 3
+}
+
+/**
+ * Inline math toggle (⌃M, Typora's `toggleStyle('inline_math')`):
+ *
+ * - caret inside an existing math construct → strip its delimiters (the math
+ *   is turned back into plain text, never nested `$$`);
+ * - non-empty selection → wrap the selection;
+ * - collapsed caret → grow over the word (Typora's selectWord) and wrap.
+ *
+ * The enclosing-construct scan shares `MATH_FORMS` with the viewer's run
+ * scanner (`inline.ts`), so the command and the render never disagree about
+ * what counts as math.
+ */
+export function toggleInlineMath(buffer: EditBuffers): void {
+  const { value, start, end } = buffer
+
+  const enclosing = findMathAt(value)
+  if (enclosing && start >= enclosing.openStart && end <= enclosing.closeEnd) {
+    buffer.value =
+      value.slice(0, enclosing.openStart) + enclosing.inner + value.slice(enclosing.closeEnd)
+    buffer.start = enclosing.openStart
+    buffer.end = enclosing.openStart + enclosing.inner.length
+    return
+  }
+
+  if (start === end) {
+    const before = /\S+$/.exec(value.slice(0, start))
+    const after = /^\S+/.exec(value.slice(start))
+    if (before) buffer.start -= before[0].length
+    if (after) buffer.end += after[0].length
+  }
+  toggleInline(buffer, '$')
+}

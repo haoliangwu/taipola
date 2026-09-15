@@ -14,12 +14,20 @@ import { useFileTree } from './useFileTree'
 import { useSidebarPanel } from './useSidebarPanel'
 import {
   TABLE_SNIPPET,
+  changeHeadingLevel,
+  clearFormat,
   deleteLine,
+  indentSelection,
+  insertFootnote,
+  insertHr,
   insertLink,
+  insertLinkReference,
   insertSnippet,
+  toggleBlockPrefix,
   toggleHeading,
   toggleInline,
   toggleInlineCode,
+  toggleInlineMath,
 } from '../core/editCommands'
 
 const OUTLINE_DEBOUNCE_MS = 200
@@ -602,10 +610,20 @@ export default function App() {
       heading: (level: number) => () => applyEdit((b) => toggleHeading(b, level)),
       deleteLine: () => applyEdit((b) => deleteLine(b)),
       table: () => applyEdit((b) => insertSnippet(b, TABLE_SNIPPET)),
-      quote: () => applyEdit((b) => insertSnippet(b, '> ')),
-      list: () => applyEdit((b) => insertSnippet(b, '- ')),
-      task: () => applyEdit((b) => insertSnippet(b, '- [ ] ')),
+      quote: () => applyEdit((b) => toggleBlockPrefix(b, 'quote')),
+      list: () => applyEdit((b) => toggleBlockPrefix(b, 'ul')),
+      orderedList: () => applyEdit((b) => toggleBlockPrefix(b, 'ol')),
+      task: () => applyEdit((b) => toggleBlockPrefix(b, 'task')),
       codeBlock: () => applyEdit((b) => insertSnippet(b, '```\n\n```')),
+      clearFormat: () => applyEdit((b) => clearFormat(b)),
+      headingIncrease: () => applyEdit((b) => changeHeadingLevel(b, -1)),
+      headingDecrease: () => applyEdit((b) => changeHeadingLevel(b, 1)),
+      indent: () => applyEdit((b) => indentSelection(b, 'in')),
+      outdent: () => applyEdit((b) => indentSelection(b, 'out')),
+      footnotes: () => applyEdit((b) => insertFootnote(b)),
+      linkReference: () => applyEdit((b) => insertLinkReference(b)),
+      hr: () => applyEdit((b) => insertHr(b)),
+      inlineMath: () => applyEdit((b) => toggleInlineMath(b)),
     }),
     [applyEdit],
   )
@@ -641,6 +659,7 @@ export default function App() {
       blur: () => (document.activeElement as HTMLElement | null)?.blur(),
       bold: commands.bold,
       italic: commands.italic,
+      strike: commands.strike,
       inlineCode: commands.code,
       link: commands.link,
       deleteLine: commands.deleteLine,
@@ -650,6 +669,22 @@ export default function App() {
       heading4: commands.heading(4),
       heading5: commands.heading(5),
       heading6: commands.heading(6),
+      paragraph: commands.heading(0),
+      headingIncrease: commands.headingIncrease,
+      headingDecrease: commands.headingDecrease,
+      clearFormat: commands.clearFormat,
+      quote: commands.quote,
+      orderedList: commands.orderedList,
+      unorderedList: commands.list,
+      taskList: commands.task,
+      indent: commands.indent,
+      outdent: commands.outdent,
+      codeBlock: commands.codeBlock,
+      footnotes: commands.footnotes,
+      linkReference: commands.linkReference,
+      hr: commands.hr,
+      table: commands.table,
+      inlineMath: commands.inlineMath,
       save: () => void handleSave(false),
       saveAs: () => void handleSave(true),
       open: () => void handleOpen(),
@@ -743,18 +778,19 @@ export default function App() {
         <div className="toolbar" role="toolbar" aria-label="格式">
           <ToolButton label="B" title="加粗 (Cmd/Ctrl+B)" className="is-bold" onClick={commands.bold} />
           <ToolButton label="I" title="斜体 (Cmd/Ctrl+I)" className="is-italic" onClick={commands.italic} />
-          <ToolButton label="S" title="删除线" className="is-strike" onClick={commands.strike} />
-          <ToolButton label="‹›" title="行内代码 (Cmd/Ctrl+E)" onClick={commands.code} />
+          <ToolButton label="S" title="删除线 (Ctrl+Shift+`)" className="is-strike" onClick={commands.strike} />
+          <ToolButton label="‹›" title="行内代码 (Ctrl+`)" onClick={commands.code} />
           <span className="toolbar-sep" />
           <ToolButton label="H1" title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
           <ToolButton label="H2" title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
           <ToolButton label="H3" title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
           <span className="toolbar-sep" />
-          <ToolButton label="❝" title="引用" onClick={commands.quote} />
-          <ToolButton label="•" title="无序列表" onClick={commands.list} />
-          <ToolButton label="☑" title="任务列表" onClick={commands.task} />
-          <ToolButton label="▦" title="插入表格" onClick={commands.table} />
-          <ToolButton label="{}" title="代码块" onClick={commands.codeBlock} />
+          <ToolButton label="❝" title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
+          <ToolButton label="•" title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
+          <ToolButton label="1." title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
+          <ToolButton label="☑" title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
+          <ToolButton label="▦" title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
+          <ToolButton label="{}" title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
           <ToolButton label="🔗" title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
         </div>
 

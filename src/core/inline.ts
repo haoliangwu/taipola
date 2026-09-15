@@ -112,6 +112,58 @@ export function parseLine(raw: string): LineParts {
 export const FOOTNOTE_DEFINITION = /^ {0,3}\[\^([^\]]+)\]:/
 
 /**
+ * Math delimiters this editor recognises, one shared source of truth.
+ *
+ * `view.ts` (the run scanner) and `editCommands.ts` (⌃M, clearFormat) both
+ * need the same rules; two private copies would drift. The dollar rule is
+ * Pandoc verbatim (`internals.md` §3): no whitespace after the opener, `\$`
+ * inside, the closer may not follow a space or a backslash, no digit after
+ * the closer. `$…$` content can never contain a raw `$`, so `$$…$$` display
+ * math never matches — it stays literal (out of scope).
+ */
+export const DOLLAR_MATH_RE = /^\$(?!\s)((?:\\\$|[^$])*?[^\\\s])\$(?!\d)/
+export const PAREN_MATH_RE = /^\\\((?!\s)((?:(?!\\\))[\s\S])*?[^\\\s])\\\)/
+export const BRACKET_MATH_RE = /^\\\[(?!\s)((?:(?!\\\])[\s\S])*?[^\\\s])\\\]/
+
+/**
+ * The three math forms as one table: scanner, opener/closer and their widths.
+ * The run scanner (view.ts), the ⌃M toggle and clearFormat all walk this same
+ * table, so "what counts as math" can never disagree between them.
+ */
+export const MATH_FORMS: Array<{
+  re: RegExp
+  openLen: number
+  closeLen: number
+}> = [
+  { re: DOLLAR_MATH_RE, openLen: 1, closeLen: 1 },
+  { re: PAREN_MATH_RE, openLen: 2, closeLen: 2 },
+  { re: BRACKET_MATH_RE, openLen: 2, closeLen: 2 },
+]
+
+/** Finds one math construct anywhere in `text`; returns the content and where
+ * its delimiters sit, for the commands that add or remove them. */
+export function findMathAt(text: string, from = 0):
+  | { openStart: number; openEnd: number; closeStart: number; closeEnd: number; inner: string }
+  | null {
+  for (let i = from; i < text.length; i++) {
+    const rest = text.slice(i)
+    for (const form of MATH_FORMS) {
+      const m = form.re.exec(rest)
+      if (!m) continue
+      const closeStart = i + m[0].length - form.closeLen
+      return {
+        openStart: i,
+        openEnd: i + form.openLen,
+        closeStart,
+        closeEnd: closeStart + form.closeLen,
+        inner: m[1],
+      }
+    }
+  }
+  return null
+}
+
+/**
  * A line indented onto the definition above it — the rest of the note.
  *
  * `markdown-it-footnote` ends a definition at the first line that is not indented
@@ -321,6 +373,12 @@ export function stripInline(text: string): string {
     if (link) {
       out += link[1]
       i += link[0].length
+      continue
+    }
+    const math = DOLLAR_MATH_RE.exec(rest)
+    if (math) {
+      out += math[1]
+      i += math[0].length
       continue
     }
     const code = /^(`+)([\s\S]*?)\1/.exec(rest)

@@ -24,6 +24,7 @@ import type { Block } from '../core/markdown'
 import type { BlockView, ImageMark, ViewRun } from '../core/view'
 import type { LineState } from '../core/inline'
 import { isBlankLine } from '../core/lines'
+import { mathHtml } from './math'
 
 /* -------------------------------------------------------------------------- */
 /* building                                                                   */
@@ -51,9 +52,13 @@ function runClass(run: ViewRun, state: LineState | undefined): string {
   if (run.mark.bold) cls.push('rn-bold')
   if (run.mark.italic) cls.push('rn-italic')
   if (run.mark.strike) cls.push('rn-strike')
+  if (run.mark.highlight) cls.push('rn-highlight')
+  if (run.mark.superscript) cls.push('rn-sup')
+  if (run.mark.subscript) cls.push('rn-sub')
   if (run.mark.code) cls.push('rn-code')
   if (run.mark.link !== undefined) cls.push('rn-link')
   if (run.mark.footnoteRef !== undefined) cls.push('rn-footnote-ref')
+  if (run.mark.math !== undefined) cls.push('rn-math')
   if (state?.kind === 'code' && !run.marker) cls.push('rn-codeblock')
   return cls.join(' ')
 }
@@ -65,6 +70,7 @@ function runElement(
   state: LineState | undefined,
 ): HTMLElement {
   if (run.mark.img) return imageElement(existing, run, index, state)
+  if (run.mark.math !== undefined && !run.dim) return mathElement(existing, run, index, state)
 
   const span = existing && existing.hasAttribute('data-run') ? existing : document.createElement('span')
   // An element rebuilt as a plain text run (the caret moved into the image) must
@@ -80,6 +86,55 @@ function runElement(
   // replaces the text node, which would throw away the browser's selection (and
   // an in-flight IME composition) for no reason.
   if (span.textContent !== run.text) span.textContent = run.text
+  return span
+}
+
+/**
+ * A rendered inline-math expression.
+ *
+ * The same shape as a rendered image: KaTeX's static HTML replaces the source
+ * on screen, while the `$…$` SOURCE rides along in a hidden span — without
+ * that copy, absorbing the document from the DOM would delete the math line
+ * outright. `run.text` here is the expression WITHOUT the delimiters (the `$`
+ * markers are their own marker runs), so the KaTeX output is rebuilt whenever
+ * the expression itself changes.
+ */
+function mathElement(
+  existing: HTMLElement | null,
+  run: ViewRun,
+  index: number,
+  state: LineState | undefined,
+): HTMLElement {
+  const usable =
+    existing &&
+    existing.hasAttribute('data-run') &&
+    existing.querySelector(':scope > .katex') !== null
+  const span = usable ? (existing as HTMLElement) : document.createElement('span')
+  setAttr(span, 'data-run', String(index))
+  setAttr(span, 'data-src', String(run.src))
+  // `runClass` already carries `rn-math`; nothing extra to append.
+  const className = runClass(run, state)
+  if (span.className !== className) span.className = className
+
+  const source = span.querySelector<HTMLElement>(':scope > .rn-src')
+  const sourceEl = source ?? document.createElement('span')
+  if (!source) {
+    sourceEl.className = 'rn-src'
+    sourceEl.setAttribute('aria-hidden', 'true')
+    span.insertBefore(sourceEl, span.firstChild)
+  }
+  if (sourceEl.textContent !== run.text) sourceEl.textContent = run.text
+
+  const math = span.querySelector<HTMLElement>(':scope > .katex-container')
+  if (!math) {
+    const fresh = document.createElement('span')
+    fresh.className = 'katex-container'
+    fresh.innerHTML = mathHtml(run.text)
+    span.appendChild(fresh)
+  } else if (math.dataset.tex !== run.text) {
+    math.dataset.tex = run.text
+    math.innerHTML = mathHtml(run.text)
+  }
   return span
 }
 
@@ -343,7 +398,9 @@ export function markupSignature(
         const flags =
           `${run.marker ? 'm' : ''}${run.dim ? 'd' : ''}${run.mark.bold ? 'b' : ''}` +
           `${run.mark.italic ? 'i' : ''}${run.mark.strike ? 's' : ''}${run.mark.code ? 'c' : ''}` +
+          `${run.mark.highlight ? 'h' : ''}${run.mark.superscript ? 'p' : ''}${run.mark.subscript ? 'q' : ''}` +
           `${run.mark.link !== undefined ? `l${run.mark.link}` : ''}` +
+          `${run.mark.math !== undefined ? `M${run.mark.math}` : ''}` +
           `${run.mark.img ? `g${run.mark.img.src}` : ''}`
         parts.push(`${run.src}${flags}=${run.text}`)
       }

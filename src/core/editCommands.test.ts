@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
+  changeHeadingLevel,
+  clearFormat,
   deleteLine,
+  indentSelection,
+  insertFootnote,
+  insertHr,
   insertLink,
+  insertLinkReference,
   insertSnippet,
+  toggleBlockPrefix,
   toggleHeading,
   toggleInline,
   toggleInlineCode,
+  toggleInlineMath,
   type EditBuffers,
 } from './editCommands'
 
@@ -146,12 +154,209 @@ describe('insertSnippet', () => {
   it('行中间插入时先补一个换行', () => {
     const result = run('ab', 1, 1, (b) => insertSnippet(b, '> '))
     expect(result.value).toBe('a\n> b')
-    // 光标停在插入片段之后（`\n> ` 占 3 个字符）
+    // 光标停在插入片段之后（`> ` 占 2 个字符）
     expect(result.start).toBe(4)
   })
 
   it('已在行首则不再补换行', () => {
     const result = run('a\nb', 2, 2, (b) => insertSnippet(b, '- '))
     expect(result.value).toBe('a\n- b')
+  })
+})
+
+describe('toggleHeading level 0（Typora ⌘0：清除标题）', () => {
+  it('标题行变为普通段落', () => {
+    expect(run('## 标题', 4, 4, (b) => toggleHeading(b, 0)).value).toBe('标题')
+  })
+
+  it('普通段落按 ⌘0 是无操作', () => {
+    const result = run('段落', 2, 2, (b) => toggleHeading(b, 0))
+    expect(result.value).toBe('段落')
+    expect(result.start).toBe(2)
+  })
+})
+
+describe('changeHeadingLevel（⌘= 升 / ⌘- 降）', () => {
+  it('升一级与降一级', () => {
+    expect(run('## 中', 4, 4, (b) => changeHeadingLevel(b, -1)).value).toBe('# 中')
+    expect(run('## 中', 4, 4, (b) => changeHeadingLevel(b, 1)).value).toBe('### 中')
+  })
+
+  it('四个边界全部无操作：段落升/降、h1 升、h6 降', () => {
+    expect(run('段落', 2, 2, (b) => changeHeadingLevel(b, 1)).value).toBe('段落')
+    expect(run('段落', 2, 2, (b) => changeHeadingLevel(b, -1)).value).toBe('段落')
+    expect(run('# 一', 3, 3, (b) => changeHeadingLevel(b, -1)).value).toBe('# 一')
+    expect(run('###### 六', 8, 8, (b) => changeHeadingLevel(b, 1)).value).toBe('###### 六')
+  })
+
+  it('光标跟随位移', () => {
+    const result = run('## 标题', 5, 5, (b) => changeHeadingLevel(b, -1))
+    expect(result.value).toBe('# 标题')
+    expect(result.start).toBe(4)
+  })
+})
+
+describe('clearFormat（⌘\：只剥行内标记）', () => {
+  it('剥掉粗体/斜体/删除线/代码，保留文字', () => {
+    const result = run('**粗** ~~删~~ `码` *斜*', 0, 19, (b) => clearFormat(b))
+    expect(result.value).toBe('粗 删 码 斜')
+  })
+
+  it('链接只留文字', () => {
+    expect(run('[文字](https://x)', 0, 15, (b) => clearFormat(b)).value).toBe('文字')
+  })
+
+  it('图片不被破坏（alt 里的链接不剥）', () => {
+    const img = '![图](img.png)'
+    expect(run(img, 0, img.length, (b) => clearFormat(b)).value).toBe(img)
+  })
+
+  it('嵌套标记逐层剥', () => {
+    expect(run('**粗 *斜* 内**', 0, 11, (b) => clearFormat(b)).value).toBe('粗 斜 内')
+  })
+
+  it('空选区是无操作', () => {
+    const result = run('**粗**', 1, 1, (b) => clearFormat(b))
+    expect(result.value).toBe('**粗**')
+    expect(result.start).toBe(1)
+  })
+})
+
+describe('toggleBlockPrefix（⌥⌘Q/U/O/X：块级切换）', () => {
+  it('引用：加与剥', () => {
+    expect(run('引用', 2, 2, (b) => toggleBlockPrefix(b, 'quote')).value).toBe('> 引用')
+    expect(run('> 引用', 5, 5, (b) => toggleBlockPrefix(b, 'quote')).value).toBe('引用')
+  })
+
+  it('无序列表：加、剥、以及从有序换标记', () => {
+    expect(run('项', 1, 1, (b) => toggleBlockPrefix(b, 'ul')).value).toBe('- 项')
+    expect(run('- 项', 4, 4, (b) => toggleBlockPrefix(b, 'ul')).value).toBe('项')
+    expect(run('2. 项', 5, 5, (b) => toggleBlockPrefix(b, 'ul')).value).toBe('- 项')
+    // 任务行已带 '-' 前缀：剥成普通段落是「已有该种前缀」的规则
+    expect(run('- [ ] 事', 8, 8, (b) => toggleBlockPrefix(b, 'ul')).value).toBe('[ ] 事')
+  })
+
+  it('有序列表：加、剥、换标记，并重排编号', () => {
+    expect(run('项', 1, 1, (b) => toggleBlockPrefix(b, 'ol')).value).toBe('1. 项')
+    expect(run('- 项', 4, 4, (b) => toggleBlockPrefix(b, 'ol')).value).toBe('1. 项')
+    expect(run('3. 项', 5, 5, (b) => toggleBlockPrefix(b, 'ol')).value).toBe('项')
+    expect(run('9. 甲\n丙', 5, 5, (b) => toggleBlockPrefix(b, 'ol')).value).toBe('1. 甲\n2. 丙')
+  })
+
+  it('任务列表：加、剥、有列表时保留标记加勾选', () => {
+    expect(run('事', 1, 1, (b) => toggleBlockPrefix(b, 'task')).value).toBe('- [ ] 事')
+    expect(run('- [ ] 事', 9, 9, (b) => toggleBlockPrefix(b, 'task')).value).toBe('事')
+    expect(run('- 项', 4, 4, (b) => toggleBlockPrefix(b, 'task')).value).toBe('- [ ] 项')
+    expect(run('1. 项', 5, 5, (b) => toggleBlockPrefix(b, 'task')).value).toBe('1. [ ] 项')
+  })
+
+  it('选区覆盖多行时逐行切换', () => {
+    const result = run('甲\n乙\n丙', 0, 4, (b) => toggleBlockPrefix(b, 'quote'))
+    expect(result.value).toBe('> 甲\n> 乙\n丙')
+    expect(result.start).toBe(0)
+  })
+
+  it('切换只作用光标所在行', () => {
+    expect(run('a\n> b', 1, 1, (b) => toggleBlockPrefix(b, 'quote')).value).toBe('> a\n> b')
+    expect(run('a\n> b', 2, 2, (b) => toggleBlockPrefix(b, 'quote')).value).toBe('a\nb')
+  })
+})
+
+describe('indentSelection（⌘]/⌘[：镜像 Tab 语义）', () => {
+  it('列表内缩进/反缩进并重排', () => {
+    const inResult = run('- 甲', 4, 4, (b) => indentSelection(b, 'in'))
+    // 无上层项时 Tab 是插普通空格（内核 plainIndent 语义）
+    expect(inResult.value).toBe('- 甲  ')
+    expect(inResult.start).toBe(6)
+  })
+
+  it('按 Shift+Tab 语义反缩进最外层项 = 出列表', () => {
+    const result = run('- 甲', 4, 4, (b) => indentSelection(b, 'out'))
+    expect(result.value).toBe('甲')
+  })
+
+  it('围栏内无操作', () => {
+    const result = run('```\n- 甲\n```', 9, 9, (b) => indentSelection(b, 'in'))
+    expect(result.value).toBe('```\n- 甲\n```')
+  })
+})
+
+describe('insertFootnote（⌥⌘R）', () => {
+  it('无选区：光标处插空引用，定义行追加文末', () => {
+    const result = run('正文', 2, 2, insertFootnote)
+    expect(result.value).toBe('正文[^1]\n\n[^1]: ')
+  })
+
+  it('有选区：文字不搬家，引用号跟在后面', () => {
+    const result = run('一段文字', 1, 3, insertFootnote)
+    expect(result.value).toBe('一段文[^1]字\n\n[^1]: ')
+    expect(result.selected).toBe('[^1]')
+  })
+
+  it('编号取现存最大 +1', () => {
+    const result = run('x[^2]y\n\n[^2]: 定义', 1, 1, insertFootnote)
+    expect(result.value).toBe('x[^3][^2]y\n\n[^2]: 定义\n\n[^3]: ')
+  })
+})
+
+describe('insertLinkReference（⌥⌘L）', () => {
+  it('无选区无操作', () => {
+    const result = run('文字', 2, 2, insertLinkReference)
+    expect(result.value).toBe('文字')
+  })
+
+  it('有选区：包成引用式链接，定义行追加文末', () => {
+    const result = run('链接文字', 0, 3, insertLinkReference)
+    expect(result.value).toBe('[链接文][1]字\n\n[1]: ')
+    expect(result.selected).toBe('[链接文][1]')
+  })
+
+  it('编号不与既有定义冲突', () => {
+    const result = run('甲\n\n[1]: url', 0, 1, insertLinkReference)
+    expect(result.value).toBe('[甲][2]\n\n[1]: url\n\n[2]: ')
+  })
+})
+
+describe('insertHr（⌥⌘-）', () => {
+  it('当前行后插入 ---，光标在其后', () => {
+    const result = run('a\nb', 1, 1, insertHr)
+    expect(result.value).toBe('a\n---\nb')
+    expect(result.start).toBe(5)
+  })
+
+  it('最后一行后插入', () => {
+    const result = run('a', 1, 1, insertHr)
+    expect(result.value).toBe('a\n---')
+    expect(result.start).toBe(5)
+  })
+})
+
+describe('toggleInlineMath（⌃M）', () => {
+  it('折叠光标扩选整词并包 $…$', () => {
+    const result = run('甲=乙', 1, 1, toggleInlineMath)
+    expect(result.value).toBe('$甲=乙$')
+  })
+
+  it('有选区直接包（不扩选）', () => {
+    const result = run('前 x 后', 2, 3, toggleInlineMath)
+    expect(result.value).toBe('前 $x$ 后')
+  })
+
+  it('光标在数学内部时剥除定界符（绝不插出 $$ 坏文本）', () => {
+    expect(run('前 $a+b$ 后', 4, 4, toggleInlineMath).value).toBe('前 a+b 后')
+    // \(…\) 形态同样剥
+    expect(run('\\(x\\)', 2, 2, toggleInlineMath).value).toBe('x')
+  })
+
+  it('扩选包完后再次按 ⌃M 可剥掉（toggle 语义）', () => {
+    const result = run('甲=乙', 1, 1, toggleInlineMath)
+    const second = run(result.value, result.start, result.end, toggleInlineMath)
+    expect(second.value).toBe('甲=乙')
+  })
+})
+
+describe('clearFormat 与行内数学（`$` 恒剥、表达式保留）', () => {
+  it('剥 $…$ / \\(…\\) / \\[…\\] 定界符', () => {
+    expect(run('$E=mc^2$ 与 \\(\\alpha\\) 与 \\[\\beta\\]', 0, 33, (b) => clearFormat(b)).value).toBe('E=mc^2 与 \\alpha 与 \\beta')
   })
 })

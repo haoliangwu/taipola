@@ -51,7 +51,9 @@ export default defineConfig(({ command, isPreview }) => ({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png}'],
+        // Fonts joined: KaTeX ships its glyphs as woff2, and the PWA must
+        // precache them for offline math.
+        globPatterns: ['**/*.{js,css,html,ico,png,woff2,woff,ttf}'],
         navigateFallback: 'index.html',
       },
     }),

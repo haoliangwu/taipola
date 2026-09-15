@@ -12,13 +12,21 @@
  * handles them on its own host — they are editing commands, not app commands.
  * What is here is what `README.md` lists under 快捷键, including the
  * combinations that deliberately do nothing.
+ *
+ * The bindings follow Typora's macOS table (`.scratch/typora-menus/spec.md`):
+ * the ⌃ family (⌃` ⌃⇧` ⌃M) is strictly Ctrl-only, the ⌥⌘ family takes
+ * Meta-Alt (Ctrl-Alt is accepted too, inheriting the meta||ctrl convention),
+ * and `Cmd+` arrives as `=` or `+` depending on the layout, with shift or
+ * without — the section whose key it is must not depend on the keyboard.
  */
 
 export type ShellCommand =
   | 'blur'
   | 'bold'
   | 'italic'
+  | 'strike'
   | 'inlineCode'
+  | 'inlineMath'
   | 'link'
   | 'deleteLine'
   | 'heading1'
@@ -27,6 +35,21 @@ export type ShellCommand =
   | 'heading4'
   | 'heading5'
   | 'heading6'
+  | 'paragraph'
+  | 'headingIncrease'
+  | 'headingDecrease'
+  | 'clearFormat'
+  | 'quote'
+  | 'orderedList'
+  | 'unorderedList'
+  | 'taskList'
+  | 'indent'
+  | 'outdent'
+  | 'codeBlock'
+  | 'footnotes'
+  | 'linkReference'
+  | 'hr'
+  | 'table'
   | 'save'
   | 'saveAs'
   | 'open'
@@ -40,6 +63,7 @@ export interface KeyStroke {
   metaKey?: boolean
   ctrlKey?: boolean
   shiftKey?: boolean
+  altKey?: boolean
 }
 
 /**
@@ -51,14 +75,29 @@ export interface KeyStroke {
  * deliberately does not work with one.
  */
 export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
-  const mod = stroke.metaKey === true || stroke.ctrlKey === true
+  const meta = stroke.metaKey === true
+  const ctrl = stroke.ctrlKey === true
+  const alt = stroke.altKey === true
+  const mod = meta || ctrl
   const key = stroke.key.toLowerCase()
 
   if (!mod) return key === 'escape' ? 'blur' : null
 
+  // ⌃ family (Typora's Control keys): Ctrl without Meta. `Cmd+` must not fire
+  // these, so the branch is strict — that is what makes ⌃M not ⌘M. Non-⌃ keys
+  // fall through, so Ctrl+Shift+= still reaches the increase binding below.
+  if (ctrl && !meta) {
+    if (key === '`') return stroke.shiftKey === true ? 'strike' : 'inlineCode'
+    if (key === '~' && stroke.shiftKey === true) return 'strike'
+    if (!stroke.shiftKey && key === 'm') return 'inlineMath'
+  }
+
   // Shift is checked first and returns early: `Cmd+Shift+B` is not "bold with
-  // shift", it is nothing. Only these four bindings use shift.
+  // shift", it is nothing. Only these bindings use shift.
   if (stroke.shiftKey === true) {
+    // `Cmd+` is `Cmd+Shift+=` on US layouts; increase must not be lost to the
+    // shift early-return. `+` is kept for layouts where Shift+= reports it.
+    if (key === '=' || key === '+') return 'headingIncrease'
     if (key === 'k') return 'deleteLine'
     if (key === 's') return 'saveAs'
     if (key === 'o') return 'openFolder'
@@ -68,13 +107,40 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
     return null
   }
 
+  // ⌥⌘ family (Typora's paragraph keys): Meta-Alt, or Ctrl-Alt on the same
+  // convention as every other mod binding.
+  if (alt) {
+    switch (key) {
+      case 'q':
+        return 'quote'
+      case 'o':
+        return 'orderedList'
+      case 'u':
+        return 'unorderedList'
+      case 'x':
+        return 'taskList'
+      case 'c':
+        return 'codeBlock'
+      case 'r':
+        return 'footnotes'
+      case 'l':
+        return 'linkReference'
+      case 't':
+        return 'table'
+      case '-':
+        return 'hr'
+      default:
+        return null
+    }
+  }
+
   switch (key) {
     case 'b':
       return 'bold'
     case 'i':
       return 'italic'
-    case 'e':
-      return 'inlineCode'
+    // ⌘E was the old inline-code key; Typora parity moved it to ⌃` above, and
+    // 'e' deliberately binds nothing so the old muscle memory dies cleanly.
     case 'k':
       return 'link'
     case 's':
@@ -83,6 +149,20 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
       return 'open'
     case 'n':
       return 'newDocument'
+    case '0':
+      return 'paragraph'
+    // `Cmd+` is `=` unshifted or `+` shifted, per layout; both bind.
+    case '=':
+    case '+':
+      return 'headingIncrease'
+    case '-':
+      return 'headingDecrease'
+    case '\\':
+      return 'clearFormat'
+    case ']':
+      return 'indent'
+    case '[':
+      return 'outdent'
     case '1':
       return 'heading1'
     case '2':

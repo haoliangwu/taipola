@@ -20,8 +20,12 @@ function runs(v: BlockView, line = 0) {
     ...(run.mark.bold ? { bold: true } : {}),
     ...(run.mark.italic ? { italic: true } : {}),
     ...(run.mark.strike ? { strike: true } : {}),
+    ...(run.mark.highlight ? { highlight: true } : {}),
+    ...(run.mark.superscript ? { superscript: true } : {}),
+    ...(run.mark.subscript ? { subscript: true } : {}),
     ...(run.mark.code ? { code: true } : {}),
     ...(run.mark.link ? { link: run.mark.link } : {}),
+    ...(run.mark.math ? { math: run.mark.math } : {}),
     ...(run.mark.footnoteRef ? { footnoteRef: run.mark.footnoteRef } : {}),
     ...(run.mark.img ? { img: run.mark.img.src } : {}),
   }))
@@ -443,5 +447,90 @@ describe('脚注：引用与定义就地在位渲染', () => {
     const raw = '见[^1]。\n\n[^1]: 补充。'
     const v = buildBlockView(raw, 0, [], 3)
     expect(reconstruct(v)).toBe(raw)
+  })
+})
+
+describe('行内数学（IM02: $…$ / \\(…\\) / \\[…\\]）', () => {
+  it('$…$ 折叠时内容 run 带 math 标记，展开时撤回（显示源码）', () => {
+    const collapsed = runs(view('a $x+1$ b', []))
+    const mathRun = collapsed.find((r) => (r as { math?: string }).math !== undefined)
+    expect(mathRun).toMatchObject({ text: 'x+1', math: 'x+1' })
+    const opened = runs(view('a $x+1$ b', [3]))
+    expect(opened.some((r) => (r as { math?: string }).math !== undefined)).toBe(false)
+    // 展开态行文本 = 源码（无损视图）
+    expect(reconstruct(view('a $x+1$ b', [3]))).toBe('a $x+1$ b')
+  })
+
+  const mathOf = (raw: string): unknown =>
+    runs(view(raw)).find((r) => (r as { math?: string }).math !== undefined) ?? null
+
+  it('$ 规则：Pandoc 四条边界', () => {
+    expect(mathOf('$x$')).toMatchObject({ text: 'x', math: 'x' })
+    expect(runs(view('price $5')).every((r) => !(r as { math?: string }).math)).toBe(true) // 无闭合
+    expect(mathOf('$ 5$')).toBeNull() // 开符后空格
+    expect(mathOf('$5 $')).toBeNull() // 闭符前空格
+    expect(mathOf('$x\\ y$')).toMatchObject({ math: 'x\\ y' }) // 转义空格
+    expect(mathOf('$5$')).toMatchObject({ math: '5' }) // 数字内容可以
+    expect(mathOf('$x\\$y$')).toMatchObject({ math: 'x\\$y' }) // 转义 $
+    expect(mathOf('a$b$c')).toMatchObject({ text: 'b', math: 'b' }) // 无词边界
+  })
+
+  it('$$…$$ 按自然分片处理（display math 出界，不承诺显示）', () => {
+    // $$x$$ = 字面 $ + 行内 math(x) + 字面 $：内层 $x$ 是合法行内对
+    const r = runs(view('$$x$$'))
+    expect(r.filter((run) => (run as { math?: string }).math !== undefined)).toHaveLength(1)
+    expect(reconstruct(view('$$x$$'))).toBe('$$x$$') // 光源无损
+  })
+
+  it('\\(…\\) 与 \\[…\\] 同样识别', () => {
+    expect(mathOf('\\(\\alpha\\)')).toMatchObject({ math: '\\alpha' })
+    expect(mathOf('\\[\\beta\\]')).toMatchObject({ math: '\\beta' })
+    expect(mathOf('\\( \\alpha\\)')).toBeNull() // 开符后空格
+  })
+})
+
+describe('EXTRA_INLINE 三族（IM01: == ^ ~，默认关）', () => {
+  it('默认全关：三者保持字面', () => {
+    expect(reconstruct(view('==高== ^上^ ~下~'))).toBe('==高== ^上^ ~下~')
+    expect(runs(view('==高==')).every((r) => !r.marker)).toBe(true)
+  })
+
+  it('开启后识别：高亮/上标/下标', async () => {
+    const { EXTRA_INLINE } = await import('./view')
+    EXTRA_INLINE.highlight = true
+    EXTRA_INLINE.superscript = true
+    EXTRA_INLINE.subscript = true
+    try {
+      expect(runs(view('==高==')).find((r) => (r as any).highlight)).toMatchObject({ text: '高', highlight: true })
+      expect(runs(view('H^2^O')).find((r) => (r as any).superscript)).toMatchObject({ text: '2', superscript: true })
+      expect(runs(view('H~2~O')).find((r) => (r as any).subscript)).toMatchObject({ text: '2', subscript: true })
+      // 展开（光标在内）时标记显形、行文本 = 源码
+      expect(reconstruct(view('==高==', [1]))).toBe('==高==')
+      // ~~ 比 ~ 先匹配：删除线优先
+      expect(runs(view('x~~y~~z')).find((r) => (r as any).strike)).toMatchObject({ text: 'y', strike: true })
+      // 内容禁裸空格：^a b^ 不成对
+      expect(runs(view('^a b^'))[0].text).toBe('^a b^')
+    } finally {
+      EXTRA_INLINE.highlight = false
+      EXTRA_INLINE.superscript = false
+      EXTRA_INLINE.subscript = false
+    }
+  })
+
+  it('clearFormat 跟随开关：关时不剥、开时剥', async () => {
+    const { clearFormat } = await import('./editCommands')
+    const run = (value: string, start: number, end: number) => {
+      const b = { value, start, end }
+      clearFormat(b)
+      return b.value
+    }
+    expect(run('==高==', 0, 5)).toBe('==高==')
+    const { EXTRA_INLINE } = await import('./view')
+    EXTRA_INLINE.highlight = true
+    try {
+      expect(run('==高==', 0, 5)).toBe('高')
+    } finally {
+      EXTRA_INLINE.highlight = false
+    }
   })
 })

@@ -11,7 +11,7 @@
  * never fall into a gap. Nothing here reflows text: wrapping is the browser's job.
  */
 
-import { FOOTNOTE_DEFINITION, isThematicBreak } from './inline'
+import { BRACKET_MATH_RE, DOLLAR_MATH_RE, FOOTNOTE_DEFINITION, PAREN_MATH_RE, isThematicBreak } from './inline'
 import { readImageSize } from './imageSize'
 import { isBlankLine } from './lines'
 import { exportableHref, md } from './markdownIt'
@@ -48,6 +48,16 @@ interface Mark {
    * drawn by CSS, because the source's own `[^` and `]` collapse as markers.
    */
   footnoteRef?: string
+  /**
+   * Inline math: the expression, delimiters excluded. Only present while the
+   * block is NOT being edited — the caret block shows the `$…$` source, so
+   * rendering the expression on top of it would duplicate it on screen.
+   */
+  math?: string
+  /** Highlight `==`, superscript `^`, subscript `~` — all gated by EXTRA_INLINE. */
+  highlight?: boolean
+  superscript?: boolean
+  subscript?: boolean
   img?: ImageMark
 }
 
@@ -112,7 +122,18 @@ export interface BlockView {
 }
 
 interface Token {
-  kind: 'bold' | 'italic' | 'strike' | 'code' | 'link' | 'image' | 'footnoteRef'
+  kind:
+    | 'bold'
+    | 'italic'
+    | 'strike'
+    | 'code'
+    | 'link'
+    | 'image'
+    | 'footnoteRef'
+    | 'inlineMath'
+    | 'highlight'
+    | 'superscript'
+    | 'subscript'
   start: number
   end: number
   innerStart: number
@@ -120,6 +141,8 @@ interface Token {
   url?: string
   /** Image alt text, for a `kind: 'image'` token. */
   alt?: string
+  /** The expression inside a `kind: 'inlineMath'` token, delimiters excluded. */
+  math?: string
   /** Image width in pixels, from the `{width=…}` suffix. */
   width?: string
   /** Footnote label, for a `kind: 'footnoteRef'` token. */
@@ -132,6 +155,87 @@ const PAIRED: Array<{ kind: Token['kind']; re: RegExp }> = [
   { kind: 'code', re: /^(`+)([\s\S]*?)\1/ },
   { kind: 'italic', re: /^(\*|_)(?!\s)([\s\S]*?)\1/ },
 ]
+
+/**
+ * The shipped defaults for the extra inline families (`==` highlight, `^` sup,
+ * `~` sub): everything OFF, mirroring Typora's own defaults (its
+ * enableHighlight/enableSubscript/enableSuperscript all default to false —
+ * internals.md §4). The three scanners below still exist and are fully tested
+ * in their ON state; tests of one file flip these objects freely (vitest
+ * isolates module state per file), the shipped value is always the full-off
+ * one. There is deliberately no user-facing option system (spec Q6b).
+ */
+export const EXTRA_INLINE = {
+  highlight: false,
+  superscript: false,
+  subscript: false,
+}
+
+/**
+ * The extra families, table-driven like PAIRED above. Their scanners differ
+ * from PAIRED only in the opener length (`==` is two characters), the content
+ * group, and the gate — the shape is otherwise the same walk. The gate is a
+ * FUNCTION on purpose: it must be read at scan time, not frozen at load, so
+ * tests can flip `EXTRA_INLINE` after the module imported.
+ */
+const EXTRA_PAIRED: Array<{
+  kind: Token['kind']
+  gate: () => boolean
+  re: RegExp
+  opener: number
+  contentGroup: number
+}> = [
+  {
+    kind: 'highlight',
+    gate: () => EXTRA_INLINE.highlight,
+    re: /^(\=\=)(?=\S)([^\r]*?\S)\1/,
+    opener: 2,
+    contentGroup: 2,
+  },
+  {
+    kind: 'superscript',
+    gate: () => EXTRA_INLINE.superscript,
+    re: /^\^(([^\s\n]|(\\\s))+?)\^/,
+    opener: 1,
+    contentGroup: 1,
+  },
+  {
+    kind: 'subscript',
+    gate: () => EXTRA_INLINE.subscript,
+    re: /^~(([^\s\n]|(\\\s))+?)\~/,
+    opener: 1,
+    contentGroup: 1,
+  },
+]
+
+/**
+ * Mathematics this editor recognises: `$…$` (Pandoc rules), `\(…\)` and
+ * `\[…\]` (Typora's legacy LaTeX delimiters, which it parses by default).
+ *
+ * The dollar rule is Pandoc's verbatim (`internals.md` §3): no whitespace
+ * after the opener (`(?!\s)`), `\$` inside, the closer may not follow a
+ * space or a backslash (`[^\\\s]`), and no digit after the closer (`(?!\d)`).
+ * `$$…$$` never matches — the content class cannot contain a raw `$` — so
+ * display math stays literal (out of scope; README backlog).
+ */
+// The three delimiters live in `inline.ts` — stripInline, the ⌃M toggle and
+// this scanner are the same rule everywhere.
+
+/** One math construct at the start of `rest`, in LOCAL offsets. */
+function mathTokenAt(
+  rest: string,
+): { end: number; innerStart: number; innerEnd: number; math: string } | null {
+  for (const [re, opener] of [
+    [DOLLAR_MATH_RE, 1],
+    [PAREN_MATH_RE, 2],
+    [BRACKET_MATH_RE, 2],
+  ] as const) {
+    const m = re.exec(rest)
+    if (!m) continue
+    return { end: m[0].length, innerStart: opener, innerEnd: opener + m[1].length, math: m[1] }
+  }
+  return null
+}
 
 /**
  * Finds every inline construct in one line of source.
@@ -204,6 +308,22 @@ function findSyntaxTokens(text: string): Token[] {
       continue
     }
 
+    // Inline math: `$…$` always; `\(…\)` / `\[…\]` too. The content classes
+    // come from the Typora decoding (internals.md §3) and Pandoc's doc.
+    const math = mathTokenAt(rest)
+    if (math) {
+      tokens.push({
+        kind: 'inlineMath',
+        start: i,
+        end: i + math.end,
+        innerStart: i + math.innerStart,
+        innerEnd: i + math.innerEnd,
+        math: math.math,
+      })
+      i += math.end
+      continue
+    }
+
     let matched = false
     for (const { kind, re } of PAIRED) {
       const m = re.exec(rest)
@@ -216,6 +336,26 @@ function findSyntaxTokens(text: string): Token[] {
         end: i + m[0].length,
         innerStart: i + marker.length,
         innerEnd: i + marker.length + inner.length,
+      })
+      i += m[0].length
+      matched = true
+      break
+    }
+    if (matched) continue
+
+    // The extra marker families ride the same scan, gated by the shipped
+    // defaults (all off). PAIRED ran first on purpose: Typora dispatches del
+    // BEFORE subscript (`internals.md` §1), so `~~` always wins over `~`.
+    for (const extra of EXTRA_PAIRED) {
+      if (!extra.gate()) continue
+      const m = extra.re.exec(rest)
+      if (!m) continue
+      tokens.push({
+        kind: extra.kind,
+        start: i,
+        end: i + m[0].length,
+        innerStart: i + extra.opener,
+        innerEnd: i + extra.opener + m[extra.contentGroup].length,
       })
       i += m[0].length
       matched = true
@@ -836,8 +976,16 @@ function markFor(tokens: Token[], start: number, end: number, visibleMarker: Set
       if (token.kind === 'bold') mark.bold = true
       else if (token.kind === 'italic') mark.italic = true
       else if (token.kind === 'strike') mark.strike = true
+      else if (token.kind === 'highlight') mark.highlight = true
+      else if (token.kind === 'superscript') mark.superscript = true
+      else if (token.kind === 'subscript') mark.subscript = true
       else if (token.kind === 'code') mark.code = true
       else if (token.kind === 'link') mark.link = token.url
+      else if (token.kind === 'inlineMath') {
+        // Like the footnote label: withdraw while the construct is open for
+        // editing, so the source (`$x$`) is what shows instead of the render.
+        if (!visibleMarker.has(token.start)) mark.math = token.math
+      }
       else if (token.kind === 'footnoteRef') {
         // The `[1]` is DRAWN from this mark, so it has to be withdrawn while the
         // construct is open for editing — the source is showing then, and the two

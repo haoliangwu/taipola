@@ -781,6 +781,30 @@ body {
   display: none;
 }
 
+/* A rendered inline-math expression: the KaTeX tree replaces the source on
+   screen, the `$…$` source stays in a hidden span for DOM absorption. */
+.rn-math .rn-src {
+  display: none;
+}
+
+.rn-math .katex {
+  font-size: 1em;
+}
+
+.rn-highlight {
+  background: var(--accent-soft, rgba(255, 213, 0, 0.25));
+}
+
+.rn-sup {
+  vertical-align: super;
+  font-size: 0.8em;
+}
+
+.rn-sub {
+  vertical-align: sub;
+  font-size: 0.8em;
+}
+
 .rn-image img {
   max-width: 100%;
   height: auto;
