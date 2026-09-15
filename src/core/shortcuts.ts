@@ -50,6 +50,9 @@ export type ShellCommand =
   | 'linkReference'
   | 'hr'
   | 'table'
+  | 'tableRowAbove'
+  | 'tableRowBelow'
+  | 'tableRowDelete'
   | 'save'
   | 'saveAs'
   | 'open'
@@ -98,6 +101,12 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
     // `Cmd+` is `Cmd+Shift+=` on US layouts; increase must not be lost to the
     // shift early-return. `+` is kept for layouts where Shift+= reports it.
     if (key === '=' || key === '+') return 'headingIncrease'
+    // The table row keys are Typora's: ⌘⏎ inserts a row below, ⇧⌘⏎ above, and
+    // ⇧⌘⌫ deletes the row (Typora's "Delete Row"). ⇧⌘⌫ used to fall through to
+    // the browser, which deleted the caret's line back to its start — i.e. it ate
+    // the cell's text instead of the row (`.scratch/table-ops/issues/03`).
+    if (key === 'enter') return 'tableRowAbove'
+    if (key === 'backspace') return 'tableRowDelete'
     if (key === 'k') return 'deleteLine'
     if (key === 's') return 'saveAs'
     if (key === 'o') return 'openFolder'
@@ -135,6 +144,8 @@ export function shortcutFor(stroke: KeyStroke): ShellCommand | null {
   }
 
   switch (key) {
+    case 'enter':
+      return 'tableRowBelow'
     case 'b':
       return 'bold'
     case 'i':

@@ -40,7 +40,7 @@ import {
   sanitizeDom,
 } from './render'
 import { isBlankLine, lineOfOffset, offsetForLine } from '../core/lines'
-import { blocksTableBackspace } from '../core/tables'
+import { blocksTableBackspace, moveTableCell, tableAt, type TableContext } from '../core/tables'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -294,6 +294,26 @@ export class EditorKernel {
     this.commit(next, start + buffer.start)
   }
 
+  /**
+   * Applies an edit to the WHOLE document, at document offsets, or does nothing
+   * when the edit declines.
+   *
+   * `applyEdit` is block-scoped — its buffer is the caret's block, which is what
+   * every formatting command wants. A TABLE command is not quite: a table is one
+   * block, but the blank lines around it are not, so DELETING a table has to be
+   * able to take one of them with it or it leaves a hole
+   * (`.scratch/table-ops/issues/03`). The kernel owns the document, the caret and
+   * the undo stack, so this is one method rather than a new layer.
+   */
+  applyDocumentEdit(
+    mutate: (doc: string, caret: number) => { doc: string; caret: number } | null,
+  ): void {
+    const result = mutate(this.doc, this.caret)
+    if (!result) return
+    this.pushUndo({ value: this.doc, caret: this.caret })
+    this.commit(result.doc, result.caret)
+  }
+
   /* ---------------------------------------------------------------------- */
   /* model -> DOM                                                           */
   /* ---------------------------------------------------------------------- */
@@ -399,6 +419,15 @@ export class EditorKernel {
   /* ---------------------------------------------------------------------- */
 
   /** Source offset of the current DOM selection, or null when outside. */
+  /**
+   * The table the caret is in, or null — what the shell's table menu asks before
+   * offering anything. The KERNEL answers it because it owns both halves of the
+   * question (the document and the caret); the shell only decides where to draw.
+   */
+  tableAtCaret(): TableContext | null {
+    return tableAt(this.doc, this.caret)
+  }
+
   private caretFromDom(): number | null {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0) return null
@@ -731,6 +760,18 @@ export class EditorKernel {
       // it does nothing.
       event.preventDefault()
       if (live === null) return
+      // Inside a TABLE, Tab is cell navigation — and forward from the last cell it
+      // appends a row, which is the only keyboard path to a new row at all
+      // (`.scratch/table-ops/issues/03`). It has to come first: the list rule
+      // declines a table row, so without this branch the key did nothing.
+      const cell = moveTableCell(this.doc, live, event.shiftKey ? 'prev' : 'next')
+      if (cell) {
+        // A move inside the existing rows returns the document UNCHANGED, and a
+        // snapshot for it would put a dead entry on the undo stack.
+        if (cell.doc !== this.doc) this.pushUndo({ value: this.doc, caret: this.caret })
+        this.commit(cell.doc, cell.caret)
+        return
+      }
       const edited = indentListItem(this.doc, live, event.shiftKey ? 'out' : 'in')
       if (!edited) return
       this.pushUndo({ value: this.doc, caret: this.caret })

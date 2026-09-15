@@ -257,10 +257,20 @@ function lineElement(
   // row outright — type one character in a table and the delimiter vanished, so
   // the table stopped being a table. `normalizeTables` blanked the row on BOTH
   // sides of the comparison, which is why nothing caught it.
+  //
+  // That hidden run has to FOLLOW the source, not just exist. It used to be
+  // written once and reused as it was, so any edit to the rule row was read back
+  // as the text from before the edit — adding a column writes a rule cell per
+  // column, and the row came back with the old cells
+  // (`.scratch/table-ops/issues/03`).
   if (state?.kind === 'table-delim') {
-    syncChildren(el, 1, (_index, current) =>
-      current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart),
-    )
+    syncChildren(el, 1, (_index, current) => {
+      const run =
+        current && current.hasAttribute('data-run') ? current : hiddenRun(raw, line.sourceStart)
+      if (run.textContent !== raw) run.textContent = raw
+      setAttr(run, 'data-src', String(line.sourceStart))
+      return run
+    })
     return el
   }
 

@@ -85,6 +85,15 @@ describe('shortcutFor', () => {
     expect(shortcutFor(mod('0'))).toBe('paragraph')
   })
 
+  it('表格行：Typora 的 ⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫', () => {
+    expect(shortcutFor(mod('Enter'))).toBe('tableRowBelow')
+    expect(shortcutFor(mod('Enter', { shiftKey: true }))).toBe('tableRowAbove')
+    expect(shortcutFor(mod('Backspace', { shiftKey: true }))).toBe('tableRowDelete')
+    // ⌘⌫（不带 shift）不是我们的：macOS 上它是"删到行首"，浏览器自己处理。
+    expect(shortcutFor(mod('Backspace'))).toBeNull()
+    expect(shortcutFor({ key: 'Enter' })).toBeNull()
+  })
+
   it('只差一个修饰键的组合不会串味', () => {
     // Cmd+K 是链接，Cmd+Shift+K 是删除整行
     expect(shortcutFor(mod('k'))).toBe('link')

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
+import { TableMenu, type TableMenuCommand, type TableMenuState } from './components/TableMenu'
 import { Sidebar } from './components/Sidebar'
 import { computeStats, extractHeadings } from '../core/markdown'
+import {
+  deleteTable,
+  deleteTableColumn,
+  deleteTableRow,
+  insertTableColumn,
+  insertTableRow,
+  type TableEdit,
+} from '../core/tables'
 import { WELCOME_DOC, WELCOME_NAME } from '../core/welcome'
 import { createAutosave, draftSlotKey } from '../core/autosave'
 import { createWriteBack, type WriteBack, type WriteBackStopReason } from '../core/writeBack'
@@ -31,6 +40,26 @@ import {
 } from '../core/editCommands'
 
 const OUTLINE_DEBOUNCE_MS = 200
+
+/**
+ * Every table command as one source edit, in one place.
+ *
+ * The keyboard bindings and the context menu both name a command here rather than
+ * calling `core/tables.ts` themselves, so "insert a row below" cannot come to mean
+ * two different things depending on which entry the user found.
+ */
+const TABLE_MUTATIONS: Record<
+  TableMenuCommand,
+  (doc: string, offset: number) => TableEdit | null
+> = {
+  rowAbove: (doc, offset) => insertTableRow(doc, offset, 'above'),
+  rowBelow: (doc, offset) => insertTableRow(doc, offset, 'below'),
+  rowDelete: (doc, offset) => deleteTableRow(doc, offset),
+  columnLeft: (doc, offset) => insertTableColumn(doc, offset, 'left'),
+  columnRight: (doc, offset) => insertTableColumn(doc, offset, 'right'),
+  columnDelete: (doc, offset) => deleteTableColumn(doc, offset),
+  delete: (doc, offset) => deleteTable(doc, offset),
+}
 
 /**
  * The narrow-screen breakpoint, mirrored in `styles.css`.
@@ -591,6 +620,34 @@ export default function App() {
     editorRef.current?.applyEdit(mutate)
   }, [])
 
+  /**
+   * The table commands go through the DOCUMENT-level edit, not `applyEdit`: a
+   * table is one block, but the blank lines around it are not, so deleting a table
+   * has to be able to take one of them along.
+   */
+  const applyDocumentEdit = useCallback(
+    (run: (doc: string, offset: number) => TableEdit | null) => {
+      editorRef.current?.applyDocumentEdit(run)
+    },
+    [],
+  )
+
+  /**
+   * The table menu: opened by a right-click inside a table, closed by a click
+   * anywhere else or by running one of its commands.
+   */
+  const [tableMenu, setTableMenu] = useState<TableMenuState | null>(null)
+  const runTableCommand = useCallback(
+    (command: TableMenuCommand) => {
+      setTableMenu(null)
+      // The same mutations the keyboard commands use — one definition of what
+      // "insert a row below" means, whichever entry asked for it.
+      applyDocumentEdit(TABLE_MUTATIONS[command])
+      editorRef.current?.focus()
+    },
+    [applyEdit],
+  )
+
   const jumpToLine = useCallback((line: number) => {
     editorRef.current?.goToLine(line)
     // On a narrow screen the outline is a drawer covering the document, so
@@ -610,6 +667,11 @@ export default function App() {
       heading: (level: number) => () => applyEdit((b) => toggleHeading(b, level)),
       deleteLine: () => applyEdit((b) => deleteLine(b)),
       table: () => applyEdit((b) => insertSnippet(b, TABLE_SNIPPET)),
+      // Row commands, on the same road as every other command: a `{doc, caret}`
+      // from `core/tables.ts` applied to the buffer (and a no-op outside a table).
+      tableRowAbove: () => applyDocumentEdit(TABLE_MUTATIONS.rowAbove),
+      tableRowBelow: () => applyDocumentEdit(TABLE_MUTATIONS.rowBelow),
+      tableRowDelete: () => applyDocumentEdit(TABLE_MUTATIONS.rowDelete),
       quote: () => applyEdit((b) => toggleBlockPrefix(b, 'quote')),
       list: () => applyEdit((b) => toggleBlockPrefix(b, 'ul')),
       orderedList: () => applyEdit((b) => toggleBlockPrefix(b, 'ol')),
@@ -684,6 +746,9 @@ export default function App() {
       linkReference: commands.linkReference,
       hr: commands.hr,
       table: commands.table,
+      tableRowAbove: commands.tableRowAbove,
+      tableRowBelow: commands.tableRowBelow,
+      tableRowDelete: commands.tableRowDelete,
       inlineMath: commands.inlineMath,
       save: () => void handleSave(false),
       saveAs: () => void handleSave(true),
@@ -941,6 +1006,7 @@ export default function App() {
             value={value}
             onChange={setValue}
             onCaretLineChange={setCaretLine}
+            onTableMenu={setTableMenu}
           />
         </main>
       </div>
@@ -959,6 +1025,14 @@ export default function App() {
             announces itself with a toast, and the title bar carries the dirty dot. */}
         {dirty && <span className="status-dirty">未保存</span>}
       </footer>
+
+      {tableMenu && (
+        <TableMenu
+          state={tableMenu}
+          onCommand={runTableCommand}
+          onClose={() => setTableMenu(null)}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

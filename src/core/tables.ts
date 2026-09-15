@@ -12,7 +12,7 @@
  * Pure string work over the source: no DOM, no view model, node-layer tests.
  */
 import { isTableDelimiterRow, isTableRow } from './inline'
-import { lineAt } from './lines'
+import { lineAt, offsetForLine } from './lines'
 
 export interface TableCell {
   /** Column in the row's raw text where the cell's piece begins (after the pipe). */
@@ -77,4 +77,270 @@ export function blocksTableBackspace(doc: string, offset: number): boolean {
   return !tableRowCells(text).some(
     (cell) => cell.contentStart < column && column <= cell.contentEnd,
   )
+}
+
+/* -------------------------------------------------------------------------- */
+/* reading a table                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The table an offset sits in: its line span, its column count, and where the
+ * offset is inside it.
+ *
+ * "Is this a table?" is answered by the SOURCE SHAPE, the same way GFM answers it:
+ * a run of row lines whose second line is a rule row. A table is therefore found
+ * from any of its lines — and a paragraph that merely starts with a pipe is not
+ * one (`| a | b |` alone has no rule row).
+ */
+export interface TableContext {
+  /** 0-based line of the header row — the table's first line. */
+  headerLine: number
+  /** 0-based line of the `| --- |` rule row. */
+  delimiterLine: number
+  /** 0-based line of the table's last row, inclusive. */
+  lastLine: number
+  /** Columns, counted from the header row. */
+  columns: number
+  /** 0-based line the offset is on. */
+  line: number
+  /** 0-based cell index within that line, or -1 (the rule row holds no cells). */
+  cell: number
+}
+
+export function tableAt(doc: string, offset: number): TableContext | null {
+  const { lines, index, start } = lineAt(doc, offset)
+  if (!isTableRow(lines[index] ?? '')) return null
+
+  let header = index
+  while (header > 0 && isTableRow(lines[header - 1])) header--
+  // The rule row must be the SECOND line: that is what makes this run of pipe
+  // lines a table rather than a paragraph that happens to contain pipes.
+  const delimiter = header + 1
+  if (!isTableDelimiterRow(lines[delimiter] ?? '')) return null
+
+  let last = index
+  while (last + 1 < lines.length && isTableRow(lines[last + 1])) last++
+
+  // Which cell the offset is in: the last one whose piece starts at or before it.
+  // A caret on a pipe, in a cell's padding, or before the first pipe therefore all
+  // belong to a real cell instead of to no cell at all.
+  const cells = tableRowCells(lines[index])
+  const column = offset - start
+  let cell = -1
+  if (index !== delimiter) {
+    cell = 0
+    for (let i = 0; i < cells.length; i++) if (cells[i].pieceStart <= column) cell = i
+  }
+  return {
+    headerLine: header,
+    delimiterLine: delimiter,
+    lastLine: last,
+    columns: tableRowCells(lines[header]).length,
+    line: index,
+    cell,
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* editing a table                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** A table edit: the new document, and where the caret belongs in it. */
+export interface TableEdit {
+  doc: string
+  caret: number
+}
+
+/** A row's cell contents, verbatim, with the column padding dropped. */
+function contentsOf(raw: string): string[] {
+  return tableRowCells(raw).map((cell) => raw.slice(cell.contentStart, cell.contentEnd))
+}
+
+/** A row in its canonical `| a | b |` shape. */
+function composeRow(cells: string[]): string {
+  return `| ${cells.join(' | ')} |`
+}
+
+/** Where a caret sits at cell `cell` of `line`, in a rebuilt document. */
+function caretInCell(lines: string[], line: number, cell: number): number {
+  const cells = tableRowCells(lines[line] ?? '')
+  const target = cells[Math.max(0, Math.min(cell, cells.length - 1))]
+  return offsetForLine(lines.join('\n'), line + 1) + (target?.contentStart ?? 0)
+}
+
+/**
+ * Inserts an empty row above or below the offset's row.
+ *
+ * The new row is as wide as the header, and the caret lands in its first cell.
+ * "Above" on the rule row means the first body position, not between the header
+ * and the rule: a row there would take over the rule row's slot and the table
+ * would stop being a table.
+ */
+export function insertTableRow(
+  doc: string,
+  offset: number,
+  where: 'above' | 'below',
+): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table) return null
+  const lines = doc.split('\n')
+  // On the rule row both directions mean the first body position: a row inserted
+  // between the header and the rule would take over the rule row's slot, and the
+  // table would stop being a table.
+  const at =
+    table.line === table.delimiterLine
+      ? table.delimiterLine + 1
+      : where === 'above'
+        ? table.line
+        : table.line + 1
+  lines.splice(at, 0, composeRow(new Array(table.columns).fill('')))
+  return { doc: lines.join('\n'), caret: caretInCell(lines, at, 0) }
+}
+
+/**
+ * Deletes the offset's row, and puts the caret in the row that takes its place.
+ *
+ * The header row and the rule row are refused: the header IS the table (GFM takes
+ * the first row as the header), and removing the rule row turns the whole thing
+ * back into pipe-shaped paragraphs. Deleting one of those is 删除表格, which is a
+ * separate command on purpose.
+ */
+export function deleteTableRow(doc: string, offset: number): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table) return null
+  if (table.line === table.headerLine || table.line === table.delimiterLine) return null
+  const lines = doc.split('\n')
+  const column = Math.max(0, table.cell)
+  lines.splice(table.line, 1)
+  const next = Math.min(table.line, lines.length - 1)
+  return { doc: lines.join('\n'), caret: caretInCell(lines, next, column) }
+}
+
+/** Inserts an empty column left or right of the offset's cell. */
+export function insertTableColumn(
+  doc: string,
+  offset: number,
+  side: 'left' | 'right',
+): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table || table.cell < 0) return null
+  const at = side === 'left' ? table.cell : table.cell + 1
+  const lines = doc.split('\n')
+  for (let i = table.headerLine; i <= table.lastLine; i++) {
+    const cells = contentsOf(lines[i])
+    // The rule row gets a rule cell, so the new column keeps a delimiter (a `|`
+    // with nothing between is not a delimiter cell to GFM).
+    cells.splice(at, 0, i === table.delimiterLine ? '---' : '')
+    lines[i] = composeRow(cells)
+  }
+  return { doc: lines.join('\n'), caret: caretInCell(lines, table.line, at) }
+}
+
+/**
+ * Deletes the offset's column from every row.
+ *
+ * Refused for a table's last remaining column: a table with no columns is not a
+ * table, and the honest way to remove the whole thing is 删除表格.
+ *
+ * A ragged row (fewer cells than the header) is left as it is rather than having
+ * some other cell taken out of it.
+ */
+export function deleteTableColumn(doc: string, offset: number): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table || table.cell < 0 || table.columns <= 1) return null
+  const lines = doc.split('\n')
+  for (let i = table.headerLine; i <= table.lastLine; i++) {
+    const cells = contentsOf(lines[i])
+    if (cells.length > table.cell) cells.splice(table.cell, 1)
+    lines[i] = composeRow(cells)
+  }
+  const column = Math.min(table.cell, table.columns - 2)
+  return { doc: lines.join('\n'), caret: caretInCell(lines, table.line, column) }
+}
+
+/**
+ * Removes the table's own lines.
+ *
+ * One of the two blank lines around it goes with it when both are there, so
+ * deleting a table from between two paragraphs leaves one blank line rather than
+ * two — and the caret lands where the table was.
+ */
+export function deleteTable(doc: string, offset: number): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table) return null
+  const lines = doc.split('\n')
+  lines.splice(table.headerLine, table.lastLine - table.headerLine + 1)
+  // Where the caret goes: the line the table's first line became — or, when a
+  // blank line was collapsed, the blank line that is left, so typing starts a new
+  // paragraph where the table was instead of prepending to the next one.
+  let caretLine = table.headerLine
+  if (lines[caretLine - 1] === '' && lines[caretLine] === '') {
+    lines.splice(caretLine, 1)
+    caretLine -= 1
+  }
+  const next = lines.join('\n')
+  return {
+    doc: next,
+    caret: offsetForLine(next, Math.min(Math.max(caretLine, 0) + 1, lines.length)),
+  }
+}
+
+/**
+ * Tab / Shift+Tab inside a table: the next or previous CELL.
+ *
+ * Forward from the last cell of the last row appends a row — Typora's "press Tab
+ * in the last cell to add a row" — which is also the only keyboard path to a new
+ * row. Backward from the first cell of the header stays put (returns null, so the
+ * caller leaves the key alone).
+ *
+ * A move inside the existing rows returns the document UNCHANGED with a new
+ * caret; the caller uses that to tell a move from an edit and skip the undo
+ * snapshot.
+ */
+export function moveTableCell(
+  doc: string,
+  offset: number,
+  direction: 'next' | 'prev',
+): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table) return null
+  const lines = doc.split('\n')
+
+  // The rule row holds no cells of its own: forward from it is the first body
+  // cell, backward is the header's last cell.
+  if (table.line === table.delimiterLine) {
+    if (direction === 'prev') {
+      return { doc, caret: caretInCell(lines, table.headerLine, table.columns - 1) }
+    }
+    const body = table.delimiterLine + 1
+    if (body <= table.lastLine) return { doc, caret: caretInCell(lines, body, 0) }
+    return appendRowAnd(insertTableRow(doc, offset, 'below'), table.lastLine + 1)
+  }
+
+  if (direction === 'next') {
+    if (table.cell + 1 < table.columns) {
+      return { doc, caret: caretInCell(lines, table.line, table.cell + 1) }
+    }
+    if (table.line < table.lastLine) {
+      return { doc, caret: caretInCell(lines, table.line + 1, 0) }
+    }
+    // Tab in the last cell of the last row adds a row — Typora's rule, and the
+    // only keyboard path to a new row.
+    return appendRowAnd(insertTableRow(doc, offset, 'below'), table.lastLine + 1)
+  }
+
+  if (table.cell > 0) return { doc, caret: caretInCell(lines, table.line, table.cell - 1) }
+  // Backward off the first cell of a row: the previous row's last cell. The row
+  // above a body row's first is the header when it is the rule row in between.
+  const above = table.line - 1 === table.delimiterLine ? table.headerLine : table.line - 1
+  if (above >= table.headerLine) {
+    return { doc, caret: caretInCell(lines, above, table.columns - 1) }
+  }
+  return null
+}
+
+/** The appended row's caret, or null when there was no row to append. */
+function appendRowAnd(added: TableEdit | null, line: number): TableEdit | null {
+  if (!added) return null
+  return { doc: added.doc, caret: caretInCell(added.doc.split('\n'), line, 0) }
 }

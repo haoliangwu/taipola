@@ -33,6 +33,7 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   `shortcuts.ts` (keystroke → command name), `autosave.ts` (when the draft gets written),
   `writeBack.ts` (when the content reaches its file), `fileTree.ts` (what the folder tree shows,
   and in what order), `welcome.ts` (the welcome document),
+  `tables.ts` (where a table row's cells are in the source, and the row/column edits),
   `markdownIt.ts` (the shared markdown-it instance)
 - `src/platform/` — browser-API adapters: `documents.ts` (open/save/export, two adapters behind one
   interface), `folder.ts` (open a folder, read one level of it, resolve one file by path),
@@ -40,8 +41,9 @@ point of the split, and the test projects in `vitest.config.ts` enforce it:
   IndexedDB, and re-authorize the folder after a reload), `draft.ts` (localStorage),
   `html.ts` (markdown → sanitized HTML), `abort.ts` (a dismissed picker, shared by both pickers)
 - `src/shell/` — React: `App.tsx`, `components/Editor.tsx`, `components/Sidebar.tsx`,
-  `components/FileTree.tsx`, `components/Outline.tsx`, `useTheme.ts`, `useFileTree.ts`,
-  `useSidebarPanel.ts`
+  `components/FileTree.tsx`, `components/Outline.tsx`, `components/TableMenu.tsx` (the
+  table's right-click menu — the only entry for the column commands),
+  `useTheme.ts`, `useFileTree.ts`, `useSidebarPanel.ts`
 - `src/editor/` — the native kernel: `render.ts` (imperative rendering, DOM → source),
   `position.ts` (source offset ↔ DOM position), `kernel.ts` (state, events, same-frame caret)
 - `src/test/` — browser-mode helpers
