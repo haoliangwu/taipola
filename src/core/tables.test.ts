@@ -16,6 +16,7 @@ import {
   insertTableColumn,
   insertTableRow,
   moveTableCell,
+  pasteTableCell,
   tableAt,
   tableRowCells,
 } from './tables'
@@ -230,6 +231,42 @@ describe('删除整张表', () => {
     expect(edit.doc).toBe('正文\n\n结尾')
     // The caret lands on the blank line the table was on, not on the paragraph.
     expect(edit.caret).toBe(3)
+  })
+})
+
+describe('pasteTableCell：单格粘贴重建这一行', () => {
+  const EMPTY_ROW_TABLE = '| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n|  |  |\n'
+
+  it('空格的格子：粘贴的文字成为格子内容，同行重新规范排版', () => {
+    const atCell = at(EMPTY_ROW_TABLE, '|  |  |') + 3 // 空格子的内容起点
+    const edit = pasteTableCell(EMPTY_ROW_TABLE, atCell, atCell, '甲 一')!
+    expect(edit.doc).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| 甲 一 |  |\n')
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 3, cell: 0 })
+  })
+
+  it('有内容的格子里插入：只动这一个格子', () => {
+    const atCell = at(TABLE, '| c | d |') + 2 // 格子里「c」的前面
+    const edit = pasteTableCell(TABLE, atCell, atCell, 'XY')!
+    expect(edit.doc).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| XYc | d |')
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 3, cell: 0 })
+  })
+
+  it('选区替换该格子的内容', () => {
+    const start = at(TABLE, '| c | d |') + 2
+    const edit = pasteTableCell(TABLE, start, start + 1, 'Z')!
+    expect(edit.doc).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| Z | d |')
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 3, cell: 0 })
+  })
+
+  it('跨多个格子的选区拒绝重建（由调用方走普通源码插入）', () => {
+    const start = at(TABLE, '| c | d |') + 2
+    const end = at(TABLE, '| c | d |') + 7 // 后一格的「d」之后
+    expect(pasteTableCell(TABLE, start, end, 'Z')).toBeNull()
+  })
+
+  it('分隔行上没有格子可贴', () => {
+    const rule = at(TABLE, '| --- | --- |') + 2
+    expect(pasteTableCell(TABLE, rule, rule, 'Z')).toBeNull()
   })
 })
 

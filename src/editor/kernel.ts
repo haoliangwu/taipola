@@ -40,7 +40,7 @@ import {
   sanitizeDom,
 } from './render'
 import { isBlankLine, lineOfOffset, offsetForLine } from '../core/lines'
-import { blocksTableBackspace, moveTableCell, tableAt, type TableContext } from '../core/tables'
+import { blocksTableBackspace, inTable, moveTableCell, pasteTableCell, tableAt, type TableContext } from '../core/tables'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -181,6 +181,8 @@ export class EditorKernel {
     host.addEventListener('keydown', this.handleKeyDown)
     host.addEventListener('beforeinput', this.handleBeforeInput)
     host.addEventListener('input', this.handleInput)
+    host.addEventListener('copy', this.handleCopy)
+    host.addEventListener('paste', this.handlePaste)
     host.addEventListener('compositionstart', this.handleCompositionStart)
     host.addEventListener('compositionend', this.handleCompositionEnd)
     host.addEventListener('mousedown', this.handleMouseDown, true)
@@ -195,6 +197,8 @@ export class EditorKernel {
     host.removeEventListener('keydown', this.handleKeyDown)
     host.removeEventListener('beforeinput', this.handleBeforeInput)
     host.removeEventListener('input', this.handleInput)
+    host.removeEventListener('copy', this.handleCopy)
+    host.removeEventListener('paste', this.handlePaste)
     host.removeEventListener('compositionstart', this.handleCompositionStart)
     host.removeEventListener('compositionend', this.handleCompositionEnd)
     host.removeEventListener('mousedown', this.handleMouseDown, true)
@@ -437,15 +441,19 @@ export class EditorKernel {
     return tableAt(this.doc, this.caret)
   }
 
-  /** Source offset of the current DOM selection, or null when outside. */
-  private caretFromDom(): number | null {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0) return null
-    const range = sel.getRangeAt(0)
+  /** Source offset of a DOM position, or null when it is not inside our document. */
+  private domSourceOffset(container: Node, offset: number): number | null {
+    // The root itself is a position only at its two edges — a select-all's
+    // range END sits exactly there (`endContainer` = the host, `endOffset` =
+    // its child count). Anywhere else on the root there is no character to
+    // speak of, so only the edges map to the document's own edges.
+    if (container === this.host) {
+      if (offset === 0) return 0
+      if (offset >= container.childNodes.length) return this.doc.length
+      return null
+    }
     const host = (
-      range.startContainer instanceof Element
-        ? range.startContainer
-        : range.startContainer.parentElement
+      container instanceof Element ? container : container.parentElement
     )?.closest?.<HTMLElement>('[data-block]')
     // The block must be OURS. `selectionchange` is a document-level event, and a
     // `[data-block]` says nothing about which editor instance owns it: a second
@@ -457,8 +465,24 @@ export class EditorKernel {
     const index = Number(host.dataset.block)
     const view = this.views[index]
     if (!view) return null
-    const local = domToLocal(view, range.startContainer, range.startOffset)
+    const local = domToLocal(view, container, offset)
     return local === null ? null : this.offsets[index] + local
+  }
+
+  /** Source offset of the current DOM selection's start, or null when outside. */
+  private caretFromDom(): number | null {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return null
+    const range = sel.getRangeAt(0)
+    return this.domSourceOffset(range.startContainer, range.startOffset)
+  }
+
+  /** Source offset of the current DOM selection's end, or null when outside. */
+  private caretEndFromDom(): number | null {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return null
+    const range = sel.getRangeAt(0)
+    return this.domSourceOffset(range.endContainer, range.endOffset)
   }
 
   private handleSelectionChange = (): void => {
@@ -487,6 +511,148 @@ export class EditorKernel {
     // so leaving it on the rule row would put the next character there anyway.
     if (this.render() || safe !== source) this.placeCaret(safe)
     this.reportLine()
+  }
+
+  /**
+   * Copy and cut hand the SELECTION over as markdown SOURCE, not as the
+   * browser's own payload. The browser serializes the selection as the plain
+   * text OF THE RENDERED VIEW: `#`s, `**` markers, list dashes and table
+   * pipes gone, inline math in fragments (`E\n=\nm\nc\n2`). Copy→paste inside
+   * the editor would then lose the document's structure, and so would pasting
+   * into any other app. `text/plain` is rewritten to the source slice between
+   * the selection's edges, and the default action is canceled (it would clear
+   * the data store and write the rendered serialization back) — the clipboard
+   * carries exactly the markdown source. The paste side never reads `text/html`.
+   */
+  private handleCopy = (event: ClipboardEvent): void => {
+    if (this.readOnly) return
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
+    const range = sel.getRangeAt(0)
+    const startMapped = this.caretFromDom()
+    const endMapped = this.caretEndFromDom()
+    if (startMapped === null || endMapped === null) return
+    let from = Math.min(startMapped, endMapped)
+    let to = Math.max(startMapped, endMapped)
+    // A selection that begins at a line's first VISIBLE character or ends at
+    // its last one is missing the COLLAPSED markers beside it — a rendered
+    // `# 标题` hides its `# `, and Chromium's select-all CANNOT include it
+    // (the range starts at the first laid-out character). Copying a whole
+    // document would therefore drop the first line's markers. Extend each such
+    // end to its line boundary, so the slice keeps the markdown the user is
+    // looking at. The expansion is keyed to which range end maps to `from`
+    // (reversed selections swap the containers).
+    const forwards = startMapped <= endMapped
+    from =
+      (forwards
+        ? this.copyLineEdge(range.startContainer, from, 'start')
+        : this.copyLineEdge(range.endContainer, from, 'start')) ?? from
+    to =
+      (forwards
+        ? this.copyLineEdge(range.endContainer, to, 'end')
+        : this.copyLineEdge(range.startContainer, to, 'end')) ?? to
+    if (from === to) return
+    const data = event.clipboardData
+    if (!data) return
+    data.setData('text/plain', this.doc.slice(from, to))
+    // The browser's own copy default action CLEARS the data store and replaces
+    // it with the selection's serialization — a handler-set text/plain survives
+    // only when the default is canceled (`handleCopy` in a real Chromium read
+    // the payload back as the rendered text until this line was added). The
+    // clipboard then carries exactly what we wrote: the markdown source.
+    event.preventDefault()
+  }
+
+  /**
+   * The line boundary a range end touches, when every run on that side of its
+   * run is COLLAPSED — null when the selection is not at a line's visible edge.
+   *
+   * `start` returns the line's source start (so the hidden markers BEFORE the
+   * first visible run join the slice); `end` returns the line's source end
+   * (the hidden markers AFTER the last visible run). A run's `display` is the
+   * layout fact that says whether it contributes visible text.
+   */
+  private copyLineEdge(container: Node, offset: number, side: 'start' | 'end'): number | null {
+    const run = (
+      container instanceof Element ? container : container.parentElement
+    )?.closest?.<HTMLElement>('[data-run]')
+    if (!run) return null
+    const vline = run.closest<HTMLElement>('[data-vline]')
+    if (!vline) return null
+    const runs = [...vline.querySelectorAll<HTMLElement>(':scope > [data-run]')]
+    const idx = runs.indexOf(run)
+    if (idx < 0) return null
+    const visible = (el: HTMLElement) => getComputedStyle(el).display !== 'none'
+    const lineNo = lineOfOffset(this.doc, offset)
+    if (side === 'start') {
+      if (runs.slice(0, idx).some(visible)) return null
+      return offsetForLine(this.doc, lineNo)
+    }
+    if (runs.slice(idx + 1).some(visible)) return null
+    return Math.min(offsetForLine(this.doc, lineNo + 1) - 1, this.doc.length)
+  }
+
+  /**
+   * Paste inserts the clip's PLAIN TEXT as a MODEL edit — the HTML is never
+   * inserted.
+   *
+   * A clip from this editor carries the RENDERED DOM as `text/html` (the
+   * browser serializes the selection as its `[data-block]`/`[data-vline]`/
+   * `[data-run]` elements, inline styles and all). Inserting that would hand
+   * `sanitizeDom` a fragment wearing OUR attributes: it is trusted as the
+   * document tree, the insert-point nesting re-parents it INSIDE the active
+   * block's line box, and the whole copied document comes back merged into
+   * that one block — a full welcome document, pasted onto a heading, returns
+   * as one giant heading. The model edit dodges that entirely: the source
+   * `handleCopy` writes is replaced into the selection's source range and the
+   * kernel re-renders — one source line stays one line box, and a row stays a
+   * row. Foreign rich text (Word, a web page) flattens to its `text/plain`,
+   * the same way the old sanitize-flattening did, only with the text intact.
+   */
+  private handlePaste = (event: ClipboardEvent): void => {
+    if (this.readOnly) return
+    const data = event.clipboardData
+    if (!data || !Array.from(data.types).includes('text/plain')) return
+    const text = data.getData('text/plain').replace(/\r\n?/g, '\n')
+    if (text === '') return
+    event.preventDefault()
+
+    // The paste is a MODEL edit, not a DOM edit: replace the selection's source
+    // range with the clip's plain text and let `commit` re-render. The DOM is
+    // never touched, so none of the browser's insertion quirks can reach the
+    // document — Chromium's `insertHTML` would hand the editor a fragment of
+    // ITS OWN rendered DOM (the copied `[data-block]`/`[data-run]` elements),
+    // which `sanitizeDom` trusts and the insert-point nesting buries inside the
+    // active block's line box: a copied welcome document pasted onto a heading
+    // came back as one giant heading (`clipboard/01`). Even `insertText` splits
+    // a table ROW on `\n` — and a row is one source line (`table-ops/04`).
+    const start = this.caretFromDom()
+    const end = this.caretEndFromDom()
+    if (start === null || end === null) return
+    const from = Math.min(start, end)
+    const to = Math.max(start, end)
+
+    // Pasting inside a table ROW: the clip's newlines must not split the row,
+    // so — like `cellSource` on read — newline runs and their surrounding
+    // spaces become ONE space and the cell padding goes. A single-cell range
+    // is then rebuilt as the row (`pasteTableCell` re-pads every cell), so the
+    // caret sitting on an empty cell's padding cannot leave the padding inside
+    // the content. Outside a row the text keeps its newlines and re-parses
+    // into the blocks they make.
+    if (inTable(this.doc, from)) {
+      const flattened = text.replace(/[ \t]*\n[ \t]*/g, ' ').trim()
+      const cellPaste = pasteTableCell(this.doc, from, to, flattened)
+      if (cellPaste) {
+        this.pushUndo({ value: this.doc, caret: this.caret })
+        this.commit(cellPaste.doc, cellPaste.caret)
+        return
+      }
+      this.pushUndo({ value: this.doc, caret: this.caret })
+      this.commit(this.doc.slice(0, from) + flattened + this.doc.slice(to), from + flattened.length)
+      return
+    }
+    this.pushUndo({ value: this.doc, caret: this.caret })
+    this.commit(this.doc.slice(0, from) + text + this.doc.slice(to), from + text.length)
   }
 
   private handleBeforeInput = (): void => {

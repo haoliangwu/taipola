@@ -171,6 +171,45 @@ export interface TableEdit {
   caret: number
 }
 
+/**
+ * A paste whose whole range sits inside ONE cell: the row is rebuilt with that
+ * cell's content replaced and every cell re-padded — the caret may sit on the
+ * cell's padding (an empty cell's caret IS its padding start), so a plain
+ * source-slice insert would leave the padding inside the content and the row
+ * would read back with tiles (`|  甲 一|` instead of `| 甲 一 |`).
+ *
+ * null when the range is not single-cell (several cells selected, or the rule
+ * row): the caller falls back to a plain source insert, which stays valid — a
+ * reader trims the padding — it just is not re-padded.
+ */
+export function pasteTableCell(doc: string, from: number, to: number, text: string): TableEdit | null {
+  const t = tableAt(doc, from)
+  if (!t || t.cell < 0) return null
+  const { lines, index, start } = lineAt(doc, from)
+  const raw = lines[index] ?? ''
+  const cells = tableRowCells(raw)
+  const cell = cells[t.cell]
+  if (!cell) return null
+  const localFrom = from - start
+  const localTo = to - start
+  // The whole range must sit inside ONE cell: ends that only touch this cell's
+  // content (padding included — clamped below), and no OTHER cell's content
+  // region may lie between them. Otherwise the caller falls back to a plain
+  // source insert.
+  if (localFrom > cell.contentEnd || localTo < cell.contentStart) return null
+  if (cells.some((c, i) => i !== t.cell && localTo > c.contentStart && localFrom < c.contentEnd)) return null
+  const fromPos = Math.max(cell.contentStart, Math.min(localFrom, cell.contentEnd))
+  const toPos = Math.max(cell.contentStart, Math.min(localTo, cell.contentEnd))
+  const newContent =
+    raw.slice(cell.contentStart, fromPos) + text + raw.slice(toPos, cell.contentEnd)
+  const contents = cells.map((c, i) =>
+    i === t.cell ? newContent : raw.slice(c.contentStart, c.contentEnd),
+  )
+  const newRow = `| ${contents.join(' | ')} |`
+  const caret = start + cell.contentStart + (fromPos - cell.contentStart) + text.length
+  return { doc: doc.slice(0, start) + newRow + doc.slice(start + raw.length), caret }
+}
+
 /** A row's cell contents, verbatim, with the column padding dropped. */
 function contentsOf(raw: string): string[] {
   return tableRowCells(raw).map((cell) => raw.slice(cell.contentStart, cell.contentEnd))
