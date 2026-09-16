@@ -507,12 +507,26 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  margin: 0 auto;
   padding: 3px 6px;
   border-radius: 8px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
+}
+
+/* The format toolbar's place: a centered row over the DOCUMENT column. Same
+   max-width and horizontal padding as `.doc`, so the pill centers above the text
+   column itself ("at the top of the content") instead of over the whole window
+   the way it did while it lived in the titlebar. The toolbar keeps shrinking to
+   its own content; `justify-content: center` places it on the column's axis. */
+.editor-top {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  max-width: var(--editor-max-width);
+  margin: 0 auto;
+  padding: 10px var(--editor-pad-x) 0;
 }
 
 .toolbar-sep {
@@ -1400,6 +1414,10 @@ body {
 
   .toolbar,
   .titlebar-right {
+    display: none;
+  }
+
+  .editor-top {
     display: none;
   }
 

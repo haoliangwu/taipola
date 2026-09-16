@@ -881,34 +881,6 @@ export default function App() {
           </div>
         </div>
 
-        <div className="toolbar" role="toolbar" aria-label="格式">
-          {/* Every button in this row is an SVG on the one 16-unit grid. The text
-              labels (`B I S H1 H2 H3`) became `<text>` inside that same frame: a
-              letterform is the honest icon for "bold", but as bare labels their ink
-              was whatever the toolbar's own font-size made it — which is how `🔗`
-              and `☑` ended up in the same row at sizes nobody chose. */}
-          <ToolButton label={<BoldIcon />} title="加粗 (Cmd/Ctrl+B)" onClick={commands.bold} />
-          <ToolButton label={<ItalicIcon />} title="斜体 (Cmd/Ctrl+I)" onClick={commands.italic} />
-          <ToolButton label={<StrikeIcon />} title="删除线 (Ctrl+Shift+`)" onClick={commands.strike} />
-          <span className="toolbar-sep" />
-          <ToolButton label={<HeadingIcon level={1} />} title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
-          <ToolButton label={<HeadingIcon level={2} />} title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
-          <ToolButton label={<HeadingIcon level={3} />} title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
-          <span className="toolbar-sep" />
-          {/* Everything below is a PICTURE, so it is drawn. The glyphs they used to
-              be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and size — `▦` was a
-              solid block, `•` a speck, `❝` oversized — because a font glyph's ink is
-              whatever that font decides. See `Glyph`. */}
-          <ToolButton label={<InlineCodeIcon />} title="行内代码 (Ctrl+`)" onClick={commands.code} />
-          <ToolButton label={<QuoteIcon />} title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
-          <ToolButton label={<BulletListIcon />} title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
-          <ToolButton label={<OrderedListIcon />} title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
-          <ToolButton label={<TaskListIcon />} title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
-          <ToolButton label={<TableIcon />} title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
-          <ToolButton label={<CodeBlockIcon />} title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
-          <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
-        </div>
-
         <div className="titlebar-right">
           <button
             type="button"
@@ -1062,6 +1034,42 @@ export default function App() {
           />
         )}
         <main className="workspace">
+          {/* The format toolbar lives ABOVE the content column, not in the
+              window-wide titlebar: centered over the same column as the document
+              (same max-width and padding), so it lines up with the text instead
+              of with the whole window. Visible on desktop; the narrow screen
+              hides it with the rest of the desktop furniture. */}
+          <div className="editor-top">
+            <div className="toolbar" role="toolbar" aria-label="格式">
+              {/* Every button in this row is an SVG on the one 16-unit grid. The
+                  text labels (`B I S H1 H2 H3`) became `<text>` inside that same
+                  frame: a letterform is the honest icon for "bold", but as bare
+                  labels their ink was whatever the toolbar's own font-size made
+                  it — which is how `🔗` and `☑` ended up in the same row at sizes
+                  nobody chose. */}
+              <ToolButton label={<BoldIcon />} title="加粗 (Cmd/Ctrl+B)" onClick={commands.bold} />
+              <ToolButton label={<ItalicIcon />} title="斜体 (Cmd/Ctrl+I)" onClick={commands.italic} />
+              <ToolButton label={<StrikeIcon />} title="删除线 (Ctrl+Shift+`)" onClick={commands.strike} />
+              <span className="toolbar-sep" />
+              <ToolButton label={<HeadingIcon level={1} />} title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
+              <ToolButton label={<HeadingIcon level={2} />} title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
+              <ToolButton label={<HeadingIcon level={3} />} title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
+              <span className="toolbar-sep" />
+              {/* Everything below is a PICTURE, so it is drawn. The glyphs they
+                  used to be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and
+                  size — `▦` was a solid block, `•` a speck, `❝` oversized —
+                  because a font glyph's ink is whatever that font decides. See
+                  `Glyph`. */}
+              <ToolButton label={<InlineCodeIcon />} title="行内代码 (Ctrl+`)" onClick={commands.code} />
+              <ToolButton label={<QuoteIcon />} title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
+              <ToolButton label={<BulletListIcon />} title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
+              <ToolButton label={<OrderedListIcon />} title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
+              <ToolButton label={<TaskListIcon />} title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
+              <ToolButton label={<TableIcon />} title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
+              <ToolButton label={<CodeBlockIcon />} title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
+              <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
+            </div>
+          </div>
           <Editor
             ref={editorRef}
             value={value}
