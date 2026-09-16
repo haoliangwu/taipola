@@ -1069,26 +1069,23 @@ export class EditorKernel {
           this.pushUndo({ value: this.doc, caret: this.caret })
           const drop = joinIndent.length + 1
           const joined = this.doc.slice(0, live - drop) + this.doc.slice(live)
-          // Backspace joining a line that has TEXT to the content above: land the
-          // caret at the END of that content, not at the start of the line below.
-          // `live - 1` would sit on an invisible blank line, so the caret read as
-          // "jumped in front of the next line's text" and typing glued itself to
-          // the following block. It is also where Enter's reverse lands — Enter
-          // then Backspace returns to the offset from before Enter — in THIS
-          // case; Enter at the end of a blank line has its reverse in the branch
-          // below; the two are not the same offset.
+          // The caret lands where the deleted newline stood — the join point — and
+          // STAYS there. It keeps the caret glued to the text below, so the join
+          // reads as "the line below was pulled up to me"; walking it back to the
+          // end of the content above reads as "the caret was thrown up there",
+          // and the next keystroke writes into the wrong line.
           //
-          // A caret that was ON an empty line is a different case, and it must not
-          // walk: the blank run is the user's, one Backspace takes one newline,
-          // and the caret stays on what is left of it. Walking back from there put
-          // the caret at the end of the paragraph above — one keystroke away from
-          // deleting its last character, which is what
-          // `.scratch/enter-backspace-smoke/issues/09` reports.
-          let caret = live - drop
-          if (!isBlankLine(line.text)) {
-            while (caret > 0 && joined[caret - 1] === '\n') caret--
-          }
-          this.commit(joined, caret)
+          // Measured from a real caret (a click / Home at the start of the line
+          // below), in `a\n\nb` with the caret before `b`, this used to land one
+          // newline short — at the end of `a`, i.e. on the paragraph above — and
+          // `backspace-join/01` (`3e91537`) is where that normalisation came from.
+          // It was written to make this path agree with the one where the caret
+          // sits ON the blank line — but that path deletes the newline ABOVE its
+          // caret, so its raw join point is already the end of the previous
+          // content and never needed the loop. Removing it costs nothing there
+          // (`enter-backspace-smoke/09`) and gives this path the join point the
+          // user asks for (`.scratch/backspace-join/issues/04`).
+          this.commit(joined, live - drop)
           return
         }
       }
