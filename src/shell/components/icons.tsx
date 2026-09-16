@@ -233,6 +233,47 @@ export function FolderIcon() {
   )
 }
 
+/**
+ * The three theme icons, for the titlebar's theme toggle.
+ *
+ * The desktop toggle used to be a glyph plus a word (`☀ 浅色`), which is exactly
+ * the wrong shape for a row that is now all icons: a glyph's ink is whatever the
+ * font decides. Drawn on the same 16-unit grid as everything else, the icon says
+ * which theme the button would switch INTO — sun, moon and the half-and-half
+ * circle for "the OS decides".
+ */
+
+/** The sun: 浅色. */
+export function SunIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="3.4" />
+      <path d="M8 1.6v1.5M8 12.9v1.5M1.6 8h1.5M12.9 8h1.5" />
+      <path d="M3.7 3.7l1 1M11.3 11.3l1 1" />
+      <path d="M12.3 3.7l-1 1M4.7 11.3l-1 1" />
+    </Glyph>
+  )
+}
+
+/** The moon: 深色. */
+export function MoonIcon() {
+  return (
+    <Glyph>
+      <path d="M12.9 9.4A5.5 5.5 0 0 1 6.6 3.1 5.5 5.5 0 1 0 12.9 9.4Z" />
+    </Glyph>
+  )
+}
+
+/** Half light, half dark: 跟随系统 — the OS picks the side. */
+export function SystemIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="5.3" />
+      <path d="M8 2.7a5.3 5.3 0 0 0 0 10.6Z" fill="currentColor" stroke="none" />
+    </Glyph>
+  )
+}
+
 /* -------------------------------------------------------------------------- */
 /* the toolbar's text commands, in the same frame                              */
 /* -------------------------------------------------------------------------- */

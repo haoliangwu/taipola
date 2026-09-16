@@ -20,6 +20,9 @@ import {
   QuoteIcon,
   SaveIcon,
   StrikeIcon,
+  SunIcon,
+  MoonIcon,
+  SystemIcon,
   TableIcon,
   TaskListIcon,
 } from './components/icons'
@@ -112,9 +115,11 @@ function isNarrowScreen(): boolean {
 /**
  * The two export formats, written down once.
  *
- * The desktop group and the narrow screen's menu are different markup (text
- * buttons versus `role="menuitem"`), but they must offer the same two formats
- * under the same labels — that half lives here.
+ * Both the desktop group and the narrow screen's mini group offer export as a
+ * menu (the narrow one always did; the desktop one used to be two direct text
+ * buttons, and became a menu when the header went icon-only). They are separate
+ * menus in the DOM, but they must offer the same two formats under the same
+ * labels — that half lives here.
  */
 const EXPORT_FORMATS = [
   { label: '导出 HTML', write: (value: string, name: string) => documents.exportHtml(value, name) },
@@ -213,8 +218,14 @@ export default function App() {
   // document. On a narrow screen it is a drawer that covers the document, so it
   // starts closed — the canvas is what the user came for.
   const [sidebarOpen, setSidebarOpen] = useState(() => !isNarrowScreen())
+  // The two export menus — desktop (`.titlebar-right`) and narrow screen
+  // (`.titlebar-mini`) — each keep their own open flag and ref: only one is ever
+  // visible, but both may be in the DOM at once, and one boolean cannot say WHICH
+  // menu an outside click is about to close.
   const [exportOpen, setExportOpen] = useState(false)
+  const [desktopExportOpen, setDesktopExportOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const desktopMenuRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<string | null>(null)
   const theme = useTheme()
 
@@ -811,8 +822,9 @@ export default function App() {
       // closing the layer is what the key means there. Dispatching through the
       // table keeps `shortcuts.ts` the one place that says which key is which
       // command.
-      if (shortcut === 'blur' && (exportOpen || (sidebarOpen && isNarrowScreen()))) {
+      if (shortcut === 'blur' && (exportOpen || desktopExportOpen || (sidebarOpen && isNarrowScreen()))) {
         if (exportOpen) setExportOpen(false)
+        else if (desktopExportOpen) setDesktopExportOpen(false)
         else setSidebarOpen(false)
         return
       }
@@ -825,7 +837,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [shortcutActions, sidebarOpen, exportOpen])
+  }, [shortcutActions, sidebarOpen, exportOpen, desktopExportOpen])
 
   // Crossing the breakpoint mid-session (a rotation, a resized window) adopts
   // that mode's default: a column that has just become a drawer must not sit on
@@ -844,18 +856,25 @@ export default function App() {
   // toggle has to be able to close it by being clicked again. (Escape is handled
   // above, with the other keys.)
   useEffect(() => {
-    if (!exportOpen) return
+    if (!exportOpen && !desktopExportOpen) return
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null
-      if (target && !menuRef.current?.contains(target)) setExportOpen(false)
+      if (
+        target &&
+        !menuRef.current?.contains(target) &&
+        !desktopMenuRef.current?.contains(target)
+      ) {
+        setExportOpen(false)
+        setDesktopExportOpen(false)
+      }
     }
     window.addEventListener('mousedown', onPointerDown)
     return () => window.removeEventListener('mousedown', onPointerDown)
-  }, [exportOpen])
+  }, [exportOpen, desktopExportOpen])
 
   return (
     <div className="app">
-      <header className="titlebar">
+      <header className="titlebar" data-sidebar={sidebarOpen ? 'on' : 'off'}>
         <div className="titlebar-left">
           <button
             type="button"
@@ -881,58 +900,144 @@ export default function App() {
           </div>
         </div>
 
+        {/* The format toolbar lives in the titlebar again — but centred on the
+            DOCUMENT column's axis, not the window's. `.titlebar-left` mirrors
+            the outline's width with the outline open, so `.titlebar-center`
+            starts exactly where the workspace starts and the pill centres on the
+            same line as the text. (It spent a while at the top of the workspace,
+            which centred it right but cost the document a row of screen.) The
+            command strip is pinned to the centre band's right edge — the same
+            column as the workspace, so it sits over the document's right margin.
+            Narrow screens hide all of this with the rest of the desktop
+            furniture and get `.titlebar-mini` below. */}
+        <div className="titlebar-center">
+          <div className="toolbar" role="toolbar" aria-label="格式">
+            {/* Every button in this row is an SVG on the one 16-unit grid. The
+                text labels (`B I S H1 H2 H3`) became `<text>` inside that same
+                frame: a letterform is the honest icon for "bold", but as bare
+                labels their ink was whatever the toolbar's own font-size made
+                it — which is how `🔗` and `☑` ended up in the same row at sizes
+                nobody chose. */}
+            <ToolButton label={<BoldIcon />} title="加粗 (Cmd/Ctrl+B)" onClick={commands.bold} />
+            <ToolButton label={<ItalicIcon />} title="斜体 (Cmd/Ctrl+I)" onClick={commands.italic} />
+            <ToolButton label={<StrikeIcon />} title="删除线 (Ctrl+Shift+`)" onClick={commands.strike} />
+            <span className="toolbar-sep" />
+            <ToolButton label={<HeadingIcon level={1} />} title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
+            <ToolButton label={<HeadingIcon level={2} />} title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
+            <ToolButton label={<HeadingIcon level={3} />} title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
+            <span className="toolbar-sep" />
+            {/* Everything below is a PICTURE, so it is drawn. The glyphs they
+                used to be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and
+                size — `▦` was a solid block, `•` a speck, `❝` oversized —
+                because a font glyph's ink is whatever that font decides. See
+                `Glyph`. */}
+            <ToolButton label={<InlineCodeIcon />} title="行内代码 (Ctrl+`)" onClick={commands.code} />
+            <ToolButton label={<QuoteIcon />} title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
+            <ToolButton label={<BulletListIcon />} title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
+            <ToolButton label={<OrderedListIcon />} title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
+            <ToolButton label={<TaskListIcon />} title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
+            <ToolButton label={<TableIcon />} title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
+            <ToolButton label={<CodeBlockIcon />} title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
+            <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
+          </div>
+        </div>
+
         <div className="titlebar-right">
-          <button
-            type="button"
-            className="text-button"
-            onClick={theme.cycle}
-            title={`主题：${THEME_LABEL[theme.theme]}（点击切换 浅色 → 深色 → 跟随系统）`}
-          >
-            {theme.theme === 'light' ? '☀' : theme.theme === 'dark' ? '☾' : '◐'}{' '}
-            {THEME_LABEL[theme.theme]}
-          </button>
-          <button type="button" className="text-button" onClick={handleNew}>
-            新建
-          </button>
-          <button type="button" className="text-button" onClick={() => void handleOpen()}>
-            打开
-          </button>
-          {canOpenFolder && (
-            <button type="button" className="text-button" onClick={() => void handleOpenFolder()}>
-              打开文件夹
-            </button>
-          )}
-          <button type="button" className="text-button" onClick={() => void handleSave(false)}>
-            保存
-          </button>
-          {EXPORT_FORMATS.map((format) => (
-            <button
-              key={format.label}
-              type="button"
-              className="text-button"
-              onClick={() => format.write(value, fileName)}
-            >
-              {format.label}
-            </button>
-          ))}
-          {/* The keyboard reference, at the far right of the desktop header. Not in
-              the mini group: a phone has no keyboard to look keys up for, and the
-              panel needs width the narrow header does not have. */}
-          <div className="help-anchor">
             <button
               type="button"
               className="icon-button"
-              onClick={() => setHelpOpen((open) => !open)}
-              title="快捷键"
-              aria-label="快捷键"
-              aria-expanded={helpOpen}
-              aria-haspopup="dialog"
+              onClick={theme.cycle}
+              title={`主题：${THEME_LABEL[theme.theme]}（点击切换 浅色 → 深色 → 跟随系统）`}
+              aria-label="切换主题"
             >
-              <HelpIcon />
+              {theme.theme === 'light' ? (
+                <SunIcon />
+              ) : theme.theme === 'dark' ? (
+                <MoonIcon />
+              ) : (
+                <SystemIcon />
+              )}
             </button>
-            {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
+            <button type="button" className="icon-button" onClick={handleNew} title="新建" aria-label="新建">
+              <NewIcon />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void handleOpen()}
+              title="打开"
+              aria-label="打开"
+            >
+              <OpenIcon />
+            </button>
+            {canOpenFolder && (
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => void handleOpenFolder()}
+                title="打开文件夹"
+                aria-label="打开文件夹"
+              >
+                <FolderIcon />
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => void handleSave(false)}
+              title="保存"
+              aria-label="保存"
+            >
+              <SaveIcon />
+            </button>
+            <div className="mini-export" ref={desktopMenuRef}>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setDesktopExportOpen((open) => !open)}
+                title="导出"
+                aria-label="导出"
+                aria-expanded={desktopExportOpen}
+                aria-haspopup="menu"
+              >
+                <ExportIcon />
+              </button>
+              {desktopExportOpen && (
+                <div className="mini-menu" role="menu">
+                  {EXPORT_FORMATS.map((format) => (
+                    <button
+                      key={format.label}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setDesktopExportOpen(false)
+                        format.write(value, fileName)
+                      }}
+                    >
+                      {format.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* The keyboard reference, at the far right of the desktop header. Not in
+                the mini group: a phone has no keyboard to look keys up for, and the
+                panel needs width the narrow header does not have. */}
+            <div className="help-anchor">
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setHelpOpen((open) => !open)}
+                title="快捷键"
+                aria-label="快捷键"
+                aria-expanded={helpOpen}
+                aria-haspopup="dialog"
+              >
+                <HelpIcon />
+              </button>
+              {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
+            </div>
           </div>
-        </div>
 
         {/* Narrow screens only (`.titlebar-mini`): the format toolbar is desktop
             furniture, and these are the commands a phone cannot do without. New
@@ -1034,42 +1139,6 @@ export default function App() {
           />
         )}
         <main className="workspace">
-          {/* The format toolbar lives ABOVE the content column, not in the
-              window-wide titlebar: centered over the same column as the document
-              (same max-width and padding), so it lines up with the text instead
-              of with the whole window. Visible on desktop; the narrow screen
-              hides it with the rest of the desktop furniture. */}
-          <div className="editor-top">
-            <div className="toolbar" role="toolbar" aria-label="格式">
-              {/* Every button in this row is an SVG on the one 16-unit grid. The
-                  text labels (`B I S H1 H2 H3`) became `<text>` inside that same
-                  frame: a letterform is the honest icon for "bold", but as bare
-                  labels their ink was whatever the toolbar's own font-size made
-                  it — which is how `🔗` and `☑` ended up in the same row at sizes
-                  nobody chose. */}
-              <ToolButton label={<BoldIcon />} title="加粗 (Cmd/Ctrl+B)" onClick={commands.bold} />
-              <ToolButton label={<ItalicIcon />} title="斜体 (Cmd/Ctrl+I)" onClick={commands.italic} />
-              <ToolButton label={<StrikeIcon />} title="删除线 (Ctrl+Shift+`)" onClick={commands.strike} />
-              <span className="toolbar-sep" />
-              <ToolButton label={<HeadingIcon level={1} />} title="一级标题 (Cmd/Ctrl+1)" onClick={commands.heading(1)} />
-              <ToolButton label={<HeadingIcon level={2} />} title="二级标题 (Cmd/Ctrl+2)" onClick={commands.heading(2)} />
-              <ToolButton label={<HeadingIcon level={3} />} title="三级标题 (Cmd/Ctrl+3)" onClick={commands.heading(3)} />
-              <span className="toolbar-sep" />
-              {/* Everything below is a PICTURE, so it is drawn. The glyphs they
-                  used to be (`‹› ❝ • ☑ ▦ {}`) each carried their own weight and
-                  size — `▦` was a solid block, `•` a speck, `❝` oversized —
-                  because a font glyph's ink is whatever that font decides. See
-                  `Glyph`. */}
-              <ToolButton label={<InlineCodeIcon />} title="行内代码 (Ctrl+`)" onClick={commands.code} />
-              <ToolButton label={<QuoteIcon />} title="引用 (Alt+Cmd/Ctrl+Q)" onClick={commands.quote} />
-              <ToolButton label={<BulletListIcon />} title="无序列表 (Alt+Cmd/Ctrl+U)" onClick={commands.list} />
-              <ToolButton label={<OrderedListIcon />} title="有序列表 (Alt+Cmd/Ctrl+O)" onClick={commands.orderedList} />
-              <ToolButton label={<TaskListIcon />} title="任务列表 (Alt+Cmd/Ctrl+X)" onClick={commands.task} />
-              <ToolButton label={<TableIcon />} title="插入表格 (Alt+Cmd/Ctrl+T)" onClick={commands.table} />
-              <ToolButton label={<CodeBlockIcon />} title="代码块 (Alt+Cmd/Ctrl+C)" onClick={commands.codeBlock} />
-              <ToolButton label={<LinkIcon />} title="链接 (Cmd/Ctrl+K)" onClick={commands.link} />
-            </div>
-          </div>
           <Editor
             ref={editorRef}
             value={value}

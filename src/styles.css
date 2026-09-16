@@ -198,37 +198,87 @@ body {
   overflow: hidden;
 }
 
+/* The header mirrors the body's two columns, so the format toolbar can centre
+   on the DOCUMENT column's axis instead of the window's. `.titlebar-left` claims
+   exactly the outline's width with the outline open — then `.titlebar-center`
+   starts where the workspace starts, and a pill centred in it lands on the same
+   line as the text column. `.outline` is 244px (border-box: the 1px border is
+   inside the width). */
 .titlebar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 46px;
-  padding: 0 12px;
+  gap: 0;
+  height: 52px;
+  padding: 0;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex: none;
   user-select: none;
+  position: relative;
 }
 
-.titlebar-left,
-.titlebar-right {
+.titlebar-left {
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 4px;
   flex: none;
+  min-width: 0;
+  padding: 0 10px 0 12px;
 }
 
-.titlebar-left {
-  min-width: 180px;
+.titlebar:where([data-sidebar='on']) .titlebar-left {
+  width: 244px;
+}
+
+/* No outline: the title floats over the band's left edge, and the band is the
+   whole window — which is also the text column's axis then. */
+.titlebar:where([data-sidebar='off']) .titlebar-left {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+}
+
+/* The title gets 220px by default (`.doc-name`); inside the 244px mirror of the
+   outline it shares that cell with the toggle button, so it ellipsizes sooner. */
+.titlebar:where([data-sidebar='on']) .doc-name {
+  max-width: 176px;
+}
+
+/* The middle of the header: the format toolbar centred (the pill keeps shrinking
+   to its own content, `justify-content: center` puts it on the band's axis), and
+   the command strip pinned to the band's right edge — over the document's right
+   margin. On windows too narrow for pill and strip to share one line (the
+   fallbacks further down), the strip steps back into normal flow and the header
+   wraps instead. */
+.titlebar-center {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .titlebar-right {
-  margin-left: auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px 0 8px;
+  background: var(--bg-panel);
 }
 
 /* The narrow-screen command group: save plus an export menu, the only two
    commands a phone can reach. Hidden on desktop, where `.titlebar-right` has
-   the whole set with words on it. */
+   the whole set as icons. */
 .titlebar-mini {
   display: none;
   align-items: center;
@@ -512,21 +562,6 @@ body {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
-}
-
-/* The format toolbar's place: a centered row over the DOCUMENT column. Same
-   max-width and horizontal padding as `.doc`, so the pill centers above the text
-   column itself ("at the top of the content") instead of over the whole window
-   the way it did while it lived in the titlebar. The toolbar keeps shrinking to
-   its own content; `justify-content: center` places it on the column's axis. */
-.editor-top {
-  flex: none;
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  max-width: var(--editor-max-width);
-  margin: 0 auto;
-  padding: 10px var(--editor-pad-x) 0;
 }
 
 .toolbar-sep {
@@ -1392,6 +1427,64 @@ body {
    both files.
    ========================================================================== */
 
+/* Narrow-desktop compromise. With the outline open, a window under ~1200px has
+   no room on one line for the title, the centred pill and the command strip:
+   the pill alone is ~480px, the strip ~230px, and the pill's axis is fixed by
+   the text column, not by the leftover space. The header wraps instead — the
+   commands join the title row, the pill gets its own centred row, still on the
+   text column's axis. With the outline closed the maths is easier (the band and
+   the window are the same), so that case can hold a single line until 960px. */
+@media (max-width: 1200px) {
+  .titlebar:where([data-sidebar='on']) {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 6px 0 8px;
+  }
+
+  /* The pill's row is the band again — inset by the outline's width, so the
+     centred pill lands on the text column's axis even wrapped. */
+  .titlebar:where([data-sidebar='on']) .titlebar-center {
+    order: 3;
+    flex: 1 1 100%;
+    position: static;
+    height: 40px;
+    margin-top: 2px;
+    margin-left: 244px;
+  }
+
+  .titlebar:where([data-sidebar='on']) .titlebar-right {
+    position: static;
+    margin-left: auto;
+    background: transparent;
+  }
+}
+
+@media (max-width: 960px) {
+  .titlebar:where([data-sidebar='off']) {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 6px 0 8px;
+  }
+
+  .titlebar:where([data-sidebar='off']) .titlebar-left {
+    position: static;
+  }
+
+  .titlebar:where([data-sidebar='off']) .titlebar-center {
+    order: 3;
+    flex: 1 1 100%;
+    position: static;
+    height: 40px;
+    margin-top: 2px;
+  }
+
+  .titlebar:where([data-sidebar='off']) .titlebar-right {
+    position: static;
+    margin-left: auto;
+    background: transparent;
+  }
+}
+
 @media (max-width: 900px) {
   .outline {
     position: absolute;
@@ -1413,11 +1506,8 @@ body {
   }
 
   .toolbar,
-  .titlebar-right {
-    display: none;
-  }
-
-  .editor-top {
+  .titlebar-right,
+  .titlebar-center {
     display: none;
   }
 
@@ -1425,12 +1515,24 @@ body {
     display: flex;
   }
 
-  /* Header budget. The left group is `flex: none` with a 180px floor and a
-     220px file name, which alone is 252px: enough on its own to push the mini
-     group off a 360px screen. Here it becomes the part that gives way — the file
+  /* Back to one row for the mini group: the wrap fallbacks above give way —
+     later rules win at equal specificity (`:where` keeps it that way). */
+  .titlebar,
+  .titlebar:where([data-sidebar='on']),
+  .titlebar:where([data-sidebar='off']) {
+    flex-wrap: nowrap;
+    height: 46px;
+    padding: 0;
+  }
+
+  /* Header budget. The left group becomes the part that gives way — the file
      name ellipsizes instead of the command group being pushed out, which keeps
      working when the group gains another command. */
-  .titlebar-left {
+  .titlebar-left,
+  .titlebar:where([data-sidebar='on']) .titlebar-left,
+  .titlebar:where([data-sidebar='off']) .titlebar-left {
+    position: static;
+    width: auto;
     min-width: 0;
     flex: 1 1 auto;
   }

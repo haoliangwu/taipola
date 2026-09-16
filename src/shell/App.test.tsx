@@ -33,8 +33,8 @@ function foreignSlot(key: string, content: string, savedAt = 9_999) {
 }
 
 function findButton(view: ReturnType<typeof render>, label: string): HTMLButtonElement {
-  return [...view.container.querySelectorAll('.text-button')].find(
-    (el) => el.textContent?.trim() === label,
+  return view.container.querySelector(
+    `.titlebar-right [aria-label="${label}"]`,
   ) as HTMLButtonElement
 }
 
@@ -142,7 +142,7 @@ describe('导出文件名', () => {
     localStorage.clear()
   })
 
-  it('草稿恢复出的文档，导出沿用草稿的文件名', () => {
+  it('草稿恢复出的文档，导出沿用草稿的文件名', async () => {
     seedDraft('报告.md', { content: '# 标题\n\n正文\n', name: '报告.md' })
     const downloaded: string[] = []
     // `downloadFile` hands the browser an <a download=…> and clicks it; that is
@@ -156,14 +156,21 @@ describe('导出文件名', () => {
     try {
       const view = render(<App />)
       // The titlebar hides these buttons under 900px, so dispatch the click
-      // directly: the handler is what is under test, not the pointer path.
-      const button = (label: string) =>
-        [...view.container.querySelectorAll('.text-button')].find(
+      // directly: the handler is what is under test, not the pointer path. The
+      // desktop export is a menu now (header went icon-only), so each format is
+      // two clicks: open the menu, pick the format.
+      const user = userEvent.setup({ delay: null })
+      const exportButton = () =>
+        view.container.querySelector('.titlebar-right [aria-label="导出"]') as HTMLButtonElement
+      const menuItem = (label: string) =>
+        [...view.container.querySelectorAll('.titlebar-right .mini-menu [role="menuitem"]')].find(
           (el) => el.textContent?.trim() === label,
         ) as HTMLButtonElement
 
-      button('导出 HTML').click()
-      button('导出 MD').click()
+      await user.click(exportButton())
+      await user.click(menuItem('导出 HTML'))
+      await user.click(exportButton())
+      await user.click(menuItem('导出 MD'))
 
       expect(downloaded).toEqual(['报告.html', '报告.md'])
       view.unmount()
@@ -172,6 +179,55 @@ describe('导出文件名', () => {
     }
   })
 })
+/**
+ * The desktop header's command strip — the icon-only counterpart of the phone's
+ * mini group, and the format toolbar's home.
+ *
+ * The toolbar lives in the titlebar again (`.titlebar-center`, not a row over
+ * the document — that row cost the document screen); the command strip is
+ * pinned to the same band's right edge (`.titlebar-right`); and every button
+ * there is an SVG with an aria-label, because words cost the pill's centring
+ * room. The theme toggle's icon follows the theme it would switch INTO.
+ */
+describe('标题栏命令组', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
+  })
+
+  it('格式工具条在标题栏居中带里，桌面命令组全是图标按钮', () => {
+    const view = render(<App />)
+    expect(view.container.querySelector('.toolbar')?.closest('.titlebar-center')).not.toBeNull()
+    expect(view.container.querySelector('.editor-top')).toBeNull()
+    for (const name of ['切换主题', '新建', '打开', '打开文件夹', '保存', '导出', '快捷键']) {
+      const button = view.container.querySelector(`.titlebar-right [aria-label="${name}"]`)
+      expect(button, `${name} 不见了`).not.toBeNull()
+      expect(button!.querySelector('svg'), `${name} 应当是画出来的`).not.toBeNull()
+    }
+    view.unmount()
+  })
+
+  it('主题按钮的说明跟着主题走（浅色 → 深色 → 跟随系统）', async () => {
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    const themeButton = view.container.querySelector(
+      '.titlebar-right [aria-label="切换主题"]',
+    ) as HTMLButtonElement
+    const says = () => themeButton.title
+
+    // Default is `system` (nothing stored); the label names the CURRENT theme.
+    expect(says()).toContain('跟随系统')
+    await user.click(themeButton)
+    expect(says()).toContain('浅色')
+    expect(view.container.querySelector('.titlebar-right [aria-label="切换主题"] svg')).not.toBeNull()
+    await user.click(themeButton)
+    expect(says()).toContain('深色')
+    await user.click(themeButton)
+    expect(says()).toContain('跟随系统')
+    view.unmount()
+  })
+})
+
 /**
  * The shortcut WIRING, which `core/shortcuts.test.ts` cannot reach.
  *
@@ -259,8 +315,8 @@ describe('丢弃未保存内容前的确认', () => {
     const view = render(<App />)
     const doc = () => view.container.querySelector('.doc') as HTMLElement
     const button = (label: string) =>
-      [...view.container.querySelectorAll('.text-button')].find(
-        (el) => el.textContent?.trim() === label,
+      view.container.querySelector(
+        `.titlebar-right [aria-label="${label}"]`,
       ) as HTMLButtonElement
     return { view, doc, button }
   }
@@ -347,8 +403,8 @@ describe('丢弃未保存内容前的确认', () => {
     // 欢迎文档：没有对应的文件，也没有未写回的内容。
     const view = render(<App />)
     const button = (label: string) =>
-      [...view.container.querySelectorAll('.text-button')].find(
-        (el) => el.textContent?.trim() === label,
+      view.container.querySelector(
+        `.titlebar-right [aria-label="${label}"]`,
       ) as HTMLButtonElement
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
     const confirm = vi.spyOn(window, 'confirm')
@@ -994,10 +1050,8 @@ describe('侧栏打开文件夹', () => {
     const user = userEvent.setup({ delay: null })
     try {
       expect(
-        [...view.container.querySelectorAll('.text-button')].some(
-          (el) => el.textContent?.trim() === '打开文件夹',
-        ),
-      ).toBe(false)
+        view.container.querySelector('.titlebar-right [aria-label="打开文件夹"]'),
+      ).toBeNull()
       expect(view.container.querySelector('.titlebar-mini [aria-label="打开文件夹"]')).toBeNull()
 
       await user.click(tab(view, '文件'))
