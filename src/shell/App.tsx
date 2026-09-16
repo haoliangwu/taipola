@@ -30,6 +30,7 @@ import {
   deleteTableRow,
   insertTableColumn,
   insertTableRow,
+  tableAt,
   type TableEdit,
 } from '../core/tables'
 import { WELCOME_DOC, WELCOME_NAME } from '../core/welcome'
@@ -75,7 +76,19 @@ const TABLE_MUTATIONS: Record<
 > = {
   rowAbove: (doc, offset) => insertTableRow(doc, offset, 'above'),
   rowBelow: (doc, offset) => insertTableRow(doc, offset, 'below'),
-  rowDelete: (doc, offset) => deleteTableRow(doc, offset),
+  // The header row and the rule row are the table's structure, not rows of it, so
+  // "delete the current row" has nothing to take there — the gesture that has
+  // been erasing rows one by one erases the WHOLE table instead, which is the
+  // only way ⇧⌘⌫ can keep going until nothing is left (a table whose header is
+  // gone is not a table). The context menu keeps its 删除本行 disabled on those
+  // rows and points at 删除表格 instead (`.scratch/table-ops/issues/05`).
+  rowDelete: (doc, offset) => {
+    const table = tableAt(doc, offset)
+    if (!table) return null
+    return table.line === table.headerLine || table.line === table.delimiterLine
+      ? deleteTable(doc, offset)
+      : deleteTableRow(doc, offset)
+  },
   columnLeft: (doc, offset) => insertTableColumn(doc, offset, 'left'),
   columnRight: (doc, offset) => insertTableColumn(doc, offset, 'right'),
   columnDelete: (doc, offset) => deleteTableColumn(doc, offset),

@@ -155,11 +155,27 @@ describe('⌘⏎ / ⇧⌘⏎ / ⇧⌘⌫（外壳快捷键）', () => {
     view.unmount()
   })
 
-  it('表头行删不掉：文档不动', async () => {
+  it('⇧⌘⌫ 在表头上：删的是整张表（表头不能单独删，这一按就删到表为止）', async () => {
     const { doc, user, source, view } = await withTable()
     placeCaretAt(tableCellEl(doc, 0, 0), 0)
     await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
-    expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| a | b |\n| c | d |\n')
+    expect(source()).toBe('')
+    view.unmount()
+  })
+
+  it('⇧⌘⌫ 连按：一行行删掉，最后表头那一按把整张表删掉', async () => {
+    const { doc, user, source, view } = await withTable()
+    placeCaretAt(tableCellEl(doc, 2, 0), 0) // 第一行正文
+    await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
+    expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n| c | d |\n')
+    await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
+    // 唯一一行正文也删掉：光标回到表头，表格只剩表头 + 分隔行。
+    expect(source()).toBe('| 列 1 | 列 2 |\n| --- | --- |\n')
+    await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
+    // 表头上没有"行"可删，这一按删掉整张表——连按 ⇧⌘⌫ 终于可以消到什么都没有。
+    expect(source()).toBe('')
+    await user.keyboard('{Control>}{Shift>}{Backspace}{/Shift}{/Control}')
+    expect(source()).toBe('') // 表已经不在，什么都不做
     view.unmount()
   })
 
