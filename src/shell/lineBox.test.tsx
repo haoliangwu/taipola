@@ -70,6 +70,7 @@ function docLine(r: Rendering): number {
 /** Line classes whose box is exactly one line: single-line, at the doc font size. */
 const ONE_LINE = [
   'vl-text',
+  'vl-blank',
   'vl-list',
   'vl-quote',
   'vl-task',
@@ -93,13 +94,17 @@ describe('每个行种的行盒高度', () => {
     }
     // 标题的字号是自己的（30px），所以它的行盒是两格高——这是设计，不是漂移。
     expect(heightOf(r, 'vl-heading')).toEqual([line * 2])
-    // 空行是段落间隙（`paragraph-spacing/01`）：1.3 倍行高，让段落边界可辨。
-    // 它不是"漂移"——代码块/表格内部的行不挂 `vl-blank`，不受影响。
-    expect(heightOf(r, 'vl-blank')).not.toHaveLength(0)
+    // 空行仍是正好一行（`paragraph-spacing/01` 的机制：段落间距在块底部的
+    // margin，不是在空行行盒上——空行是真实光标目标，和正文行一样高）。
     for (const height of heightOf(r, 'vl-blank')) {
-      expect(height).toBeGreaterThan(line)
-      expect(height).toBeCloseTo(line * 1.3, 1)
+      expect(height).toBeCloseTo(line, 1)
     }
+    // 段落间距 = 每个非空块的底部 margin：这一行（块 0 是正文）的块底要比
+    // 行盒多出一点，段落才读得出一块。
+    const textBlock = r.container.querySelector<HTMLElement>('[data-block="0"]')
+    const margin = getComputedStyle(textBlock!).marginBottom
+    expect(parseFloat(margin)).toBeGreaterThan(4)
+    expect(parseFloat(margin)).toBeLessThan(line / 2)
 
     // 标题折行交给浏览器匀称分配（`text-wrap-balance/01`）；正文各源码行是独立
     // 行盒，balance 对它没有跨盒意义，不启用。

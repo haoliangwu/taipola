@@ -836,6 +836,18 @@ body {
   margin: 0;
 }
 
+/* The paragraph gap: `margin-bottom` on EVERY non-blank block, so the space
+   between two blocks belongs to the BLOCKS, not to the blank line between them.
+   A blank source line stays exactly one line high — it is a real caret target
+   and a source line like any other (`blank-line-typing/01`) — while a block's
+   last line gains a little breathing room below, which is what makes a hard-
+   wrapped paragraph read as one block instead of flowing invisibly into the
+   next. Amount: 8px at the 15px/1.75 base ≈ 0.3 of a line height.
+   (`.scratch/paragraph-spacing/issues/01`) */
+.blk:not([data-kind='blank']) {
+  margin-bottom: 8px;
+}
+
 /* One source line. One line box tall, whatever the browser would do with its
    content: a line whose text is collapsed (a `---`, a fence marker, an empty list
    item) still owns its row on the page, which is what keeps the vertical position
@@ -853,14 +865,12 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* A blank source line is one line box AND the paragraph gap: a little taller
-   than a text line so a hard-wrapped paragraph reads as a block (its boundary
-   is otherwise exactly one line height — indistinguishable from a wrap inside
-   the paragraph). The box stays a real caret target (`blank-line-typing/01`);
-   code/table interiors never get this class (`vl-code`/`vl-table`). */
-.vl-blank {
-  min-height: calc(var(--doc-line-size) * 1.3);
-}
+/* A blank source line is one line box like any other — exactly one line high
+   (the base `.vl` rule provides it; no blank-specific fattening). The paragraph
+   gap lives on the blocks' bottom margin above, NOT on this box: fattening the
+   blank line would make a blank "row" taller than a text row and move the gap
+   onto the line the user is actually standing on. Code/table interiors never
+   get the block class, so their blank lines stay snug. */
 
 /* One line box per source line, laid out as one row each — a newline in the source
    is a line break on screen, the way Typora shows it. (`soft-line-breaks/01` had
