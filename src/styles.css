@@ -836,16 +836,18 @@ body {
   margin: 0;
 }
 
-/* The paragraph gap: `margin-bottom` on EVERY non-blank block, so the space
-   between two blocks belongs to the BLOCKS, not to the blank line between them.
-   A blank source line stays exactly one line high — it is a real caret target
-   and a source line like any other (`blank-line-typing/01`) — while a block's
-   last line gains a little breathing room below, which is what makes a hard-
-   wrapped paragraph read as one block instead of flowing invisibly into the
-   next. Amount: 8px at the 15px/1.75 base ≈ 0.3 of a line height.
-   (`.scratch/paragraph-spacing/issues/01`) */
-.blk:not([data-kind='blank']) {
-  margin-bottom: 8px;
+/* The paragraph gap. It hangs off the BLANK block (the line between two
+   blocks), NOT off the blocks themselves: an Enter at a paragraph's end drops
+   the caret onto a blank line, and a margin on the paragraph above would push
+   that caret further down than a real "new line" — Enter has to read as
+   exactly one line. The blank line stays one line box (a real caret target,
+   `blank-line-typing/01`) and carries the gap below it, so a block → blank →
+   block run reads as: line, one clean new line, then the gap before the next
+   block. Amount: 4px at the 15px/1.75 base ≈ 0.15 of a line height — enough
+   for a hard-wrapped paragraph to read as a block, not so much that the break
+   reads as a missing line. (`.scratch/paragraph-spacing/issues/01`) */
+.blk[data-kind='blank'] {
+  margin-bottom: 4px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its

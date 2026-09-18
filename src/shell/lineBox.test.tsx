@@ -99,12 +99,14 @@ describe('每个行种的行盒高度', () => {
     for (const height of heightOf(r, 'vl-blank')) {
       expect(height).toBeCloseTo(line, 1)
     }
-    // 段落间距 = 每个非空块的底部 margin：这一行（块 0 是正文）的块底要比
-    // 行盒多出一点，段落才读得出一块。
+    // 段落间距 = 空行块的底部 margin（`paragraph-spacing/01` 二审）：挂在空行上
+    // 而不是段落块上，这样"段落行尾 Enter → 光标落进空行"视觉上正好是一行，
+    // 不会被段落底部的间隙推出额外 8px。
     const textBlock = r.container.querySelector<HTMLElement>('[data-block="0"]')
-    const margin = getComputedStyle(textBlock!).marginBottom
-    expect(parseFloat(margin)).toBeGreaterThan(4)
-    expect(parseFloat(margin)).toBeLessThan(line / 2)
+    expect(parseFloat(getComputedStyle(textBlock!).marginBottom)).toBe(0)
+    const blankBlock = r.container.querySelector<HTMLElement>('[data-block="1"]')
+    const blankMargin = parseFloat(getComputedStyle(blankBlock!).marginBottom)
+    expect(blankMargin).toBeCloseTo(4, 0)
 
     // 标题折行交给浏览器匀称分配（`text-wrap-balance/01`）；正文各源码行是独立
     // 行盒，balance 对它没有跨盒意义，不启用。
