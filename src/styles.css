@@ -843,11 +843,13 @@ body {
    exactly one line. The blank line stays one line box (a real caret target,
    `blank-line-typing/01`) and carries the gap below it, so a block → blank →
    block run reads as: line, one clean new line, then the gap before the next
-   block. Amount: 4px at the 15px/1.75 base ≈ 0.15 of a line height — enough
-   for a hard-wrapped paragraph to read as a block, not so much that the break
-   reads as a missing line. (`.scratch/paragraph-spacing/issues/01`) */
+   block. Amount: 4px read as "no gap at all" against the 26px line gap —
+   the reviewer's soft break and hard break looked the same. 8px ≈ 0.3 line
+   makes a paragraph's boundary visible, and the caret-drop problem that once
+   made 8px feel too far (the gap sat on the paragraph) was fixed by hanging
+   it off the blank line instead. (`.scratch/paragraph-spacing/issues/01`) */
 .blk[data-kind='blank'] {
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its
