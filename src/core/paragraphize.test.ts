@@ -1,17 +1,22 @@
 /**
  * 空行被输入占用时的处置（`.scratch/paragraph-spacing/issues/01`）。
  *
- * 断的是：两段之间**既有**空行上打字 = 字符落在那一行（Typora 实测语义，
- * `甲\n\n乙` 打 x → `甲\nx\n乙`，邻段合并成软换行段）；只有 Enter 开出的占位
- * 空行才补边界成为独立段落；所有非本形状的编辑（段中插入、删除、替换）原样不动。
+ * 断的是：两段之间**既有**空行上打字 = 字符并入前一段（软换行续行）+ 后一段的
+ * 边界保留（Typora 真机实测，`甲\n\n乙` 打 x → `甲\nx\n\n乙`，间距不消失）；
+ * Enter 开出的占位空行才补前边界成独立段落；所有非本形状的编辑（段中插入、
+ * 删除、替换）原样不动。
  */
 import { describe, expect, it } from 'vitest'
 import { paragraphizeTypedBlankLine } from './paragraphize'
 
 describe('paragraphizeTypedBlankLine', () => {
-  it('两段之间夹空行：字符落在那一行，不补边界（Typora 实测）', () => {
-    // 'A\n\nB' 的空行上打 X：'A\nX\nB' 原样保留 → 并成软换行段
-    expect(paragraphizeTypedBlankLine('A\n\nB', 'A\nX\nB', 3)).toBeNull()
+  it('两段之间夹空行：字符并入前段（软换行），后段边界保留', () => {
+    // 'A\n\nB' 的空行上打 X：'A\nX\nB' → 只补后边界 → 'A\nX\n\nB'
+    // （X 与 A 同段紧挨，B 与间距不消失——Typora 实测）
+    expect(paragraphizeTypedBlankLine('A\n\nB', 'A\nX\nB', 3)).toEqual({
+      doc: 'A\nX\n\nB',
+      caret: 3,
+    })
   })
 
   it('段尾 Enter 开出的空行（后一行是空）：补前边界成新段', () => {
