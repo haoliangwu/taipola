@@ -92,8 +92,14 @@ function runElement(
   if (span.title !== title) span.title = title
   // Only touch the text when it actually differs: assigning `textContent`
   // replaces the text node, which would throw away the browser's selection (and
-  // an in-flight IME composition) for no reason.
-  if (span.textContent !== run.text) span.textContent = run.text
+  // an in-flight IME composition) for no reason. A run that ACCUMULATED extra
+  // text nodes (a composition's provisional shape — the browser types the
+  // composing text beside the existing run text) reads the same `textContent`
+  // but keeps several nodes: folding them back into one keeps later caret
+  // anchoring (`span.firstChild`) from clamping to the first node's length.
+  if (span.textContent !== run.text || span.childNodes.length > 1) {
+    span.textContent = run.text
+  }
   return span
 }
 
@@ -343,6 +349,7 @@ function blockElement(
   view: BlockView,
   lineStates: LineState[],
   start: number,
+  gap = 0,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
   // The `blk` class is a CSS contract, not decoration: every block-level rule is
@@ -352,6 +359,7 @@ function blockElement(
   if (el.className !== 'blk') el.className = 'blk'
   setAttr(el, 'data-block', String(block.index))
   setAttr(el, 'data-src-start', String(start))
+  setAttr(el, 'data-gap', String(gap))
   setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
   syncChildren(el, view.lines.length, (index, current) => {
     const line = view.lines[index]
@@ -407,10 +415,49 @@ export function renderDocument(
   lineStates: LineState[],
   offsets: number[],
 ): void {
-  const renderable = blocks.filter((_block, i) => views[i])
-  syncChildren(host, renderable.length, (i, current) =>
-    blockElement(current, renderable[i], views[i], lineStates, offsets[i]),
+  // A blank block BETWEEN two blocks is a paragraph SEPARATOR, not a visible
+  // row: it renders no DOM node, and the gap is carried by the blocks' own
+  // margins (Typora renders `甲\n\n乙` as two <p> with a margin, no blank box).
+  // A blank block that CARRIES characters (a whitespace-only line) is content,
+  // not a separator: it keeps its row so the spaces survive the round trip.
+  // The LAST block is the exception too: a trailing truly-blank block is the
+  // paragraph placeholder Enter just opened — it must render its line box or
+  // the caret has nowhere to go and the next keystroke cannot open the new
+  // paragraph (`.scratch/paragraph-spacing/issues/01` 十一审).
+  const lastIndex = blocks.length - 1
+  const renderable = blocks.filter(
+    (block, i) =>
+      views[i] &&
+      (lineStates[block.startLine]?.kind !== 'blank' ||
+        block.raw !== '' ||
+        i === lastIndex),
   )
+  syncChildren(host, renderable.length, (i, current) => {
+    const block = renderable[i]
+    // `views`/`offsets` are indexed by the block's ORIGINAL index, which jumps
+    // when a blank separator is filtered out — indexing them by the filtered
+    // position handed the paragraph after a blank the blank's own view
+    // (`paragraph-spacing/01` 十一审).
+    const srcStart = offsets[block.index]
+    // The characters between this block and the previous RENDERED block —
+    // unfiltered blank separators — are baked into the DOM as `data-gap`, a
+    // constant that does not move when the block's own text is edited. The
+    // read-back trusts it, so typing inside a paragraph can never drift the
+    // blank separator that follows it (its value is a property of the source,
+    // not of the current text length).
+    const prev = i > 0 ? renderable[i - 1] : null
+    // The previous block's rendered text also covers the blank lines its span
+    // absorbs (a list's trailing blank), so the gap is measured from the end
+    // of the VIEW, not from `raw`'s own length.
+    const prevEnd =
+      prev !== null
+        ? offsets[prev.index] +
+          prev.raw.length +
+          Math.max(0, views[prev.index].lines.length - prev.raw.split('\n').length)
+        : 0
+    const gap = prev !== null ? srcStart - prevEnd : srcStart
+    return blockElement(current, block, views[block.index], lineStates, srcStart, gap)
+  })
 }
 
 /**
@@ -469,8 +516,15 @@ function readBlockSource(host: HTMLElement): string {
 /**
  * Rebuilds the WHOLE document source from the rendered DOM.
  *
- * Blocks tile the document without gaps: every block contributes its lines
- * joined by newlines, and the blocks themselves are joined by one more newline.
+ * Blocks tile the document, but a blank SEPARATOR between two blocks renders
+ * no node (`paragraph-spacing/01` 十一审): its rows are purely a source
+ * construct, and the gap is carried by the blocks' margins. Their place is
+ * recovered from the block offsets — the characters between one block's end
+ * and the next block's `data-src-start` are exactly the missing blank lines,
+ * so the reconstruction pads them back in. A trailing blank block still
+ * renders (it is the paragraph placeholder Enter opened), so the document
+ * tail needs no padding.
+ *
  * Absorbing the browser's edit this way (rather than guessing a delta) is what
  * keeps a cross-block edit — select-all delete, paste, multi-line drag-delete —
  * from losing the blocks the edit did not touch.
@@ -478,9 +532,15 @@ function readBlockSource(host: HTMLElement): string {
 export function readDocumentSource(root: HTMLElement): string {
   const parts: string[] = []
   root.querySelectorAll<HTMLElement>('[data-block]').forEach((host) => {
+    // The gap BEFORE this block is a rendered constant (`data-gap`): the
+    // unrendered blank separators between it and the previous block. It does
+    // not depend on the block's current text length, so typing inside a
+    // paragraph cannot drift it.
+    const gap = Number(host.getAttribute('data-gap') ?? '')
+    if (gap > 0) parts.push('\n'.repeat(gap))
     parts.push(readBlockSource(host))
   })
-  return parts.join('\n')
+  return parts.join('')
 }
 
 /** Characters typed while the caret sat outside every block (below the last one). */

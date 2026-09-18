@@ -117,8 +117,9 @@ export function splitParagraphAtLineEnd(
     if (!b) continue
     blocks.push({ ...b, startLine: b.startLine + 2, endLine: b.endLine + 2 })
   }
-  // `甲\n乙`（3 字符）→ `甲\n\n乙`（4 字符）：+1；光标补 1 个偏移落在空白块。
-  return { tree: { blocks }, addedChars: 1, caretDelta: 1 }
+  // `甲\n乙`（3 字符）→ `甲\n\n乙`（4 字符）：+1。光标落**右段首**——中间的
+  // 空白块不渲染行盒（十一审），caret 只能落在有行盒的位置。
+  return { tree: { blocks }, addedChars: 1, caretDelta: 2 }
 }
 
 /** Full command: break the paragraph at the caret's line end. Caret lands on

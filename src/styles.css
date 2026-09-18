@@ -836,33 +836,18 @@ body {
   margin: 0;
 }
 
-/* The paragraph gap, held BY THE PARAGRAPHs: every non-blank block carries
-   `margin-bottom: 8px`. The blank line between two blocks is then just one
-   clean line box — a real caret target, `blank-line-typing/01` — and the gap
-   belongs to the paragraph, so it does not vanish with the blank block the way
-   it did when it hung off `blank`.
-   
-   Amount: 8px ≈ 0.3 line — enough that a paragraph boundary reads wider
-   than a soft wrap (34.25px between paragraphs vs 26.25px inside one); 12px
-   read as too much and 4px as nothing, both tried and rejected.
-   
-   Typing a character INTO the blank line between two paragraphs makes it the
-   paragraph ABOVE's next line (a soft wrap) and keeps the paragraph BELOW
-   standing: `甲\n\n乙` + typing `x` yields `甲\nx\n\n乙` — verified against
-   Typora on real hardware: the gap does NOT shrink when the blank is consumed,
-   and the keystroke does NOT merge everything into one paragraph
-   (`paragraph-spacing/01` 八审). Only when the blank is a fresh Enter's
-   paragraph placeholder does the kernel's `paragraphizeTypedBlankLine` fence
-   it into a paragraph of its own (`甲\n` + Enter + `x` → `甲\n\nx`). The gate
-   is the OLD line's kind: only a true blank line (outside any structure)
-   triggers; fences, tables, quotes and lists keep their blank lines untouched.
-   
-   The trade-off stands: Enter at a paragraph's end drops the caret into a
-   blank line whose top sits 8px below the paragraph, because the gap is above
-   it — the price of a gap that belongs to the paragraph at all.
-   (`.scratch/paragraph-spacing/issues/01`) */
+/* The paragraph gap IS the paragraphs: an in-between blank line (a separator
+   between two blocks) renders no row at all, and the gap is this margin —
+   Typora renders `甲\n\n乙` as two `<p>` with a margin and no blank box
+   (`paragraph-spacing/01` 十一审). A trailing blank (Enter's fresh paragraph
+   placeholder) still renders its one line box, so the caret survives Enter.
+
+   Amount: 26px ≈ one line — a paragraph boundary reads at least as wide as a
+   line inside the paragraph (soft wrap lines sit 26.25px apart); the old
+   4/8/12px values were ADDED to a rendered blank row and do not transfer.
+   Tuning history lives in the ticket; adjust here directly. */
 .blk:not([data-kind='blank']) {
-  margin-bottom: 8px;
+  margin-bottom: 26px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its

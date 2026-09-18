@@ -167,6 +167,16 @@ export class EditorKernel {
   private composeStart = 0
   private composeLength = 0
   private pendingCaret: number | null = null
+  /**
+   * Model offset of the blank line a just-pressed Enter opened as a NEW
+   * paragraph placeholder. In-between blanks render no line box
+   * (`paragraph-spacing/01` 十一审), so the caret anchors on the nearest
+   * rendered text and the next keystroke lands THERE — this mark lets that
+   * keystroke be re-homed into the placeholder: the character becomes the new
+   * paragraph's first character, exactly as if it had been typed on the blank.
+   * Single-shot: cleared by every commit.
+   */
+  private pendingEnterLine = -1
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
@@ -373,11 +383,39 @@ export class EditorKernel {
   private placeCaret(want: number): void {
     const host = this.host
     if (!host) return
-    const index = this.blockAt(want)
-    if (index < 0) return
+    let index = this.blockAt(want)
+    // A blank separator between two blocks renders NO line box (`paragraph-spacing/01`
+    // 十一审): a caret whose source offset falls on it has nowhere to anchor, so the
+    // visual anchor walks back to the previous rendered block's end. The same applies
+    // when `want` sits exactly at a trailing blank block's line start — that offset
+    // is really "the end of the block above", and typing there must stay IN the block
+    // above rather than land on a bare `<br>` line. EXCEPT when that blank is the
+    // Enter placeholder (the new paragraph's opening): there the blank's own line box
+    // is the anchor, so the next keystroke is re-homed into a new paragraph.
+    const isEnterSpot =
+      this.pendingEnterLine >= 0 && want === this.pendingEnterLine && index === this.blockAt(want)
+    while (
+      index > 0 &&
+      this.blocks[index] !== undefined &&
+      this.blocks[index]!.raw === '' &&
+      this.lineStates[this.blocks[index]!.startLine]?.kind === 'blank' &&
+      (index < this.blocks.length - 1 || (want === this.offsets[index] && !isEnterSpot))
+    ) {
+      index -= 1
+    }
     const view = this.views[index]
     if (!view) return
-    if (applyCaret(host, index, view, this.offsets[index], want)) this.placedByUs = true
+    if (applyCaret(host, index, view, this.offsets[index], want)) {
+      this.placedByUs = true
+      return
+    }
+    // `want` past the rendered view's last position (a caret that lands on a
+    // block's very end, or on the blank line that follows it): the browser
+    // would keep the previous, stale caret instead. One step back lands inside
+    // the last run — the document-end caret that keeps typing appended.
+    if (want > 0 && applyCaret(host, index, view, this.offsets[index], want - 1)) {
+      this.placedByUs = true
+    }
   }
 
   /**
@@ -402,12 +440,28 @@ export class EditorKernel {
       const insertStart = clamped - inserted
       if (insertStart >= 0) {
         const lineStart = lineOfOffset(this.doc, insertStart)
-        const kind = this.lineStates[lineStart - 1]?.kind
-        if (kind === 'blank' || kind === undefined) {
-          const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
+        const placeholder = this.pendingEnterLine
+        const nearEnter = placeholder >= 0 && insertStart >= placeholder - 1 && insertStart <= placeholder
+        if (nearEnter && inserted === 1) {
+          // Enter's placeholder blank renders no line box, so the keystroke
+          // that was meant for it landed on the nearest rendered text (the
+          // block above's end). A single inserted character right beside the
+          // placeholder is re-homed into it, then fenced into a new
+          // paragraph (`paragraph-spacing/01` 十一审).
+          const moved = `${this.doc.slice(0, placeholder)}${next[insertStart]}${this.doc.slice(placeholder)}`
+          const paragraphized = paragraphizeTypedBlankLine(this.doc, moved, placeholder + 1)
           if (paragraphized !== null) {
             next = paragraphized.doc
             caretNext = paragraphized.caret
+          }
+        } else {
+          const kind = this.lineStates[lineStart - 1]?.kind
+          if (kind === 'blank' || kind === undefined) {
+            const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
+            if (paragraphized !== null) {
+              next = paragraphized.doc
+              caretNext = paragraphized.caret
+            }
           }
         }
       }
@@ -422,6 +476,10 @@ export class EditorKernel {
     if (want !== null) this.placeCaret(want)
     this.reportLine()
     this.hooks.onChange(next)
+    // The Enter placeholder is single-shot, and it must SURVIVE this commit's
+    // own `placeCaret` (the Enter that just carried it consults it again), so
+    // it is consumed here at the very end.
+    this.pendingEnterLine = -1
   }
 
   private reportLine(): void {
@@ -1021,10 +1079,18 @@ export class EditorKernel {
               const grown = enterEndParagraph(this.doc, ground)
               if (grown !== null) {
                 this.pushUndo({ value: this.doc, caret: this.caret })
-                this.commit(
-                  grown.source,
-                  this.offsets[ground] + myBlock.raw.length + grown.caretDelta,
-                )
+                const nextCaret =
+                  this.offsets[ground] + myBlock.raw.length + grown.caretDelta
+                this.commit(grown.source, nextCaret)
+                // The fresh blank is a NEW paragraph placeholder: the next
+                // keystroke is re-homed into it (十一审) — unless it is the
+                // document's last rendered block (its blank still renders).
+                if (ground < this.blocks.length - 1) {
+                  this.pendingEnterLine = nextCaret
+                  // Re-anchor with the mark visible: WITHOUT it the commit's
+                  // own placeCaret walked the caret to the paragraph end.
+                  this.placeCaret(nextCaret)
+                }
                 return
               }
             }
@@ -1036,7 +1102,22 @@ export class EditorKernel {
         // terminator with the insert, so the fresh line starts one past it.
         // (Non-text lines — headings, prefixed lines, fences — keep the single
         // newline fallback; their Enter semantics are owned elsewhere.)
-        this.insertNewlines(at, 1, lineEnd === this.doc.length ? at + 1 : at)
+        const caretOn = lineEnd === this.doc.length ? at + 1 : at
+        this.insertNewlines(at, 1, caretOn)
+        // Same placeholder mark as the block-tree path: when the fresh line is
+        // an in-between blank (no line box), the next keystroke is re-homed
+        // into it as the new paragraph, and the next Backspace joins (十一审).
+        const freshIndex = this.blockAt(caretOn)
+        const freshBlock = this.blocks[freshIndex]
+        if (
+          freshBlock !== undefined &&
+          freshBlock.raw === '' &&
+          freshIndex < this.blocks.length - 1 &&
+          this.lineStates[freshBlock.startLine]?.kind === 'blank'
+        ) {
+          this.pendingEnterLine = caretOn
+          this.placeCaret(caretOn)
+        }
         return
       }
       // Line START: an empty line opens above (unchanged).
@@ -1121,6 +1202,20 @@ export class EditorKernel {
     //    keystroke-by-keystroke in `.scratch/backspace-unlist/issues/01`: the
     //    fourth press deleted the previous item's text.
     if (event.key === 'Backspace' && live !== null) {
+      // The Enter placeholder: the caret sits at the paragraph end (the blank
+      // renders no line box, `paragraph-spacing/01` 十一审), and the FIRST
+      // Backspace means "undo the paragraph break" — delete the placeholder
+      // blank line and join, the same single keystroke as on a rendered blank.
+      if (
+        this.pendingEnterLine >= 0 &&
+        (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)
+      ) {
+        event.preventDefault()
+        this.pushUndo({ value: this.doc, caret: this.caret })
+        const at = this.pendingEnterLine
+        this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+        return
+      }
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
         // A TABLE's structure is not the caret's to delete. Backspace inside a

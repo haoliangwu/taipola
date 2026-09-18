@@ -61,12 +61,10 @@ describe('标题（block 级标记）', () => {
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    // 行尾 Enter 是普通断行（`enter-backspace-smoke/10`）：只插一个换行，
-    // 与 Shift+Enter 同款。标题 14 字 + 3 个换行（原段尾 1 个 + Enter 插入 1 个
-    // + 原分隔换行 1 个）。
+    // 行尾 Enter = 硬换行（块级）：标题下开新空块。标题 14 字，回车后光标
+    // 吸附在标题行尾（新空行是中间空白，不渲染行盒，十一审）。
     expect(doc).toMatch(/^# 欢迎使用 taipola\n\n\n/)
-    // 光标落在新行行首（插入点 at=15）。
-    expect(caretFromDom()).toBe(15)
+    expect(caretFromDom()).toBe(14)
     await assertDomMatchesSource(r)
   })
 
@@ -76,8 +74,8 @@ describe('标题（block 级标记）', () => {
     await pressEnter(p)
     await flush()
     expect(p.getDoc()).toBe('一段文字\n\n\n第二段\n')
-    // 同上：段落 4 字，行尾偏移 4，Enter 只插一个换行，新行（空行）行首 = 偏移 5。
-    expect(caretFromDom()).toBe(5)
+    // 段落 4 字：Enter 开的新空行是中间空白（不渲染），光标吸附在段尾（偏移 4）。
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(p)
   })
 
@@ -328,7 +326,7 @@ describe('跨块编辑（回归：DOM 与模型必须同步）', () => {
     await flush()
     // 浏览器删除跨块选区后保留段落边界（标题行与正文之间仍有一行换行）；
     // 关键断言是模型与 DOM 完全同步，不残留也不丢字。
-    expect(r.getDoc()).toBe('# 头\n正文甲\n正文乙\n')
+    expect(r.getDoc()).toBe('# 头\n\n正文甲\n正文乙\n')
     await assertDomMatchesSource(r)
   })
 
@@ -471,17 +469,20 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     // 行尾 Enter 是普通断行（`enter-backspace-smoke/10`）：每次只开一个新行。
     expect(r.getDoc()).toBe('第一段文字\n\n\n第二段\n')
-    expect(caretFromDom()).toBe(6)
+    // 中间空白不渲染行盒，光标吸附在段尾（十一审）。
+    expect(caretFromDom()).toBe(5)
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
-    expect(caretFromDom()).toBe(7)
+    // 第二个新空行同样是中间空白：光标仍吸附在段尾（第二个 Enter 的占位
+    // 标记会把下一次键入归位成新段落）。
+    expect(caretFromDom()).toBe(5)
     // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
     await r.user.keyboard('X')
     await flush()
-    // 每次回车都在光标所在行"下方"开新行，光标跟着新行走：X 独占一行，
-    // 上下各留空行。关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
-    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n第二段\n')
+    // X 被归位成新段落：占位空行 + 原有空行在 X 两侧（补边界只补缺失的一侧，
+    // 已有的空行保留）。关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
+    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n\n第二段\n')
     await assertDomMatchesSource(r)
   })
 
@@ -620,9 +621,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
     await flush()
-    await pressEnter(r)
-    await flush()
-    // 在行尾新开的那一行上开始合成：浏览器把拼音作为裸文本放进行盒。
+    // 光标在「甲」行尾：浏览器把拼音作为裸文本放进行盒（空行不再渲染行盒，
+    // 合成点直接落在段内文本之后，`paragraph-spacing/01` 十一审）。
     const doc = r.container
     const fresh = (() => {
       const sel = window.getSelection()!
@@ -641,22 +641,24 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
+    expect(r.getDoc()).toBe('甲ABC\n\n乙\n')
 
     // ASCI 提交：合成文本原样落定（内容不变，但 DOM 形态要恢复正常）。
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC' }))
     doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
-    // 提交后的光标在 ABC 末尾（`甲\nABC` 的尽头 = 偏移 5）。
-    expect(caretFromDom()).toBe('甲'.length + 1 + 3)
+    expect(r.getDoc()).toBe('甲ABC\n\n乙\n')
+    // 提交后的光标在 ABC 末尾（`甲ABC` 的尽头 = 偏移 4）。
+    // eslint-disable-next-line no-console
+    console.log('SEL-DEBUG', (() => { const sel = window.getSelection()!; const r = sel.rangeCount ? sel.getRangeAt(0) : null; return r ? r.startContainer.nodeType + '@' + r.startOffset + ' paren=' + (r.startContainer.parentElement?.getAttribute('data-src') ?? '?') : 'none' })())
+    expect(caretFromDom()).toBe('甲'.length + 3)
 
     // 接着打字：字符必须落在 ABC 之后，光标跟走——坏掉时落点和光标都会错位。
     await r.user.keyboard('D')
     await flush()
-    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
-    expect(caretFromDom()).toBe('甲'.length + 1 + 4)
+    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 4)
     await assertDomMatchesSource(r)
   })
 
@@ -670,8 +672,6 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
-    await flush()
-    await pressEnter(r)
     await flush()
     const doc = r.container
     const fresh = (() => {
@@ -694,14 +694,14 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     // 提交只以 compositionend 到达——没有后续 input。
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\nABC\n\n乙\n')
-    // 光标当场停在 ABC 末尾（`甲\nABC` = 偏移 5）。
-    expect(caretFromDom()).toBe('甲'.length + 1 + 3)
+    expect(r.getDoc()).toBe('甲ABC\n\n乙\n')
+    // 光标当场停在 ABC 末尾（`甲ABC` = 偏移 4）。
+    expect(caretFromDom()).toBe('甲'.length + 3)
 
     await r.user.keyboard('D')
     await flush()
-    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
-    expect(caretFromDom()).toBe('甲'.length + 1 + 4)
+    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 4)
     await assertDomMatchesSource(r)
   })
 
@@ -715,8 +715,6 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
-    await flush()
-    await pressEnter(r)
     await flush()
     const doc = r.container
     const fresh = (() => {
@@ -745,19 +743,19 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABCD' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
-    // 第二个合成输入之后模型光标仍指向合成文本末尾（偏移 6）。这里不能直接断言
+    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
+    // 第二个合成输入之后模型光标仍指向合成文本末尾。这里不能直接断言
     // `caretFromDom()`：合成中 DOM 保持临时形态（裸文本节点，不渲染），助手的
     // 行盒读法只会看到行盒起始；模型值由提交后的落点和继续打字验证。
-    expect(r.getDoc()).toBe('甲\nABCD\n\n乙\n')
+    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
 
     // 提交后继续打字：字符跟光标走。
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABCD' }))
     await flush()
     await r.user.keyboard('E')
     await flush()
-    expect(r.getDoc()).toBe('甲\nABCDE\n\n乙\n')
-    expect(caretFromDom()).toBe('甲'.length + 1 + 5)
+    expect(r.getDoc()).toBe('甲ABCDE\n\n乙\n')
+    expect(caretFromDom()).toBe('甲'.length + 5)
     await assertDomMatchesSource(r)
   })
 
@@ -772,11 +770,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
    * 两条都不允许光标在提交后飞走。
    */
   it('IME 合成中按 Space（并入合成）：提交后光标仍跟合成文本', async () => {
-    const r = renderEditor('甲\n\n乙\n')
+    const r = renderEditor('甲\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
-    await flush()
-    await pressEnter(r)
     await flush()
     const doc = r.container
     const sel = window.getSelection()!
@@ -805,22 +801,20 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     place(t, 6)
     fire('insertCompositionText', 'ABC D ')
     await flush()
-    expect(r.getDoc()).toBe('甲\nABC D \n\n乙\n')
+    expect(r.getDoc()).toBe('甲ABC D \n')
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC D ' }))
     await flush()
     await r.user.keyboard('E')
     await flush()
-    expect(r.getDoc()).toBe('甲\nABC D E\n\n乙\n')
-    expect(caretFromDom()).toBe('甲'.length + 1 + 7)
+    expect(r.getDoc()).toBe('甲ABC D E\n')
+    expect(caretFromDom()).toBe('甲'.length + 7)
     await assertDomMatchesSource(r)
   })
 
   it('IME 输入法把合成整体替换成新文本（deleteCompositionText）：光标不飞', async () => {
-    const r = renderEditor('甲\n\n乙\n')
+    const r = renderEditor('甲\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
-    await flush()
-    await pressEnter(r)
     await flush()
     const doc = r.container
     const sel = window.getSelection()!
@@ -855,13 +849,13 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     place(t, 1)
     fire('insertCompositionText', 'D')
     await flush()
-    expect(r.getDoc()).toBe('甲\nD\n\n乙\n')
+    expect(r.getDoc()).toBe('甲D\n')
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'D' }))
     await flush()
     await r.user.keyboard('E')
     await flush()
-    expect(r.getDoc()).toBe('甲\nDE\n\n乙\n')
-    expect(caretFromDom()).toBe('甲'.length + 1 + 2)
+    expect(r.getDoc()).toBe('甲DE\n')
+    expect(caretFromDom()).toBe('甲'.length + 2)
     await assertDomMatchesSource(r)
   })
 
@@ -1103,10 +1097,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(split)
     await flush()
     expect(split.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
-    // 一次回车配一次退格，原样还原：光标回到回车前的偏移（7 → 8 → 7）。
-    // 空行上的退格规则（`09`）不变——删掉它前面那个换行，光标留在剩下的
-    // 空行上（这里是"剩下的"为零，也就是下一个标题的行首）。
-    expect(caretFromDom()).toBe(7)
+    // 一次回车配一次退格，原样还原：占位空行被退格删掉（十一审的 Enter 标记），
+    // 光标落在合并点 = 下一个标题的行首（原偏移 8）。
+    expect(caretFromDom()).toBe(8)
 
     // 路径 C2：光标在下一行的行首（源码里的行首，`## ` 之前）。先把光标放进这一行，
     // 让 `## ` 显现成可见源码，再移到行首——这就是真的按两次左箭头会到的地方。
@@ -1181,7 +1174,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('\n- 乙\n')
-    expect(caretFromDom()).toBe(0)
+    // 开头空行不渲染行盒，光标吸附在列表行首（十一审）。
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(r)
   })
 
@@ -1193,7 +1187,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('> 引用\n\n')
-    expect(caretFromDom()).toBe(5)
+    // 退出引用后光标在引用行尾（尾空行无行盒，吸附，十一审）。
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 
@@ -1256,46 +1251,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
    * 于是**第二次** Backspace 删掉的是正文的最后一个字，而剩下的空行一个不少——
    * 空行越多越明显。删掉的就是光标前面那个换行，光标留在剩下的空行上。
    */
-  it('光标在空行上：一次只删一个换行，光标留在空行上', async () => {
-    const r = renderEditor('甲\n\n\n乙\n')
-    await flush()
-    // 两个空行是同一个 blank block 的两条视觉行，这里点第 2 条。
-    await clickAtLine(r, 1, 1)
-    await flush()
-    expect(caretFromDom()).toBe(3)
 
-    await pressBackspace(r)
-    await flush()
-    expect(r.getDoc()).toBe('甲\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
-    await assertDomMatchesSource(r)
-  })
-
-  it('空行上连按：换行逐个消失、光标跟着走，正文一个字不少', async () => {
-    const r = renderEditor('甲\n\n\n\n\n乙\n') // 4 个空行
-    await flush()
-    await clickAtLine(r, 1, 2)
-    await flush()
-    expect(caretFromDom()).toBe(4)
-
-    await pressBackspace(r)
-    await flush()
-    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n\n\n乙\n', 3])
-    await pressBackspace(r)
-    await flush()
-    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n\n乙\n', 2])
-    await pressBackspace(r)
-    await flush()
-    // 三次删掉三个换行，`甲` 还在——改动前它在这第三次之前就被吃掉了。
-    // 这时光标已经贴到 `甲` 的行末（偏移 1），是空行的边界而不是空行本身。
-    expect([r.getDoc(), caretFromDom()]).toEqual(['甲\n\n乙\n', 1])
-    await assertDomMatchesSource(r)
-
-    // 边界：再按一次就是普通的删字（这里已经没有换行可删了），一个字都不多删。
-    await pressBackspace(r)
-    await flush()
-    expect([r.getDoc(), caretFromDom()]).toEqual(['\n\n乙\n', 0])
-  })
 
   /**
    * 只有空格的行同样是空行（`isBlankLine`，与解析器和视图的口径一致）。
@@ -1525,9 +1481,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     // 文档对了：`x` 删掉，留下那条空行。光标也必须留在它的行首（偏移 2），
     // 而不是跟着浏览器跳到别处——用户实测：`甲\nx\n乙` 退格后变 `甲\n\n乙<cur>`，
-    // 理想是 `甲\n<cur>\n乙`。
+    // 理想是 `甲\n<cur>\n乙`——空行不再渲染行盒，删掉字符后的光标吸附在上一段尾。
     expect(r.getDoc()).toBe('甲\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(r)
   })
 
@@ -1549,8 +1505,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
 
     expect(r.getDoc()).toBe('甲\n\n乙\n')
-    // 纯删除（差分里没有插入文本）：光标 = 被删文本的起点，不信 DOM 的落点。
-    expect(caretFromDom()).toBe(2)
+    // 纯删除（差分里没有插入文本）：模型光标 = 被删文本的起点（偏移 2，空行）。
+    // 空行不渲染行盒，DOM 视觉锚点吸附在上一段尾（偏移 1，十一审）。
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(r)
   })
 })
@@ -1677,25 +1634,6 @@ describe('空行上打字只插一个字符', () => {
     return { texts: content.map((row) => row.text), tops: new Set(content.map((row) => row.top)) }
   }
 
-  it('两段之间的空行：写进去的字符自成一段（`paragraph-spacing/01` A 方案）', async () => {
-    const r = renderEditor('甲\n\n乙\n')
-    await flush()
-    await clickAtLine(r, 1, 0)
-    await flush()
-    expect(caretFromDom()).toBe(2)
-
-    await r.user.keyboard('x')
-    await flush()
-    // 空行打字 = 新建一个块（`paragraph-spacing/01` 十审，Typora 语义）：
-    // 字符补上两侧空行边界成为独立段落——`甲\n\n乙` 打 x → `甲\n\nx\n\n乙`，
-    // 甲、x、乙三个段落，段落间距全部保留。
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
-    expect(caretFromDom()).toBe(4)
-    // 屏幕上三行各自成行：并排才是"换行符消失"。
-    expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
-    expect(contentRows(r).tops.size).toBe(3)
-    await assertDomMatchesSource(r)
-  })
 
   it('回车之后打字：源码 `甲\n\nx`——Enter 开出的空行是新段占位', async () => {
     const r = renderEditor('甲')
@@ -1727,15 +1665,16 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     // Enter 是硬换行：`甲\n乙` 拆成 `甲` / 空行 / `乙`（块级拆块）。
     expect(r.getDoc()).toBe('甲\n\n乙\n')
-    // 光标停在新段占位空行上（`甲\n\n` 之后、`乙` 之前）。
-    expect(caretFromDom()).toBe(2)
+    // 光标落在右段（乙）段首：中间空白块不渲染行盒，caret 只能停在有行盒的位置
+    // （`paragraph-spacing/01` 十一审）。
+    expect(caretFromDom()).toBe(3)
 
     await r.user.keyboard('x')
     await flush()
-    // 打字 = 新段落内容：甲、x、乙三个独立段，间距都在。
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
-    expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
-    expect(contentRows(r).tops.size).toBe(3)
+    // 打字续进右段（光标落在乙首——中间空白块无行盒，`paragraph-spacing/01` 十一审）。
+    expect(r.getDoc()).toBe('甲\n\nx乙\n')
+    expect(contentRows(r).texts).toEqual(['甲', 'x乙'])
+    expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
@@ -1766,9 +1705,11 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     await pressEnter(r)
     await flush()
-    // 行尾 Enter 是普通断行：原来 1 个空行，回车后 2 个空行、光标在第一个新空行。
+    // 行尾 Enter = 硬换行：块后开新空块（源里多一个空行）；中间空白块不渲染，
+    // 光标吸附在段尾（`paragraph-spacing/01` 十一审），下一次键入经 Enter 标记
+    // 归位成新段落。
     expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
+    expect(caretFromDom()).toBe(1)
 
     await r.user.keyboard('x')
     await flush()
@@ -1780,20 +1721,6 @@ describe('空行上打字只插一个字符', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('文档开头的空行：字符落在那一行并自成一段', async () => {
-    const r = renderEditor('\n甲\n')
-    await flush()
-    await clickAtLine(r, 0, 0)
-    await flush()
-    expect(caretFromDom()).toBe(0)
-
-    await r.user.keyboard('x')
-    await flush()
-    expect(r.getDoc()).toBe('x\n\n甲\n')
-    expect(contentRows(r).texts).toEqual(['x', '甲'])
-    expect(contentRows(r).tops.size).toBe(2)
-    await assertDomMatchesSource(r)
-  })
 
   it('围栏里的空行是代码：字符留在原处，围栏不受影响', async () => {
     const r = renderEditor('```\na\n\nb\n```\n')
@@ -1807,30 +1734,34 @@ describe('空行上打字只插一个字符', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('一次撤销只收走这一个字符', async () => {
-    const r = renderEditor('甲\n\n乙\n')
+  it('一次撤销只收走这一个字符（Enter 占位上的键入）', async () => {
+    const r = renderEditor('甲')
     await flush()
-    await clickAtLine(r, 1, 0)
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
     await flush()
     await r.user.keyboard('x')
     await flush()
-    // 空行打字 = 新建一个块：一次插入即一步撤销。
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    expect(r.getDoc()).toBe('甲\n\nx')
 
     await pressUndo(r)
     await flush()
-    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    // 一次键入 = 一步撤销：回到 Enter 后、打字前的状态。
+    expect(r.getDoc()).toBe('甲\n')
     await assertDomMatchesSource(r)
   })
 
   it('IME：合成期间 DOM 不动，提交后字符落在光标那一行', async () => {
     // 合成期间的 DOM 一个节点都不能换（既有不变量），所以字符落点由提交那一次
     // `input` 决定——模型与 DOM 都是"原地插一个字符"，没有别的结构改动。
-    const r = renderEditor('甲\n\n乙\n')
+    const r = renderEditor('甲乙\n\n丙\n')
     await flush()
-    await clickAtLine(r, 1, 0)
+    await clickInRun(r, 0, 0, 0, 'end')
     await flush()
-    const line = r.container.querySelector('[data-block="1"] [data-vline="0"]') as HTMLElement
+    // 光标在「甲乙」行尾：合成把拼音作为裸文本追加进行盒（空行不渲染行盒，
+    // 合成点直接落在段内文本之后，`paragraph-spacing/01` 十一审）。
+    const line = r.container.querySelector('[data-block="0"] [data-vline="0"]') as HTMLElement
 
     line.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     const composing = document.createTextNode('x')
@@ -1840,16 +1771,18 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     expect(line.isConnected).toBe(true)
     expect(line.lastChild).toBe(composing)
-    expect(r.getDoc()).toBe('甲\nx\n乙\n')
+    expect(r.getDoc()).toBe('甲乙x\n\n丙\n')
 
     composing.textContent = '写'
     line.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
     line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     line.dispatchEvent(new InputEvent('input', { bubbles: true, data: '写' }))
     await flush()
-    expect(r.getDoc()).toBe('甲\n写\n乙\n')
-    expect(contentRows(r).texts).toEqual(['甲', '写', '乙'])
-    expect(contentRows(r).tops.size).toBe(3)
+    expect(r.getDoc()).toBe('甲乙写\n\n丙\n')
+    const texts = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
+      .filter((el) => (el.textContent ?? '') !== '')
+      .map((el) => el.textContent)
+    expect(texts).toEqual(['甲乙写', '丙'])
     await assertDomMatchesSource(r)
   })
 })
@@ -1949,11 +1882,12 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
+    // Enter 开的新空块是中间空白（不渲染行盒），光标吸附在段尾（十一审）。
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(r)
 
-    // 同一位置走 Shift+Enter：结果与 Enter 完全相同——行尾两键都是普通断行
-    // （`enter-backspace-smoke/10`：行尾 Enter 不再比 Shift+Enter 多留空行）。
+    // 同一位置走 Shift+Enter：源同样多一个换行（结果相同），但那是块内的
+    // 软换行插值而非新块占位；光标同样吸附在段尾。
     const s = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(s, 0, 0, 0, 'end')
@@ -1961,7 +1895,7 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressShiftEnter(s)
     await flush()
     expect(s.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(2)
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(s)
   })
 
@@ -2101,9 +2035,9 @@ describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）',
     })
     r.container.dispatchEvent(event)
     await flush()
-    // 文档末尾 = 最后一个块（第三行）末尾之后的空续行：内核的 domToLocal 把它
-    // 读作 doc.length（= 14），在那里打字就是追加在文末。
-    expect(caretFromDom()).toBe(DOC.length)
+    // 文档末尾：尾空行不渲染行盒，视觉锚点 = 最后一行文本末尾（= doc.length - 1，
+    // 十一审）。打字仍在文末追加（模型 caret 是 doc.length）。
+    expect(caretFromDom()).toBe(DOC.length - 1)
     await assertDomMatchesSource(r)
   })
 
@@ -2116,7 +2050,7 @@ describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）',
     // 它就是这个旅程的第一段），Cmd+ArrowUp 回文首。
     await r.user.keyboard('{Meta>}{ArrowDown}{/Meta}')
     await flush()
-    expect(caretFromDom()).toBe(DOC.length)
+    expect(caretFromDom()).toBe(DOC.length - 1)
     await assertDomMatchesSource(r)
     await r.user.keyboard('{Meta>}{ArrowUp}{/Meta}')
     await flush()
@@ -2130,7 +2064,7 @@ describe('Cmd+Down / Ctrl+End 跳到文档末尾（enter-backspace-smoke/07）',
     })
     r.container.dispatchEvent(end)
     await flush()
-    expect(caretFromDom()).toBe(DOC.length)
+    expect(caretFromDom()).toBe(DOC.length - 1)
     const home = new KeyboardEvent('keydown', {
       key: 'Home',
       ctrlKey: true,
