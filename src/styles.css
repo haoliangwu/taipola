@@ -804,10 +804,10 @@ body {
 }
 
 .tree-caret {
-  width: 10px;
+  width: 14px;
   flex: none;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .tree-name {
