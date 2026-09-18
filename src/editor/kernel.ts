@@ -448,7 +448,23 @@ export class EditorKernel {
           // block above's end). A single inserted character right beside the
           // placeholder is re-homed into it, then fenced into a new
           // paragraph (`paragraph-spacing/01` 十一审).
-          const moved = `${this.doc.slice(0, placeholder)}${next[insertStart]}${this.doc.slice(placeholder)}`
+          //
+          // The character is taken from the DIFF rather than from the caret:
+          // right after a composition commits, some input methods leave the
+          // DOM caret one position short — on the placeholder line box's
+          // START instead of after the committed text — so the caret-derived
+          // insert start pointed at the newline in front of the placeholder
+          // and re-homing moved THAT instead of the character; paragraphization
+          // then declined the now-blank caret line and the keystroke silently
+          // became a soft break inside the paragraph (measured: typing right
+          // after a line-end Enter produced `甲\n啊` in ONE block on a real
+          // input method, while the same keys typed via automation split
+          // correctly). The diff's insert start is the shared prefix — the
+          // browser's edit, not the browser's caret — so the character lands
+          // on the placeholder either way.
+          const diffStart = sharedPrefix(this.doc, next)
+          const placed = next.slice(diffStart, diffStart + inserted)
+          const moved = `${this.doc.slice(0, placeholder)}${placed}${this.doc.slice(placeholder)}`
           const paragraphized = paragraphizeTypedBlankLine(this.doc, moved, placeholder + 1)
           if (paragraphized !== null) {
             next = paragraphized.doc

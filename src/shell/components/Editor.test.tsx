@@ -2017,6 +2017,38 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('行尾 Enter 后立即打字、光标滞留在占位行起点：仍是新段落（不并成软换行）', async () => {
+    // 某些输入法在组合输入提交的瞬间，DOM 光标还停在占位行盒的起点（<br> 前）
+    // 而不是已提交文本之后。旧实现从光标反推插入点，把占位前的换行当成字符
+    // 搬进占位，段落化又拒绝"光标行已空白"的补丁，结果整个键被原样吸收成
+    // 块内软换行（`甲\nx` 一个块两行）——用户实测：句尾 Enter 后打任意字符
+    // 变成了一个块。字符现在取自 diff 的插入点（sharedPrefix），与光标读法
+    // 无关，照样段落化成新块。
+    const r = renderEditor('甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n')
+    const blank = r.container.querySelector('.vl-blank')
+    if (!blank) throw new Error('没有占位空行')
+    placeCaretAt(blank, 0) // 光标停在 <br> 前 = 占位行盒的起点
+    await flush()
+    const tn = document.createTextNode('x')
+    blank.insertBefore(tn, blank.firstChild)
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: 'x', inputType: 'insertText', bubbles: true, cancelable: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: 'x', inputType: 'insertText', bubbles: true, composed: true }),
+    )
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\nx\n')
+    expect(caretFromDom()).toBe(4)
+    await assertDomMatchesSource(r)
+  })
+
   it('表格行上 Enter 是 no-op，行语法保持（不再插裸换行）', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
