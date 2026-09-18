@@ -454,6 +454,21 @@ export class EditorKernel {
       const insertStart = clamped - inserted
       if (insertStart >= 0) {
         const lineStart = lineOfOffset(this.doc, insertStart)
+        // The character the browser actually inserted, taken from the DIFF
+        // rather than from the caret: right after a composition commits some
+        // input methods leave the DOM caret one position short — on the
+        // placeholder line box's START instead of after the committed text —
+        // so a caret-derived insert start pointed at the newline in front of
+        // the placeholder and re-homing moved THAT instead of the character;
+        // paragraphization then declined the now-blank caret line and the
+        // keystroke silently became a soft break inside the paragraph
+        // (measured: typing right after a line-end Enter produced `甲\n啊` in
+        // ONE block on a real input method, while automation split
+        // correctly). The diff's insert start is the shared prefix — the
+        // browser's edit, not the browser's caret — so the character lands on
+        // the placeholder either way.
+        const diffStart = sharedPrefix(this.doc, next)
+        const placed = next.slice(diffStart, diffStart + inserted)
         const placeholder = this.pendingEnterLine
         const nearEnter = placeholder >= 0 && insertStart >= placeholder - 1 && insertStart <= placeholder
         // Shift+Enter's own placeholder: a line-end soft break whose fresh
@@ -469,22 +484,6 @@ export class EditorKernel {
           // block above's end). A single inserted character right beside the
           // placeholder is re-homed into it, then fenced into a new
           // paragraph (`paragraph-spacing/01` 十一审).
-          //
-          // The character is taken from the DIFF rather than from the caret:
-          // right after a composition commits, some input methods leave the
-          // DOM caret one position short — on the placeholder line box's
-          // START instead of after the committed text — so the caret-derived
-          // insert start pointed at the newline in front of the placeholder
-          // and re-homing moved THAT instead of the character; paragraphization
-          // then declined the now-blank caret line and the keystroke silently
-          // became a soft break inside the paragraph (measured: typing right
-          // after a line-end Enter produced `甲\n啊` in ONE block on a real
-          // input method, while the same keys typed via automation split
-          // correctly). The diff's insert start is the shared prefix — the
-          // browser's edit, not the browser's caret — so the character lands
-          // on the placeholder either way.
-          const diffStart = sharedPrefix(this.doc, next)
-          const placed = next.slice(diffStart, diffStart + inserted)
           const moved = `${this.doc.slice(0, placeholder)}${placed}${this.doc.slice(placeholder)}`
           const paragraphized = paragraphizeTypedBlankLine(this.doc, moved, placeholder + 1)
           if (paragraphized !== null) {
@@ -492,11 +491,9 @@ export class EditorKernel {
             caretNext = paragraphized.caret
           }
         } else if (nearSoft && inserted === 1) {
-          // Same re-home as above, but for the soft placeholder: the character
-          // is placed on Shift+Enter's fresh line and the source keeps the
-          // single newline — the break stays SOFT (no paragraphization).
-          const diffStart = sharedPrefix(this.doc, next)
-          const placed = next.slice(diffStart, diffStart + inserted)
+          // The same re-home for the soft placeholder: the character is placed
+          // on Shift+Enter's fresh line and the source keeps the single
+          // newline — the break stays SOFT (no paragraphization).
           next = `${this.doc.slice(0, softLine)}${placed}${this.doc.slice(softLine)}`
           caretNext = softLine + placed.length
         } else {
@@ -528,12 +525,26 @@ export class EditorKernel {
     this.pendingSoftLine = -1
   }
 
-  private reportLine(): void {
-    const line = lineOfOffset(this.doc, this.caret)
-    if (line === this.reportedLine) return
-    this.reportedLine = line
-    this.hooks.onCaretLineChange?.(line)
+  /**
+   * Marks `at` as the Enter placeholder — the break the LAST Enter made —
+   * and re-anchors the caret with the mark visible: WITHOUT the re-anchor,
+   * the commit's own `placeCaret` walked the caret back to the paragraph
+   * end (an in-between placeholder renders no line box). Single-shot:
+   * every commit clears the mark, and Shift+Enter's break sets its own
+   * sibling mark instead (the two are mutually exclusive).
+   */
+  private markEnterPlaceholder(at: number): void {
+    this.pendingEnterLine = at
+    this.pendingSoftLine = -1
+    this.placeCaret(at)
   }
+
+private reportLine(): void {
+  const line = lineOfOffset(this.doc, this.caret)
+  if (line === this.reportedLine) return
+  this.reportedLine = line
+  this.hooks.onCaretLineChange?.(line)
+}
 
   /** The block containing a document offset (`doc.length` clamps to the last). */
   private blockAt(offset: number): number {
@@ -946,19 +957,17 @@ export class EditorKernel {
     // other composition input keeps the provisional absorb.
     const absorbedStart = sharedPrefix(this.doc, next)
     const absorbedDelta = next.length - this.doc.length
-    const absorbedLine = lineOfOffset(this.doc, absorbedStart)
-    const absorbedLineKind = this.lineStates[absorbedLine - 1]?.kind
-    const nearPlaceholder =
-      absorbedDelta > 0 &&
-      (absorbedLineKind === 'blank' ||
-        absorbedLineKind === undefined ||
-        (this.pendingEnterLine >= 0 &&
-          absorbedStart >= this.pendingEnterLine - 1 &&
-          absorbedStart <= this.pendingEnterLine) ||
-        (this.pendingSoftLine >= 0 &&
-          absorbedStart >= this.pendingSoftLine - 1 &&
-          absorbedStart <= this.pendingSoftLine))
-    if (nearPlaceholder) return
+    const absorbedLineKind = this.lineStates[lineOfOffset(this.doc, absorbedStart) - 1]?.kind
+    const onBlankLine = absorbedLineKind === 'blank' || absorbedLineKind === undefined
+    const nearEnter =
+      this.pendingEnterLine >= 0 &&
+      absorbedStart >= this.pendingEnterLine - 1 &&
+      absorbedStart <= this.pendingEnterLine
+    const nearSoft =
+      this.pendingSoftLine >= 0 &&
+      absorbedStart >= this.pendingSoftLine - 1 &&
+      absorbedStart <= this.pendingSoftLine
+    if (absorbedDelta > 0 && (onBlankLine || nearEnter || nearSoft)) return
 
     this.doc = next
     this.caret = this.composeStart + this.composeLength
@@ -1039,9 +1048,9 @@ export class EditorKernel {
       if (kind === 'table' || kind === 'table-delim') return
       this.pushUndo({ value: this.doc, caret: this.caret })
       if (event.shiftKey) {
-        // Shift+Enter is the SOFT break: one plain newline, wherever the caret
-        // is. Typora tells the two keys apart by the gap they leave — a soft
-        // break stays inside the paragraph, so its line gap is the small one
+        // Shift+Enter is the SOFT break: one newline, wherever the caret is.
+        // Typora tells the two keys apart by the gap they leave — a soft break
+        // stays inside the paragraph, so its line gap is the small one
         // (`.scratch/enter-backspace-smoke/issues/02`).
         const at = live
         // At a LINE END the fresh line after it is a line the paragraph OWNS
@@ -1059,22 +1068,14 @@ export class EditorKernel {
         // A bare newline would push the next line out of the quote, so the
         // line's own `> ` (nested `> > ` etc.) prefix is repeated, and the
         // soft placeholder rides on the marker's end.
-        const quoteParts = parseLine(currentLine)
-        if (kind === 'quote' && quoteParts.prefix !== '') {
-          const insert = `\n${quoteParts.prefix}`
-          this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), at + insert.length)
-          if (softCaretOnEnd) {
-            this.pendingEnterLine = -1
-            this.pendingSoftLine = at + insert.length
-            this.placeCaret(at + insert.length)
-          }
-          return
-        }
-        this.insertNewlines(at, 1, at + 1)
+        const prefix = parseLine(currentLine).prefix
+        const insert = kind === 'quote' && prefix !== '' ? `\n${prefix}` : '\n'
+        const fresh = at + insert.length
+        this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
           this.pendingEnterLine = -1
-          this.pendingSoftLine = at + 1
-          this.placeCaret(at + 1)
+          this.pendingSoftLine = fresh
+          this.placeCaret(fresh)
         }
         return
       }
@@ -1193,11 +1194,7 @@ export class EditorKernel {
                 // continuation. (`placeCaret` walks an in-between placeholder
                 // back to the paragraph end while keeping the trailing one
                 // visible, and the Backspace placeholder branch joins either.)
-                this.pendingEnterLine = nextCaret
-                this.pendingSoftLine = -1
-                // Re-anchor with the mark visible: WITHOUT it the commit's
-                // own placeCaret walked the caret to the paragraph end.
-                this.placeCaret(nextCaret)
+                this.markEnterPlaceholder(nextCaret)
                 return
               }
             }
@@ -1222,9 +1219,7 @@ export class EditorKernel {
           freshIndex < this.blocks.length - 1 &&
           this.lineStates[freshBlock.startLine]?.kind === 'blank'
         ) {
-          this.pendingEnterLine = caretOn
-          this.pendingSoftLine = -1
-          this.placeCaret(caretOn)
+          this.markEnterPlaceholder(caretOn)
         }
         return
       }
@@ -1260,9 +1255,7 @@ export class EditorKernel {
           // (`.scratch/enter-backspace-smoke/issues/12`, same family). Typing
           // is unaffected: `paragraphizeTypedBlankLine` declines a non-blank
           // insert line, so the character stays where the caret put it.
-          this.pendingEnterLine = edited.caret
-          this.pendingSoftLine = -1
-          this.placeCaret(edited.caret)
+          this.markEnterPlaceholder(edited.caret)
           return
         }
       }
@@ -1270,9 +1263,7 @@ export class EditorKernel {
       // String fallback for the same split (a mid-line Enter inside a
       // soft-broken paragraph or a heading): the placeholder is the content
       // block below, marked the same way.
-      this.pendingEnterLine = live + 2
-      this.pendingSoftLine = -1
-      this.placeCaret(live + 2)
+      this.markEnterPlaceholder(live + 2)
       return
     }
 
@@ -1326,29 +1317,27 @@ export class EditorKernel {
     //    keystroke-by-keystroke in `.scratch/backspace-unlist/issues/01`: the
     //    fourth press deleted the previous item's text.
     if (event.key === 'Backspace' && live !== null) {
-      // The Enter placeholder: the caret sits at the paragraph end (the blank
-      // renders no line box, `paragraph-spacing/01` 十一审), and the FIRST
-      // Backspace means "undo the paragraph break" — delete the placeholder
-      // blank line and join, the same single keystroke as on a rendered blank.
-      if (
-        (this.pendingEnterLine >= 0 &&
-          (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)) ||
-        (this.pendingSoftLine >= 0 &&
-          (live === this.pendingSoftLine || live === this.pendingSoftLine - 1))
-      ) {
+      // The Enter/soft placeholder under the caret means "undo the break you
+      // just made" — one Backspace joins, exactly like Backspace on a rendered
+      // blank line. The caret sits at the placeholder line or one position
+      // before it (the placeholder renders no line box, `paragraph-spacing/01`
+      // 十一审, so the visual anchor sits on the paragraph end).
+      const onEnter =
+        this.pendingEnterLine >= 0 &&
+        (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)
+      const onSoft =
+        this.pendingSoftLine >= 0 &&
+        (live === this.pendingSoftLine || live === this.pendingSoftLine - 1)
+      if (onEnter || onSoft) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        const at =
-          this.pendingEnterLine >= 0 ? this.pendingEnterLine : this.pendingSoftLine
-        const isSoftBreak = this.pendingEnterLine < 0
-        // A SOFT-break placeholder is a plain blank line the paragraph owns:
-        // one Backspace undoes the break, exactly like the Enter blank below.
+        const at = onEnter ? this.pendingEnterLine : this.pendingSoftLine
+        // A CONTENT placeholder — the right half a mid-line Enter split off —
+        // undoes the split: delete the two newlines it added (`甲\n\n乙` →
+        // `甲乙`), the caret lands on the join point. A soft placeholder is
+        // always a blank line, so it takes the cuts below.
         const placeholderBlock = this.blocks[this.blockAt(at)]
-        if (placeholderBlock?.raw !== '' && !isSoftBreak) {
-          // A CONTENT placeholder — the right half a mid-line Enter split off.
-          // One Backspace undoes the split: delete the two newlines it added
-          // (`甲\n\n乙` → `甲乙`), the caret lands on the join point, and a
-          // single keystroke pairs the Enter that made the split.
+        if (!onSoft && placeholderBlock?.raw !== '') {
           this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
         } else if (at >= this.doc.length) {
           // The placeholder sits at EOF (the document's trailing blank, or a
