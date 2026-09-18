@@ -839,14 +839,25 @@ body {
 /* The paragraph gap, held BY THE PARAGRAPHs: every non-blank block carries
    `margin-bottom: 8px`. The blank line between two blocks is then just one
    clean line box — a real caret target, `blank-line-typing/01` — and the gap
-   survives ANY edit: type into the blank line and the 8px stays (the block
-   above still owns it), instead of vanishing with the blank block the way it
-   did when it hung off `blank` (the reviewer's "空格打字会上移" was that
-   8px disappearing). The trade-off that made us hang it off `blank` once —
-   Enter at a paragraph's end drops the caret into the blank line, and a
-   margin on the paragraph above pushes that caret 8px further down than a
-   real "new line" — is real; it is the price of the gap being stable under
-   input, and the reviewer chose stability. (`.scratch/paragraph-spacing/issues/01`) */
+   belongs to the paragraph, so it does not vanish with the blank block the way
+   it did when it hung off `blank` (the reviewer's "空格打字会上移" was that
+   8px disappearing).
+   
+   What it does NOT survive, and cannot: typing a character INTO the blank line
+   between two paragraphs. `甲\n\n乙` + typing `x` on the blank line is
+   `甲\nx\n乙` — in Markdown single newlines are one paragraph, so the three
+   lines become ONE soft-broken paragraph and there is no boundary left for a
+   gap to hang on. Measured; the reviewer considered making the keystroke open
+   a paragraph of its own (`甲\n\nx\n\n乙`) and chose against it: that would add
+   two newlines to the source the user did not type, and it reverses the
+   behaviour pinned by `Editor.test.tsx` ("两段之间的空行：写进去的字符就落在
+   那一行（用户报的那条）" and "行尾回车再打字…同段"). To keep two paragraphs,
+   Enter at the end of one — do not type on the boundary.
+   
+   The other trade-off is real too: Enter at a paragraph's end drops the caret
+   into a blank line whose top now sits 8px below the paragraph, because the gap
+   is above it — the price of a gap that belongs to the paragraph at all.
+   (`.scratch/paragraph-spacing/issues/01`) */
 .blk:not([data-kind='blank']) {
   margin-bottom: 8px;
 }
