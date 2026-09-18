@@ -77,3 +77,53 @@ export function enterMidParagraph(
   if (result === null) return null
   return { source: serializeBlocks(result.tree), caret: live + result.addedChars }
 }
+
+/**
+ * Backspace at a paragraph's line start moves it up onto the paragraph above —
+ * ONE Blank block is consumed and the two paragraphs merge into one
+ * soft-broken paragraph.
+ *
+ * 块语义：`[A, blank, B] → [A\nB]`。一次 Backspace 就是删一个换行；空行块
+ * 恰好一行时被整体消费，A 与 B 以软换行相接。只对"空行恰好一行"的结构生效
+ * （多个空行、上方不是段落 → null，回退字符串路径 —— 那里一次同样只删一个
+ * 换行，几次才并完，行为一致）。
+ *
+ * 返回新树；caret 落在 merge 点（原空行块的起点），kernel 用自己的 offsets
+ * 取，这里不预知绝对偏移。
+ */
+export function joinParagraphWithAbove(tree: BlockTree, index: number): BlockTree | null {
+  const block = tree.blocks[index]
+  if (!block || block.kind !== 'paragraph' || block.raw.includes('\n')) return null
+  const blank = tree.blocks[index - 1]
+  if (!blank || blank.kind !== 'blank') return null
+  if (blank.endLine - blank.startLine !== 1) return null
+  const above = tree.blocks[index - 2]
+  if (!above || above.kind !== 'paragraph') return null
+
+  // A(1 行) + blank(1 行) + B(1 行) = 3 行 → 合并段 A\nB = 2 行：后续整体 -1。
+  const merged: BlockNode = {
+    kind: 'paragraph',
+    raw: `${above.raw}\n${block.raw}`,
+    startLine: above.startLine,
+    endLine: above.endLine + 1,
+    headingLevel: 0,
+  }
+  const blocks: BlockNode[] = [
+    ...tree.blocks.slice(0, index - 2),
+    merged,
+    ...tree.blocks.slice(index + 1).map((b) => ({
+      ...b,
+      startLine: b.startLine - 1,
+      endLine: b.endLine - 1,
+    })),
+  ]
+  return { blocks }
+}
+
+/** The full command: join, serialize — the caret lives at the old blank
+    block's offset, which the kernel knows; this returns only the new source. */
+export function backspaceJoinParagraphs(source: string, index: number): string | null {
+  const tree = parseBlockTree(source)
+  const joined = joinParagraphWithAbove(tree, index)
+  return joined === null ? null : serializeBlocks(joined)
+}

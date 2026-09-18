@@ -24,7 +24,7 @@ import { parseDocument, type Block } from '../core/markdown'
 import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
-import { enterMidParagraph } from '../core/blockEdit'
+import { enterMidParagraph, backspaceJoinParagraphs } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
 import {
   backspaceAtContentStart,
@@ -1122,6 +1122,21 @@ export class EditorKernel {
         // (`null`) this keystroke is not ours.
         const joinIndent = before === '' ? '' : this.continuationIndent(before, line)
         if (joinIndent !== null) {
+          // A paragraph whose line start joins a paragraph above, ONE blank
+          // line between: the block-tree command merges `[A, blank, B]` into
+          // `[A\nB]` (box-model migration 3b) — same source as the string
+          // path below, with the caret at the old blank block's offset. Any
+          // other shape falls back to the string path.
+          if (before === '') {
+            const bi = this.blockAt(live)
+            const joined = backspaceJoinParagraphs(this.doc, bi)
+            if (joined !== null) {
+              event.preventDefault()
+              this.pushUndo({ value: this.doc, caret: this.caret })
+              this.commit(joined, this.offsets[bi - 1] ?? 0)
+              return
+            }
+          }
           event.preventDefault()
           this.pushUndo({ value: this.doc, caret: this.caret })
           const drop = joinIndent.length + 1

@@ -9,7 +9,12 @@
 import { describe, expect, it } from 'vitest'
 import { parseBlockTree, type BlockNode, type BlockTree } from './blockTree'
 import { serializeBlocks, roundTripInvariant } from './serialize'
-import { enterMidParagraph, splitParagraphAtMid } from './blockEdit'
+import {
+  backspaceJoinParagraphs,
+  enterMidParagraph,
+  joinParagraphWithAbove,
+  splitParagraphAtMid,
+} from './blockEdit'
 
 const par = (raw: string, startLine: number, endLine?: number): BlockNode => ({
   kind: 'paragraph' as const,
@@ -78,4 +83,61 @@ describe('enterMidParagraph（命令级，旧行为逐字一致）', () => {
     const result = splitParagraphAtMid(tree, paragraphIndex, 1)!
     expect(roundTripInvariant(serializeBlocks(result.tree))).toBe(true)
   })
+})
+describe('joinParagraphWithAbove（Backspace 行首并段）', () => {
+  it('段 A、单个空行、段 B → 合并成软换行段，后续行号 -1', () => {
+    const tree: BlockTree = {
+      blocks: [
+        par('前', 0),
+        par('甲', 1),
+        blank(2),
+        par('乙', 3),
+        par('后', 4),
+      ],
+    }
+    const joined = joinParagraphWithAbove(tree, 3)
+    expect(joined).not.toBeNull()
+    expect(joined!.blocks.map((b) => b.raw)).toEqual(['前', '甲\n乙', '后'])
+    expect(joined!.blocks.map((b) => `${b.startLine}-${b.endLine}`)).toEqual(['0-1', '1-3', '3-4'])
+  })
+
+  it('serialize 与字符串实现逐字相同（一次 Backspace 删一个换行）', () => {
+    const tree: BlockTree = {
+      blocks: [par('甲', 0), blank(1), par('乙', 2)],
+    }
+    const joined = joinParagraphWithAbove(tree, 2)!
+    expect(serializeBlocks(joined)).toBe('甲\n乙')
+  })
+
+  it('多个空行 / 光标块不是段落段 → 返回 null 走回退', () => {
+    const doubleBlank: BlockTree = { blocks: [par('甲', 0), par('空', 1, 3), par('乙', 3)] }
+    const listAbove: BlockTree = { blocks: [par('甲', 0), blank(1), { ...par('乙', 2), kind: 'list' }] }
+    expect(joinParagraphWithAbove(doubleBlank, 2)).toBeNull()
+    expect(joinParagraphWithAbove(listAbove, 2)).toBeNull()
+  })
+
+  it('上方是软换行多行段同样可并（字符串路径也只删一个换行）', () => {
+    const softAbove: BlockTree = { blocks: [par('甲\n续', 0, 2), blank(2), par('乙', 3)] }
+    const joined = joinParagraphWithAbove(softAbove, 2)
+    expect(joined).not.toBeNull()
+    expect(joined!.blocks[0]?.raw).toBe('甲\n续\n乙')
+  })
+
+  it('命令级：合并后 round-trip 不破', () => {
+    const source = '前文。\n\n甲\n\n乙\n\n后文。'
+    const tree = parseBlockTree(source)
+    const index = tree.blocks.findIndex((b) => b.kind === 'paragraph' && b.raw === '乙')
+    expect(index).toBeGreaterThan(0)
+    const next = backspaceJoinParagraphs(source, index)!
+    expect(next).toBe('前文。\n\n甲\n乙\n\n后文。')
+    expect(roundTripInvariant(next)).toBe(true)
+  })
+})
+
+const blank = (startLine: number): BlockNode => ({
+  kind: 'blank' as const,
+  raw: '',
+  startLine,
+  endLine: startLine + 1,
+  headingLevel: 0,
 })
