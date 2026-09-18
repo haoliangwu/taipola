@@ -515,7 +515,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(r.getDoc()).toBe('标题行测试\n\n\n')
     await r.user.keyboard('第二行')
     await flush()
-    // 打在空行上 = 新起一段：第二行两边补上空行边界，段落间距不随输入消失。
+    // Enter 开出的空行是新段占位：补上前空行边界成独立段，间距不随输入消失。
     expect(r.getDoc()).toBe('标题行测试\n\n第二行\n\n')
     // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 两个换行 + `第二行` 3 字 = 10。
     expect(caretFromDom()).toBe(10)
@@ -1346,7 +1346,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('只有空格的行：在这一行上打字，字符落在这一行、空格一个不少，且自成一段', async () => {
+  it('只有空格的行：在这一行上打字，字符落在这一行、空格一个不少（两段之间 = 并段）', async () => {
     const r = renderEditor('甲\n   \n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
@@ -1354,9 +1354,10 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await r.user.keyboard('X')
     await flush()
     // 空格不参与排版，所以这一行只有一个光标位：行首。打进去的字落在空格**之前**
-    // ——比丢掉空格好；这个代价记在 ADR-0002。空行（空格行）被占用 = 新段落。
-    expect(r.getDoc()).toBe('甲\n\nX   \n\n乙\n')
-    expect(caretFromDom()).toBe(4)
+    // ——比丢掉空格好；这个代价记在 ADR-0002。空格行与空行同一条规则
+    // （isBlankLine）：夹在两段之间 = 字符落回该行，不补边界（`paragraph-spacing/01` 七审）。
+    expect(r.getDoc()).toBe('甲\nX   \n乙\n')
+    expect(caretFromDom()).toBe(3)
     await assertDomMatchesSource(r)
   })
 
@@ -1685,16 +1686,17 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 空行打字 = 新起一段：x 两侧补出空行边界，段落间距不随输入消失。
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
-    expect(caretFromDom()).toBe(4)
+    // 两段之间既有空行上打字 = 字符落在那一行（Typora 实测语义）：
+    // 单换行按 Markdown 规则是软换行，邻段并成一段——`paragraph-spacing/01` 七审。
+    expect(r.getDoc()).toBe('甲\nx\n乙\n')
+    expect(caretFromDom()).toBe(3)
     // 屏幕上三行各自成行：并排才是"换行符消失"。
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
   })
 
-  it('回车之后打字：源码 `甲\nx`——续在软换行的下一行', async () => {
+  it('回车之后打字：源码 `甲\n\nx`——Enter 开出的空行是新段占位', async () => {
     const r = renderEditor('甲')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
@@ -1708,8 +1710,8 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 段尾 Enter 开出的那一行是空行；打字占用它 = 新起一段（x 前自动补上
-    // 空行边界，`paragraph-spacing/01` A 方案），不是软换行续段。
+    // 段尾 Enter 开出的空行是新段占位：打字自动补上前空行边界成独立段
+    // （`paragraph-spacing/01` A 方案的保留部分），不是软换行续段。
     expect(r.getDoc()).toBe('甲\n\nx')
     expect(contentRows(r).texts).toEqual(['甲', 'x'])
     expect(contentRows(r).tops.size).toBe(2)
@@ -1729,7 +1731,8 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // x 写在光标那一行，但因为是空行被占用，自动成为独立段落。
+    // Enter 开出的空行（后一行仍是空）是新段占位：补充前空行边界成独立段，
+    // 段落间距不随输入消失（`paragraph-spacing/01` A 方案的保留部分）。
     expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
@@ -1770,7 +1773,8 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    // 两段之间空行打字：字符落回该行（Typora 实测），一次插入即一步撤销。
+    expect(r.getDoc()).toBe('甲\nx\n乙\n')
 
     await pressUndo(r)
     await flush()

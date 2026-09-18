@@ -846,14 +846,17 @@ body {
    than a soft wrap (34.25px between paragraphs vs 26.25px inside one); 12px
    read as too much and 4px as nothing, both tried and rejected.
    
-   Typing a character INTO the blank line between two paragraphs does NOT eat
-   the gap: the keystroke gets a paragraph of its own. `甲\n\n乙` + typing `x`
-   on the blank line would naively be `甲\nx\n乙` (single newlines = one
-   paragraph, three lines merged, boundary gone) — the kernel's
-   `paragraphizeTypedBlankLine` fences the new line instead (`甲\n\nx\n\n乙`),
-   Typora-style, so the boundary and the spacing survive the edit
-   (`.paragraphize` is not triggered inside fences, tables, quotes or lists;
-   structures keep their blank lines untouched).
+   Typing a character INTO the blank line between two paragraphs gives that
+   blank no special treatment — Typora does not fence it either: `甲\n\n乙` +
+   typing `x` on the blank line yields `甲\nx\n乙` (single newlines = one
+   paragraph, three lines merged, boundary gone), verified against Typora on
+   real hardware (`paragraph-spacing/01` 七审). The boundary survives only when
+   the blank is a fresh Enter's paragraph placeholder — Enter at a paragraph's
+   end, typing right after, gets fenced by the kernel's
+   `paragraphizeTypedBlankLine` into a paragraph of its own (`甲\n` + Enter +
+   `x` → `甲\n\nx`). The gate is the OLD line's kind: only a true blank line
+   (outside any structure) triggers; fences, tables, quotes and lists keep
+   their blank lines untouched.
    
    The trade-off stands: Enter at a paragraph's end drops the caret into a
    blank line whose top sits 8px below the paragraph, because the gap is above

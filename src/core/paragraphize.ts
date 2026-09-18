@@ -1,11 +1,17 @@
 /**
- * 空行被输入占用时，让它成为**独立段落**（`.scratch/paragraph-spacing/issues/01`）。
+ * 空行被输入占用时的处置（`.scratch/paragraph-spacing/issues/01`）。
  *
- * 源里 `段A\n\n段B` 的空行被文字占用后是 `段A\nX\n段B` —— 单换行在 Markdown 里
- * 是**同一段**，于是三个块合并成一个软换行段：段落边界消失，段落间距（挂在段落
- * 块上的 margin）也就无处可挂，屏幕内容随之上移。修正：在该行两侧补齐段落边界，
- * 得 `段A\n\nX\n\n段B` —— 与 Typora 的块语义一致（空白处打字 = 新起一段，而不是
- * 退化成软换行）。
+ * 用户真机对拍 Typora（2026-09）：在**两段之间**的既有空行上打字，字符就落在
+ * 那一行——`甲\n\n乙` 打 x → `甲\nx\n乙`：两侧空行不补、按 Markdown 语义合并成
+ * 软换行段（相邻段落并成一段，段落间距随之消失——这是 Typora 语义本身，不是
+ * 缺陷，`paragraph-spacing/01` 七审）。
+ *
+ * 需要补边界的只有**新段落的占位空行**：段尾 Enter 开出的空行（后一行是空行或
+ * 文档末尾）、文档开头的空行（无前行）。这些是用户**开新段**的动作，补上缺少的
+ * 边界让该行成为独立段落（`甲\n` Enter 打 x → `甲\n\nx`），段落边界与间距保留。
+ *
+ * 判定"独立空行"：插入行**前后两行都非空**（夹在两段之间），此时不补边界。
+ * 其他形状走原有补边界逻辑。
  *
  * 纯文本级判断与修正，不知道块树：只处理"插入前这一行整行是空白、插入后不是"
  * 这一种形状（删除、替换、段中插入一概不碰）。
@@ -20,11 +26,24 @@ function boundsOf(doc: string, offset: number): { start: number; end: number; te
   return { start, end, text: doc.slice(start, end) }
 }
 
+/** 插入行是否夹在两段之间（前后两行都非空）——Typora 里这是"独立空行"，
+ *  打字只占据该行、不补边界（`甲\n\n乙` 打 x → `甲\nx\n乙`）。 */
+function betweenParagraphs(doc: string, line: { start: number; end: number }): boolean {
+  const front = line.start
+  const prevIsText = front - 2 >= 0 && doc[front - 1] === '\n' && doc[front - 2] !== '\n'
+  // 后一行存在（end+1 不越界）且首字符非换行符。文末"虚拟尾空行"（文档以
+  // `\n` 结尾）不算后一行——它是 Enter 产物，不是两段之间的独立空行。
+  const nextIsText = line.end + 1 < doc.length && doc[line.end + 1] !== '\n'
+  return prevIsText && nextIsText
+}
+
 /**
  * The inserted-text correction: when a keystroke turns a whole blank line into a
- * line of text, make sure that line is fenced by blank lines on both sides —
- * it becomes a paragraph of its own, and the inter-paragraph spacing survives
- * the edit instead of being eaten by the merge.
+ * line of text, keep that keystroke's intent. Typing on the blank BETWEEN two
+ * paragraphs keeps the character there (`甲\n\n乙` → `甲\nx\n乙`, Typora
+ * behaviour, neighbours merge into one soft-wrapped paragraph). Only a blank
+ * line that a fresh Enter opened (next line blank / end of document / document
+ * head) gets fenced into a paragraph of its own, so the new paragraph survives.
  *
  * Returns null when nothing needs doing (the usual case: every other edit).
  */
@@ -42,6 +61,11 @@ export function paragraphizeTypedBlankLine(
   if (!isBlankLine(wasBlank.text)) return null
   const nowLine = boundsOf(after, insertStart)
   if (isBlankLine(nowLine.text)) return null
+
+  // Typora（真机对拍）：两段之间既有空行上打字 = 字符落回那一行，什么都不补
+  // （`甲\n\n乙` → `甲\nx\n乙`，邻段按 Markdown 语义合并成软换行段）。只有
+  // Enter 开出的占位空行（后行是空/文末、文档开头无前行）才需要补边界。
+  if (betweenParagraphs(after, nowLine)) return null
 
   let doc = after
   let shift = 0
