@@ -2320,6 +2320,142 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
 })
 
 /**
+ * 元素（标题/列表/引用/围栏）内的 Enter / Shift+Enter 行为矩阵：
+ * 全部按各自结构语义走——列表/引用抄 marker 续行、空项退出、围栏普通换行、
+ * 标题硬软换行各有归处，光标不漂移、不吞键（浏览器逐项实测后固化）。
+ */
+describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）', () => {
+  it('列表行尾 Enter：新项抄 marker；打字落在新项', async () => {
+    const r = renderEditor('- 甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // 列表项不拆段：新行复刻 `- `，光标在新项内容位。
+    expect(r.getDoc()).toBe('- 甲乙\n- \n')
+    expect(caretFromDom()).toBe(7)
+    await r.user.keyboard('丙')
+    await flush()
+    expect(r.getDoc()).toBe('- 甲乙\n- 丙\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('列表句中 Enter：拆成两个项，各自保留 marker', async () => {
+    const r = renderEditor('- 甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    expect(caretFromDom()).toBe(3) // 甲|乙
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- 甲\n- 乙\n')
+    expect(caretFromDom()).toBe(6) // `- 乙` 内容前
+    await assertDomMatchesSource(r)
+  })
+
+  it('列表句首 Enter：上方插一个空项，光标留原行', async () => {
+    const r = renderEditor('- 甲\n- 乙\n')
+    await flush()
+    await clickInRun(r, 0, 1, 1, 'start')
+    await flush()
+    expect(caretFromDom()).toBe(6) // `- 乙` 内容前
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- 甲\n- \n- 乙\n')
+    expect(caretFromDom()).toBe(9) // 光标仍在 `- 乙` 内容前
+    await assertDomMatchesSource(r)
+  })
+
+  it('任务项行尾 Enter：新项带 checkbox', async () => {
+    const r = renderEditor('- [ ] 甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- [ ] 甲\n- [ ] \n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('嵌套项行尾 Enter：缩进和 marker 一起抄', async () => {
+    const r = renderEditor('- 甲\n  - 乙\n')
+    await flush()
+    await clickInRun(r, 0, 1, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('- 甲\n  - 乙\n  - \n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('引用行尾 Enter：新行抄 `> `；句中 Enter 拆行也抄', async () => {
+    const r = renderEditor('> 甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 甲\n> 乙\n')
+    expect(caretFromDom()).toBe(6) // `> 乙` 内容前
+    await clickInRun(r, 0, 1, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 甲\n> 乙\n> \n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('引用嵌套列表行尾 Enter：`> - ` 一并抄', async () => {
+    const r = renderEditor('> - 甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> - 甲\n> - \n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('标题句中 Shift+Enter：标题结束，后续是普通文本行', async () => {
+    const r = renderEditor('# 甲乙')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    // 标题没有软续行（markdown 语义）：`# 甲` 之后是普通行 `乙`。
+    expect(r.getDoc()).toBe('# 甲\n乙')
+    await assertDomMatchesSource(r)
+  })
+
+  it('标题句首 Enter：上方开空行，光标留标题行首', async () => {
+    const r = renderEditor('# 甲乙')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'start')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('\n# 甲乙')
+    await assertDomMatchesSource(r)
+  })
+
+  it('围栏代码行行尾 Shift+Enter + Backspace：只插换行、一次撤销，代码无损', async () => {
+    const r = renderEditor('```\ncode\n```\n')
+    await flush()
+    await clickInRun(r, 0, 1, 0, 'end')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\ncode\n\n```\n')
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('```\ncode\n```\n')
+    await assertDomMatchesSource(r)
+  })
+})
+
+/**
  * `enter-backspace-smoke/06`：表格单元格内 Enter 绝不破坏表格行。这个编辑器没有
  * 单元格内换行的表达（内联 HTML 一律按文本渲染、表格一行 = 一条源码行），所以
  * Enter / Shift+Enter 在行内是 no-op —— 源码一字不动，选中的「至少不允许破坏
