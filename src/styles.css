@@ -837,14 +837,19 @@ body {
 }
 
 /* The paragraph gap, held BY THE PARAGRAPHs: every non-blank block carries
-   `margin-bottom: 8px`. The blank line between two blocks is then just one
+   `margin-bottom: 12px`. The blank line between two blocks is then just one
    clean line box — a real caret target, `blank-line-typing/01` — and the gap
    belongs to the paragraph, so it does not vanish with the blank block the way
    it did when it hung off `blank` (the reviewer's "空格打字会上移" was that
-   8px disappearing).
+   gap disappearing).
    
-   What it does NOT survive, and cannot: typing a character INTO the blank line
-   between two paragraphs. `甲\n\n乙` + typing `x` on the blank line is
+   Amount: 12px ≈ 0.46 line, so a paragraph boundary reads clearly wider than a
+   soft wrap (38.25px between paragraphs vs 26.25px inside one). 8px was the
+   first attempt and the reviewer asked for more; 4px before that was invisible
+   altogether.
+   
+   What the gap does NOT survive, and cannot: typing a character INTO the blank
+   line between two paragraphs. `甲\n\n乙` + typing `x` on the blank line is
    `甲\nx\n乙` — in Markdown single newlines are one paragraph, so the three
    lines become ONE soft-broken paragraph and there is no boundary left for a
    gap to hang on. Measured; the reviewer considered making the keystroke open
@@ -855,11 +860,11 @@ body {
    Enter at the end of one — do not type on the boundary.
    
    The other trade-off is real too: Enter at a paragraph's end drops the caret
-   into a blank line whose top now sits 8px below the paragraph, because the gap
-   is above it — the price of a gap that belongs to the paragraph at all.
+   into a blank line whose top now sits 12px below the paragraph, because the
+   gap is above it — the price of a gap that belongs to the paragraph at all.
    (`.scratch/paragraph-spacing/issues/01`) */
 .blk:not([data-kind='blank']) {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its
