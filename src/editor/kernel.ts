@@ -1083,14 +1083,17 @@ export class EditorKernel {
                   this.offsets[ground] + myBlock.raw.length + grown.caretDelta
                 this.commit(grown.source, nextCaret)
                 // The fresh blank is a NEW paragraph placeholder: the next
-                // keystroke is re-homed into it (十一审) — unless it is the
-                // document's last rendered block (its blank still renders).
-                if (ground < this.blocks.length - 1) {
-                  this.pendingEnterLine = nextCaret
-                  // Re-anchor with the mark visible: WITHOUT it the commit's
-                  // own placeCaret walked the caret to the paragraph end.
-                  this.placeCaret(nextCaret)
-                }
+                // keystroke is re-homed into it (十一审). This applies to the
+                // document's TRAILING blank too — it renders a line of its own,
+                // the caret sits ON it, and the re-home is what turns the next
+                // keystroke into a new paragraph rather than a soft
+                // continuation. (`placeCaret` walks an in-between placeholder
+                // back to the paragraph end while keeping the trailing one
+                // visible, and the Backspace placeholder branch joins either.)
+                this.pendingEnterLine = nextCaret
+                // Re-anchor with the mark visible: WITHOUT it the commit's
+                // own placeCaret walked the caret to the paragraph end.
+                this.placeCaret(nextCaret)
                 return
               }
             }
@@ -1213,7 +1216,19 @@ export class EditorKernel {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
         const at = this.pendingEnterLine
-        this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+        // When Enter opened the document's TRAILING blank — the one that still
+        // renders its own line (`paragraph-spacing/01` 十一审) — the placeholder
+        // sits at EOF, so there is no placeholder character after it to delete:
+        // the `at + 1` cut below would slice nothing and the whole keystroke
+        // would spin (measured: the first Backspace after Enter did nothing,
+        // the second one joined). One Backspace instead undoes the break —
+        // delete the newline that stands in front of the placeholder, which is
+        // exactly what the in-between path's cut amounts to.
+        if (at >= this.doc.length) {
+          this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+        } else {
+          this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+        }
         return
       }
       const sel = window.getSelection()

@@ -1928,6 +1928,27 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('文末行尾 Enter 后一次 Backspace：回到 Enter 前（尾占位空行一次退格就删）', async () => {
+    // 无尾换行的文档末尾回车：Enter 开出的是文档**最后**的占位空行（渲染为
+    // 自己的 <br> 行）。placeholder 位置 = doc 末尾，旧实现按 `at + 1` 截掉
+    // 一个不存在的字符，第一次 Backspace 空转、第二次才 join（用户实测；
+    // 复现路径：`A\n` + 光标在 br 行）——现在一次退格删的就是 placeholder
+    // 前面的换行，一次回车配一次退格，原样还原。
+    const r = renderEditor('甲')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n')
+    expect(caretFromDom()).toBe(2) // 光标在渲染出来的空行 <br> 上
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲')
+    expect(caretFromDom()).toBe(1) // 落在段尾（= 回车前的偏移）
+    await assertDomMatchesSource(r)
+  })
+
   it('表格行上 Enter 是 no-op，行语法保持（不再插裸换行）', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
