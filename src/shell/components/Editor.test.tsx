@@ -2142,6 +2142,47 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(s)
   })
 
+  it('IME 一次上屏多字符落在 Enter 占位：仍是新段落（`啊` Enter 「你好」= 两段）', async () => {
+    // 吸收穿透不止单字符：输入法可以一次提交多个字符（delta > 1），
+    // 原 skip 条件（single char）挡不住，`啊` + Enter + 「你好」再次变
+    // 成一段软换行（实测）。skip 条件现在按"插入行是空行/占位旁"判定，
+    // 与 commit 的段落化判据一致。
+    const r = renderEditor('啊')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('啊\n')
+    const blank = r.container.querySelector('.vl-blank')
+    if (!blank) throw new Error('没有占位空行')
+    placeCaretAt(blank, 0)
+    await flush()
+    // 真实 IME 先开组合；组合文本插入后光标在文本之后。
+    blank.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    const tn = document.createTextNode('你好')
+    blank.insertBefore(tn, blank.firstChild)
+    placeCaretAt(tn, 2)
+    await flush()
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '你好', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '你好', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    blank.dispatchEvent(new CompositionEvent('compositionend', { data: '你好', bubbles: true, cancelable: true }))
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '你好', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '你好', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    await flush()
+    expect(r.getDoc()).toBe('啊\n\n你好')
+    expect(caretFromDom()).toBe(5)
+    await assertDomMatchesSource(r)
+  })
+
   it('行尾 Enter 与 Shift+Enter 同款：都只插一个换行（距离差只在段中）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()

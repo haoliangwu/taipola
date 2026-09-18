@@ -934,20 +934,30 @@ export class EditorKernel {
       return
     }
 
-    // A mid-composition input that lands beside the Enter/soft placeholder must
-    // NOT be absorbed into the model: absorption bypasses paragraphization,
-    // and the compositionend read-back then found the DOM already equal to the
-    // absorbed model — so `啊` + Enter + `啊` (typed through an input method)
-    // became ONE soft-broken paragraph (`啊\n啊`) instead of two (measured).
-    // Skip the absorb for exactly that shape and let the compositionend COMMIT
-    // run the normal (paragraphizing) path; every other composition input
-    // keeps the provisional absorb.
+    // A mid-composition input that lands on a blank line or beside the
+    // Enter/soft placeholder must NOT be absorbed into the model: absorption
+    // bypasses paragraphization, and the compositionend read-back then found
+    // the DOM already equal to the absorbed model — so `啊` + Enter + `啊`
+    // (typed through an input method) became ONE soft-broken paragraph
+    // (`啊\n啊`) instead of two (measured; the single-character case first,
+    // then the multi-character one — an IME can commit several characters at
+    // once). Skip the absorb for exactly those shapes and let the
+    // compositionend COMMIT run the normal (paragraphizing) path; every
+    // other composition input keeps the provisional absorb.
     const absorbedStart = sharedPrefix(this.doc, next)
     const absorbedDelta = next.length - this.doc.length
+    const absorbedLine = lineOfOffset(this.doc, absorbedStart)
+    const absorbedLineKind = this.lineStates[absorbedLine - 1]?.kind
     const nearPlaceholder =
-      absorbedDelta === 1 &&
-      ((this.pendingEnterLine >= 0 && absorbedStart >= this.pendingEnterLine - 1 && absorbedStart <= this.pendingEnterLine) ||
-        (this.pendingSoftLine >= 0 && absorbedStart >= this.pendingSoftLine - 1 && absorbedStart <= this.pendingSoftLine))
+      absorbedDelta > 0 &&
+      (absorbedLineKind === 'blank' ||
+        absorbedLineKind === undefined ||
+        (this.pendingEnterLine >= 0 &&
+          absorbedStart >= this.pendingEnterLine - 1 &&
+          absorbedStart <= this.pendingEnterLine) ||
+        (this.pendingSoftLine >= 0 &&
+          absorbedStart >= this.pendingSoftLine - 1 &&
+          absorbedStart <= this.pendingSoftLine))
     if (nearPlaceholder) return
 
     this.doc = next
