@@ -1212,7 +1212,13 @@ export default function App() {
             onJump={jumpToLine}
           />
         )}
-        <main className="workspace">
+        {/* A narrow-screen drawer covers the workspace: the scrim blocks the
+            mouse, and `inert` takes the covered editor out of the tab order and
+            out of the accessibility tree — Tab must stay within the drawer and
+            the titlebar (its toggle is the second way out). On desktop the
+            outline is a column, no drawer, so the condition never fires. The
+            titlebar and statusbar are never covered and stay reachable. */}
+        <main className="workspace" inert={isNarrowScreen() && sidebarOpen}>
           <Editor
             ref={editorRef}
             value={value}

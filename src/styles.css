@@ -899,6 +899,15 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* A blank source line is one line box AND the paragraph gap: a little taller
+   than a text line so a hard-wrapped paragraph reads as a block (its boundary
+   is otherwise exactly one line height — indistinguishable from a wrap inside
+   the paragraph). The box stays a real caret target (`blank-line-typing/01`);
+   code/table interiors never get this class (`vl-code`/`vl-table`). */
+.vl-blank {
+  min-height: calc(var(--doc-line-size) * 1.3);
+}
+
 /* One line box per source line, laid out as one row each — a newline in the source
    is a line break on screen, the way Typora shows it. (`soft-line-breaks/01` had
    it the other way for a while, joining a paragraph's source lines into one row to
@@ -1088,6 +1097,12 @@ body {
   font-family: var(--font-ui);
   font-weight: 650;
   letter-spacing: -0.01em;
+  /* A long heading wraps evenly instead of leaving the last line one or two
+     characters: the browser balances the line box's wraps. Inert on browsers
+     without it; only changes wrap POINTS, never the box's height or count, so
+     the caret arithmetic (ADR-0002) is untouched. Not for body text (each
+     source line is its own box — balancing has nothing to balance across). */
+  text-wrap: balance;
 }
 
 /* The six levels follow the browser default scale (h1 2em … h6 0.67em) applied
@@ -1140,6 +1155,14 @@ body {
 
 .vl-quote {
   color: var(--text-soft);
+}
+
+/* Revealed (editing) a quote shows its `> ` source dim — the CONTENT must come
+   back to body colour then, or the line reads like rendered quote while wearing
+   the editing marker (`.scratch/blockquote/issues/02`). The `::before` bar stays:
+   it is the quote's identity, and it is drawn regardless of reveal. */
+.vl-quote.revealed {
+  color: var(--text);
 }
 
 .vl-quote::before {

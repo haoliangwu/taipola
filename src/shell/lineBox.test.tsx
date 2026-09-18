@@ -70,7 +70,6 @@ function docLine(r: Rendering): number {
 /** Line classes whose box is exactly one line: single-line, at the doc font size. */
 const ONE_LINE = [
   'vl-text',
-  'vl-blank',
   'vl-list',
   'vl-quote',
   'vl-task',
@@ -94,6 +93,20 @@ describe('每个行种的行盒高度', () => {
     }
     // 标题的字号是自己的（30px），所以它的行盒是两格高——这是设计，不是漂移。
     expect(heightOf(r, 'vl-heading')).toEqual([line * 2])
+    // 空行是段落间隙（`paragraph-spacing/01`）：1.3 倍行高，让段落边界可辨。
+    // 它不是"漂移"——代码块/表格内部的行不挂 `vl-blank`，不受影响。
+    expect(heightOf(r, 'vl-blank')).not.toHaveLength(0)
+    for (const height of heightOf(r, 'vl-blank')) {
+      expect(height).toBeGreaterThan(line)
+      expect(height).toBeCloseTo(line * 1.3, 1)
+    }
+
+    // 标题折行交给浏览器匀称分配（`text-wrap-balance/01`）；正文各源码行是独立
+    // 行盒，balance 对它没有跨盒意义，不启用。
+    const heading = r.container.querySelector<HTMLElement>('.vl-heading')
+    expect(getComputedStyle(heading!).textWrap).toBe('balance')
+    const text = r.container.querySelector<HTMLElement>('.vl-text')
+    expect(getComputedStyle(text!).textWrap).not.toBe('balance')
     // 表格行不是"一格"：它是一格文字加上格子的上下内边距与那条 1px 下边框。要求的是
     // **每一行都一样高**（空格子不能比有字的格子矮），而不是等于行高本身。
     const cell = r.container.querySelector<HTMLElement>('[data-block="9"] [data-cell]')!

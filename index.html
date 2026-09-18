@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <script>
+      // Apply a PINNED theme before the first paint, so a refresh of a dark-fixed
+      // user on a light OS does not flash a light frame (and the mirror case).
+      // Follow-system leaves the meta's "light dark" and the CSS media query in
+      // charge; `useTheme.ts` applies the same value after mount, idempotently
+      // (the key and the whitelist are written twice — this file cannot import).
+      try {
+        var t = localStorage.getItem('taipola:theme')
+        if (t === 'light' || t === 'dark') {
+          document.documentElement.dataset.theme = t
+          var m = document.querySelector('meta[name="color-scheme"]')
+          if (m) m.content = t
+        }
+      } catch (e) {
+        /* private mode etc.: fall through to the system default */
+      }
+    </script>
     <!--
       PWA: single theme_color for both themes, the light background — the repo
       has dark mode too, colour-scheme above covers it. The manifest carries the

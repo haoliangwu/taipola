@@ -184,6 +184,12 @@ function imageElement(
     picture = document.createElement('img')
     span.appendChild(picture)
   }
+  // Decode off the main thread: the default (synchronous) decode can stall the
+  // frame while a large image arrives. `loading="lazy"` deliberately does NOT
+  // follow — images are rebuilt whenever the source reveal / collapse re-renders
+  // a line (the stale-img cleanup above), so the "only fetch near the viewport"
+  // semantics would be re-triggered by every rebuild for ~no gain.
+  if (picture.decoding !== 'async') picture.decoding = 'async'
   if (picture.getAttribute('src') !== img.src) picture.setAttribute('src', img.src)
   if (picture.getAttribute('alt') !== img.alt) picture.setAttribute('alt', img.alt)
   // The width attribute is dropped when the suffix is, or a removed size would

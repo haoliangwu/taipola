@@ -76,6 +76,20 @@ describe('窄屏外壳（390px）', () => {
     expect(el('.outline')).toBeNull()
   })
 
+  it('抽屉打开时幕后的 workspace 是 inert 的：Tab 与无障碍树都到不了它', async () => {
+    const { user, el } = renderApp()
+    // 未开抽屉：workspace 可交互。
+    expect(el('.workspace')?.hasAttribute('inert')).toBe(false)
+    await user.click(el('[aria-label="切换大纲"]')!)
+    // 抽屉盖住它：scrim 挡鼠标，inert 挡键盘与读屏。
+    expect(el('.workspace')?.hasAttribute('inert')).toBe(true)
+    // 标题栏不在遮罩下：切换按钮是关抽屉的第二条路，必须仍然可达。
+    expect(el('.titlebar')?.hasAttribute('inert')).toBe(false)
+    // 关掉后完全恢复。
+    await user.click(el('[aria-label="切换大纲"]')!)
+    expect(el('.workspace')?.hasAttribute('inert')).toBe(false)
+  })
+
   it('跳转到大纲里的一项之后自动关闭（抽屉不能挡着刚跳到的位置）', async () => {
     const { user, el } = renderApp()
     await user.click(el('[aria-label="切换大纲"]')!)
@@ -256,5 +270,12 @@ describe('桌面外壳（1280px）不变', () => {
     const { user, el } = renderApp()
     await user.click(el('[aria-label="切换大纲"]')!)
     expect(el('.outline')).toBeNull()
+  })
+
+  it('桌面改稿侧栏不挂 inert：workspace 一直可聚焦', async () => {
+    const { user, el } = renderApp()
+    expect(el('.workspace')?.hasAttribute('inert')).toBe(false)
+    await user.click(el('[aria-label="切换大纲"]')!)
+    expect(el('.workspace')?.hasAttribute('inert')).toBe(false)
   })
 })
