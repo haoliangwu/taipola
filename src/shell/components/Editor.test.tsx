@@ -1874,6 +1874,74 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('句中 Enter 后一次 Backspace：撤销拆段，回到拆段前（一次回车配一次退格）', async () => {
+    const r = renderEditor('甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
+    expect(caretFromDom()).toBe(3) // 右段 `乙` 行首
+    await pressBackspace(r)
+    await flush()
+    // 一次退格 = 撤销拆段：`甲\n\n乙` → `甲乙`，光标落在拆分点（甲|乙）。
+    // 旧实现把拆段当普通行首 join，第一次只并成软换行 `甲\n乙`、第二次才
+    // `甲乙`（用户实测；与 12 号票的尾占位同一族）。
+    expect(r.getDoc()).toBe('甲乙\n')
+    expect(caretFromDom()).toBe(1)
+    await assertDomMatchesSource(r)
+  })
+
+  it('句中 Enter 后直接在右段行首打字：字符留在右段（Enter 标记不劫持写入）', async () => {
+    const r = renderEditor('甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    await r.user.keyboard('x')
+    await flush()
+    // x 落在光标 = 右段行首（Enter 标记的 re-home 只服务空白占位；
+    // 内容占位的插入行本来就不是空行，段落化会拒绝它）。
+    expect(r.getDoc()).toBe('甲\n\nx乙\n')
+    expect(caretFromDom()).toBe(4)
+    await assertDomMatchesSource(r)
+  })
+
+  it('软换行段第一行句中 Enter 后一次 Backspace：同样撤销拆段', async () => {
+    const s = renderEditor('甲乙\n丙\n')
+    await flush()
+    await clickInRun(s, 0, 0, 0, 'middle')
+    await flush()
+    await pressEnter(s)
+    await flush()
+    // raw 含 \n 的段不拆块命令——字符串 fallback 插同样的 `\n\n`，标记同设。
+    expect(s.getDoc()).toBe('甲\n\n乙\n丙\n')
+    expect(caretFromDom()).toBe(3)
+    await pressBackspace(s)
+    await flush()
+    expect(s.getDoc()).toBe('甲乙\n丙\n')
+    expect(caretFromDom()).toBe(1)
+    await assertDomMatchesSource(s)
+  })
+
+  it('标题句中 Enter 后一次 Backspace：撤销拆段', async () => {
+    const r = renderEditor('# 甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'middle')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('# 甲\n\n乙\n')
+    expect(caretFromDom()).toBe(5)
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('# 甲乙\n')
+    expect(caretFromDom()).toBe(3)
+    await assertDomMatchesSource(r)
+  })
+
   it('行尾 Enter 与 Shift+Enter 同款：都只插一个换行（距离差只在段中）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()

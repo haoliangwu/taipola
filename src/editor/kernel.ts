@@ -1148,10 +1148,24 @@ export class EditorKernel {
         if (edited) {
           this.pushUndo({ value: this.doc, caret: this.caret })
           this.commit(edited.source, edited.caret)
+          // The split's right half is a CONTENT placeholder (unlike the blank
+          // one a line-end Enter opens): the Enter mark hands the NEXT Backspace
+          // the one-stroke undo of the split — delete the two newlines the
+          // split added, and the paragraph is whole again
+          // (`.scratch/enter-backspace-smoke/issues/12`, same family). Typing
+          // is unaffected: `paragraphizeTypedBlankLine` declines a non-blank
+          // insert line, so the character stays where the caret put it.
+          this.pendingEnterLine = edited.caret
+          this.placeCaret(edited.caret)
           return
         }
       }
       this.insertNewlines(live, 2, live + 2)
+      // String fallback for the same split (a mid-line Enter inside a
+      // soft-broken paragraph or a heading): the placeholder is the content
+      // block below, marked the same way.
+      this.pendingEnterLine = live + 2
+      this.placeCaret(live + 2)
       return
     }
 
@@ -1216,18 +1230,28 @@ export class EditorKernel {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
         const at = this.pendingEnterLine
-        // When Enter opened the document's TRAILING blank — the one that still
-        // renders its own line (`paragraph-spacing/01` 十一审) — the placeholder
-        // sits at EOF, so there is no placeholder character after it to delete:
-        // the `at + 1` cut below would slice nothing and the whole keystroke
-        // would spin (measured: the first Backspace after Enter did nothing,
-        // the second one joined). One Backspace instead undoes the break —
-        // delete the newline that stands in front of the placeholder, which is
-        // exactly what the in-between path's cut amounts to.
-        if (at >= this.doc.length) {
-          this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+        const placeholderBlock = this.blocks[this.blockAt(at)]
+        if (placeholderBlock?.raw === '') {
+          // A BLANK placeholder — the line a line-end Enter opened. When Enter
+          // opened the document's TRAILING blank (the one that still renders
+          // its own line, `paragraph-spacing/01` 十一审), the placeholder sits
+          // at EOF, so there is no placeholder character after it to delete:
+          // the `at + 1` cut below would slice nothing and the whole keystroke
+          // would spin (measured: the first Backspace after Enter did nothing,
+          // the second one joined). One Backspace instead undoes the break —
+          // delete the newline that stands in front of the placeholder, which
+          // is exactly what the in-between path's cut amounts to.
+          if (at >= this.doc.length) {
+            this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+          } else {
+            this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+          }
         } else {
-          this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+          // A CONTENT placeholder — the right half a mid-line Enter split off.
+          // One Backspace undoes the split: delete the two newlines it added
+          // (`甲\n\n乙` → `甲乙`), the caret lands on the join point, and a
+          // single keystroke pairs the Enter that made the split.
+          this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
         }
         return
       }
