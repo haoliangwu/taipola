@@ -14,33 +14,44 @@
 
 /* ==========================================================================
    Theme
-   `:root` carries the light palette. Dark is applied either because the OS asks
-   for it (the media query) or because the user overrode it explicitly — the
-   `[data-theme]` rules come last so an explicit choice always wins.
+   One palette, one copy: every colour is a `light-dark()` pair that follows the
+   element's `color-scheme`. Dark arrives either because the OS asks (the
+   `light dark` scheme on `:root`) or because the user pinned it (`data-theme`
+   flips the scheme); the explicit rules below win by landing LAST and only
+   change the scheme. `useTheme.ts` never touches these variables.
+   (.scratch/light-dark-theme/issues/01)
    ========================================================================== */
 
 :root {
+  color-scheme: light dark;
+
   --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace,
     'Menlo', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace;
   --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
   --font-serif-read: 'Iowan Old Style', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
 
-  /* --- light palette --- */
-  --bg: #ffffff;
-  --bg-panel: #fafaf9;
-  --bg-elevated: #ffffff;
-  --text: #1f1f22;
-  --text-soft: #6b6b73;
-  --text-faint: #9a9aa2;
-  --border: #e8e8e4;
-  --border-strong: #d8d8d2;
-  --accent: #2f6f5e;
-  --accent-soft: rgba(47, 111, 94, 0.12);
-  --code-bg: #f4f4f1;
-  --mark-bg: #fff2a8;
-  --selection: rgba(47, 111, 94, 0.2);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  /* --- the palette, once --- */
+  --bg: light-dark(#ffffff, #16171a);
+  --bg-panel: light-dark(#fafaf9, #1c1d21);
+  --bg-elevated: light-dark(#ffffff, #212227);
+  --text: light-dark(#1f1f22, #e4e4e7);
+  --text-soft: light-dark(#6b6b73, #9d9da6);
+  --text-faint: light-dark(#9a9aa2, #6e6e77);
+  --border: light-dark(#e8e8e4, #2b2c31);
+  --border-strong: light-dark(#d8d8d2, #3a3b42);
+  --accent: light-dark(#2f6f5e, #6cc4a8);
+  --accent-soft: light-dark(rgba(47, 111, 94, 0.12), rgba(108, 196, 168, 0.16));
+  --code-bg: light-dark(#f4f4f1, #212227);
+  --mark-bg: light-dark(#fff2a8, #4d4416);
+  --selection: light-dark(rgba(47, 111, 94, 0.2), rgba(108, 196, 168, 0.24));
+  /* `light-dark()` only takes COLOURS, so the shadow's two layers keep the same
+     geometry in both themes and differ in tint only. The dark side used to
+     spread its ambient layer a little wider (0 12x32px); 0 8x 24px with the
+     darker tint is visually indistinguishable on a dark surface, and keeping
+     one geometry is what lets the shadow live entirely inside `:root`. */
+  --shadow: 0 1px 2px light-dark(rgb(0 0 0 / 0.04), rgb(0 0 0 / 0.3)),
+    0 8px 24px light-dark(rgb(0 0 0 / 0.06), rgb(0 0 0 / 0.35));
 
   /* --- shared metrics for the two editing layers (do not diverge) --- */
   --editor-font-size: 15px;
@@ -64,45 +75,12 @@
   --editor-max-width: 840px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #16171a;
-    --bg-panel: #1c1d21;
-    --bg-elevated: #212227;
-    --text: #e4e4e7;
-    --text-soft: #9d9da6;
-    --text-faint: #6e6e77;
-    --border: #2b2c31;
-    --border-strong: #3a3b42;
-    --accent: #6cc4a8;
-    --accent-soft: rgba(108, 196, 168, 0.16);
-    --code-bg: #212227;
-    --mark-bg: #4d4416;
-    --selection: rgba(108, 196, 168, 0.24);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
-  }
-}
-
 :root[data-theme='light'] {
   color-scheme: light;
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #16171a;
-  --bg-panel: #1c1d21;
-  --bg-elevated: #212227;
-  --text: #e4e4e7;
-  --text-soft: #9d9da6;
-  --text-faint: #6e6e77;
-  --border: #2b2c31;
-  --border-strong: #3a3b42;
-  --accent: #6cc4a8;
-  --accent-soft: rgba(108, 196, 168, 0.16);
-  --code-bg: #212227;
-  --mark-bg: #4d4416;
-  --selection: rgba(108, 196, 168, 0.24);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 /* highlight.js ships a light theme in the base import at the top of this file;
@@ -121,51 +99,27 @@
    line box — and there is no `<code>` element in the editor. Code text inherits
    `--text` from its line box, which is already theme-aware.
 
-   Each rule is written twice — once for an explicit dark choice, once inside
-   the system-preference query — because CSS cannot merge an at-rule into a
-   selector list. */
-:root[data-theme='dark'] .vl-code .hljs-keyword,
-:root[data-theme='dark'] .vl-code .hljs-built_in,
-:root[data-theme='dark'] .vl-code .hljs-type {
-  color: #ff9db1;
+   Written ONCE as `light-dark()` pairs (no explicit/query twin copies anymore);
+   the dark side matches the palette's dark values. */
+.vl-code .hljs-keyword,
+.vl-code .hljs-built_in,
+.vl-code .hljs-type {
+  color: light-dark(#d73a49, #ff9db1);
 }
 
-:root[data-theme='dark'] .vl-code .hljs-string,
-:root[data-theme='dark'] .vl-code .hljs-attr {
-  color: #a8d8a0;
+.vl-code .hljs-string,
+.vl-code .hljs-attr {
+  color: light-dark(#032f62, #a8d8a0);
 }
 
-:root[data-theme='dark'] .vl-code .hljs-comment,
-:root[data-theme='dark'] .vl-code .hljs-quote {
-  color: #7d7d88;
+.vl-code .hljs-comment,
+.vl-code .hljs-quote {
+  color: light-dark(#6a737d, #7d7d88);
 }
 
-:root[data-theme='dark'] .vl-code .hljs-number,
-:root[data-theme='dark'] .vl-code .hljs-literal {
-  color: #d3b0ff;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .vl-code .hljs-keyword,
-  :root:not([data-theme='light']) .vl-code .hljs-built_in,
-  :root:not([data-theme='light']) .vl-code .hljs-type {
-    color: #ff9db1;
-  }
-
-  :root:not([data-theme='light']) .vl-code .hljs-string,
-  :root:not([data-theme='light']) .vl-code .hljs-attr {
-    color: #a8d8a0;
-  }
-
-  :root:not([data-theme='light']) .vl-code .hljs-comment,
-  :root:not([data-theme='light']) .vl-code .hljs-quote {
-    color: #7d7d88;
-  }
-
-  :root:not([data-theme='light']) .vl-code .hljs-number,
-  :root:not([data-theme='light']) .vl-code .hljs-literal {
-    color: #d3b0ff;
-  }
+.vl-code .hljs-number,
+.vl-code .hljs-literal {
+  color: light-dark(#005cc5, #d3b0ff);
 }
 
 * {
