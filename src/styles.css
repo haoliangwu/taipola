@@ -836,19 +836,18 @@ body {
   margin: 0;
 }
 
-/* The paragraph gap. It hangs off the BLANK block (the line between two
-   blocks), NOT off the blocks themselves: an Enter at a paragraph's end drops
-   the caret onto a blank line, and a margin on the paragraph above would push
-   that caret further down than a real "new line" — Enter has to read as
-   exactly one line. The blank line stays one line box (a real caret target,
-   `blank-line-typing/01`) and carries the gap below it, so a block → blank →
-   block run reads as: line, one clean new line, then the gap before the next
-   block. Amount: 4px read as "no gap at all" against the 26px line gap —
-   the reviewer's soft break and hard break looked the same. 8px ≈ 0.3 line
-   makes a paragraph's boundary visible, and the caret-drop problem that once
-   made 8px feel too far (the gap sat on the paragraph) was fixed by hanging
-   it off the blank line instead. (`.scratch/paragraph-spacing/issues/01`) */
-.blk[data-kind='blank'] {
+/* The paragraph gap, held BY THE PARAGRAPHs: every non-blank block carries
+   `margin-bottom: 8px`. The blank line between two blocks is then just one
+   clean line box — a real caret target, `blank-line-typing/01` — and the gap
+   survives ANY edit: type into the blank line and the 8px stays (the block
+   above still owns it), instead of vanishing with the blank block the way it
+   did when it hung off `blank` (the reviewer's "空格打字会上移" was that
+   8px disappearing). The trade-off that made us hang it off `blank` once —
+   Enter at a paragraph's end drops the caret into the blank line, and a
+   margin on the paragraph above pushes that caret 8px further down than a
+   real "new line" — is real; it is the price of the gap being stable under
+   input, and the reviewer chose stability. (`.scratch/paragraph-spacing/issues/01`) */
+.blk:not([data-kind='blank']) {
   margin-bottom: 8px;
 }
 
