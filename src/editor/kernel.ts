@@ -24,7 +24,11 @@ import { parseDocument, type Block } from '../core/markdown'
 import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
-import { enterMidParagraph, backspaceJoinParagraphs } from '../core/blockEdit'
+import {
+  enterMidParagraph,
+  backspaceJoinParagraphs,
+  enterEndParagraph,
+} from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
 import {
   backspaceAtContentStart,
@@ -951,6 +955,23 @@ export class EditorKernel {
           const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
           this.insertNewlines(at, 1, live + 1)
           return
+        }
+        // A single-line PARAGRAPH's end goes through the block-tree command
+        // (box-model migration 3c): the blank block after it grows by a line
+        // (or one is appended at the document's end) — same source as the
+        // string path, caret on the fresh line. Everything else falls back.
+        const enterLine = lineOfOffset(this.doc, live)
+        const enterKind = this.lineStates[enterLine - 1]?.kind
+        if (enterKind === 'text' && !currentLine.includes('\n')) {
+          const ground = this.blockAt(live)
+          const grown = enterEndParagraph(this.doc, ground)
+          if (grown !== null) {
+            const block = this.blocks[ground]
+            if (block === undefined) return
+            this.pushUndo({ value: this.doc, caret: this.caret })
+            this.commit(grown.source, this.offsets[ground] + block.raw.length + grown.caretDelta)
+            return
+          }
         }
         const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
         // Caret on the FRESH line. A line that already has its trailing newline

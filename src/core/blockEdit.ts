@@ -127,3 +127,67 @@ export function backspaceJoinParagraphs(source: string, index: number): string |
   const joined = joinParagraphWithAbove(tree, index)
   return joined === null ? null : serializeBlocks(joined)
 }
+/**
+ * Enter at a single-line paragraph's END opens a fresh line below it — the
+ * blank block after it grows by one line, or one is appended when there is
+ * none (the paragraph is the document's last and carries no trailing newline).
+ *
+ * 块语义：`[P, blank(k行)] → [P, blank(k+1行)]`，或 `[P(末块)] → [P, blank(1行)]`
+ * —— Enter 一次就是"段落下方多一个空行"，光标落在它上面；随后键入延续同段
+ * （软换行），再由 Enter 或中段拆分拉开段落。只做单行段落；空行、多行软换行段
+ * 回退字符串路径（行为一致）。
+ *
+ * 返回新树与新增字符数（1）。光标落点 = P 的 raw 之后第一个换行后 —— kernel
+ * 用自身 offsets 计算绝对位置。
+ */
+export function growParagraphGap(
+  tree: BlockTree,
+  index: number,
+): { tree: BlockTree; addedChars: 1; caretDelta: number } | null {
+  const block = tree.blocks[index]
+  if (!block || block.kind !== 'paragraph' || block.raw.includes('\n')) return null
+  const next = tree.blocks[index + 1]
+  // Enter opens ONE fresh blank line right below the paragraph — an INSERTED
+  // blank block, not a grown span: typing there continues the paragraph (soft
+  // break), exactly like the string path's single newline at the line end. The
+  // old `blank` (when present) and everything after shift down one line.
+  // (Growing the old blank's span instead put the caret on the SECOND empty
+  // line, where typing opened a new paragraph — wrong semantics.)
+  const fresh: BlockNode = {
+    kind: 'blank',
+    raw: '',
+    startLine: block.endLine,
+    endLine: block.endLine + 1,
+    headingLevel: 0,
+  }
+  if (next !== undefined) {
+    if (next.kind !== 'blank') return null
+    const blocks: BlockNode[] = [
+      ...tree.blocks.slice(0, index + 1),
+      fresh,
+      ...tree.blocks.slice(index + 1).map((b) => ({
+        ...b,
+        startLine: b.startLine + 1,
+        endLine: b.endLine + 1,
+      })),
+    ]
+    return { tree: { blocks }, addedChars: 1, caretDelta: 1 }
+  }
+  const blocks: BlockNode[] = [...tree.blocks, fresh]
+  return { tree: { blocks }, addedChars: 1, caretDelta: 1 }
+}
+
+/** The full command: grow, serialize, and report where the caret lands —
+    the paragraph's end plus `caretDelta` newlines (1 when a blank line was
+    appended, 2 when an existing one grew), which the kernel adds to the
+    paragraph block's own offset. */
+export function enterEndParagraph(
+  source: string,
+  index: number,
+): { source: string; caretDelta: number } | null {
+  const tree = parseBlockTree(source)
+  const grown = growParagraphGap(tree, index)
+  return grown === null
+    ? null
+    : { source: serializeBlocks(grown.tree), caretDelta: grown.caretDelta }
+}

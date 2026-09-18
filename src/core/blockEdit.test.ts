@@ -11,7 +11,9 @@ import { parseBlockTree, type BlockNode, type BlockTree } from './blockTree'
 import { serializeBlocks, roundTripInvariant } from './serialize'
 import {
   backspaceJoinParagraphs,
+  enterEndParagraph,
   enterMidParagraph,
+  growParagraphGap,
   joinParagraphWithAbove,
   splitParagraphAtMid,
 } from './blockEdit'
@@ -140,4 +142,50 @@ const blank = (startLine: number): BlockNode => ({
   startLine,
   endLine: startLine + 1,
   headingLevel: 0,
+})
+
+describe('growParagraphGap（行尾 Enter）', () => {
+  it('段落后有空行：插入新空行块，后续整体 +1', () => {
+    const tree: BlockTree = { blocks: [par('甲', 0), blank(1), par('乙', 2), par('后', 3)] }
+    const grown = growParagraphGap(tree, 0)!
+    expect(serializeBlocks(grown.tree)).toBe('甲\n\n\n乙\n后')
+    expect(grown.tree.blocks.map((b) => `${b.startLine}-${b.endLine}`)).toEqual([
+      '0-1', '1-2', '2-3', '3-4', '4-5',
+    ])
+    expect(grown.addedChars).toBe(1)
+    expect(grown.caretDelta).toBe(1)
+  })
+
+  it('段落是末块且无尾换行：追加一个空行块', () => {
+    const tree: BlockTree = { blocks: [par('甲', 0)] }
+    const grown = growParagraphGap(tree, 0)!
+    expect(serializeBlocks(grown.tree)).toBe('甲\n')
+    expect(grown.tree.blocks.map((b) => `${b.startLine}-${b.endLine}`)).toEqual(['0-1', '1-2'])
+  })
+
+  it('段落是末块但有尾空行：空行 +1（= 两次 Enter 之间）', () => {
+    const tree: BlockTree = { blocks: [par('甲', 0), blank(1)] }
+    const grown = growParagraphGap(tree, 0)!
+    expect(serializeBlocks(grown.tree)).toBe('甲\n\n')
+  })
+
+  it('非段落块/多行段/段后紧邻内容 → null 回退', () => {
+    const list: BlockTree = { blocks: [{ ...par('甲', 0), kind: 'list' }, blank(1)] }
+    const soft: BlockTree = { blocks: [par('甲\n乙', 0, 2), blank(2)] }
+    expect(growParagraphGap(list, 0)).toBeNull()
+    expect(growParagraphGap(soft, 0)).toBeNull()
+  })
+
+  it('命令级：round-trip 不破，caretDelta 区分追加/生长', () => {
+    const source = '前面。\n\n段落\n\n后面。'
+    const tree = parseBlockTree(source)
+    const index = tree.blocks.findIndex((b) => b.kind === 'paragraph' && b.raw === '段落')
+    const next = enterEndParagraph(source, index)!
+    expect(next.source).toBe('前面。\n\n段落\n\n\n后面。')
+    // Enter 插入的新空行紧跟段落：光标 = 段尾 + 1 个换行
+    expect(next.caretDelta).toBe(1)
+    expect(roundTripInvariant(next.source)).toBe(true)
+    const lastIndex = parseBlockTree('末段').blocks.length - 1
+    expect(enterEndParagraph('末段', lastIndex)!.caretDelta).toBe(1)
+  })
 })
