@@ -1124,20 +1124,21 @@ body {
 
 /* Revealed (editing) a quote shows its `> ` source dim — the CONTENT must come
    back to body colour then, or the line reads like rendered quote while wearing
-   the editing marker (`.scratch/blockquote/issues/02`). The `::before` bar stays:
-   it is the quote's identity, and it is drawn regardless of reveal. */
+   the editing marker (`.scratch/blockquote/issues/02`). The bar stays: it is
+   the quote's identity, and it is drawn regardless of reveal. */
 .vl-quote.revealed {
   color: var(--text);
 }
 
-.vl-quote::before {
-  content: '';
-  display: inline-block;
-  width: 3px;
-  height: 1em;
-  margin-right: 0.6em;
-  vertical-align: -0.12em;
-  background: var(--border-strong);
+/* The quote's grey bar is ONE line drawn on the BLOCK, not one short bar per
+   line box: Typora's bar is continuous — it runs through the quote's soft
+   breaks AND its inner paragraph gaps, and stops at the block's end (user's
+   reference screenshot). A per-line `::before` bar snapped between rows. The
+   border takes the place of the old inline bar, and the block's own padding
+   provides the same content inset the bar's width + margin did. */
+.blk[data-kind='quote'] {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.6em;
 }
 
 /* ==========================================================================
