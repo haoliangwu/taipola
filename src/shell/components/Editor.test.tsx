@@ -2406,6 +2406,56 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     await assertDomMatchesSource(r)
   })
 
+  it('引用内 Shift+Enter：软换行与段落同构——新行仍带 `> `，打字续行并渲染 <br>', async () => {
+    // Typora 裁定：引用除样式外交互与普通段落相同——行尾软换行的下一行
+    // 仍是引用行（marker 不丢）。旧实现插裸 \n，下一行被甩出引用。
+    const r = renderEditor('> 甲乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 甲乙\n> \n')
+    expect(caretFromDom()).toBe(7) // `> ` 后 = 新行内容位
+    await r.user.keyboard('丙')
+    await flush()
+    expect(r.getDoc()).toBe('> 甲乙\n> 丙\n')
+    // 渲染与普通段落的软换行同构：第一行行尾有 <br data-br="">。
+    const rows = r.container.querySelectorAll('[data-block="0"] [data-vline]')
+    expect(rows[0]?.querySelector('br[data-br]')).not.toBeNull()
+    await assertDomMatchesSource(r)
+  })
+
+  it('引用内连续两次 Enter 退出引用；退出后打字是普通段落', async () => {
+    const r = renderEditor('> 甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    // 第一次 Enter：空引用行（仍在引用内）。
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 甲\n> \n')
+    // 第二次 Enter：退出引用——空行分隔、光标在引用外的普通行。
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> 甲\n\n')
+    await r.user.keyboard('乙')
+    await flush()
+    expect(r.getDoc()).toBe('> 甲\n\n乙')
+    await assertDomMatchesSource(r)
+  })
+
+  it('嵌套引用行尾 Shift+Enter：`> > ` 一并抄', async () => {
+    const r = renderEditor('> > 甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> > 甲\n> > \n')
+    await assertDomMatchesSource(r)
+  })
+
   it('引用嵌套列表行尾 Enter：`> - ` 一并抄', async () => {
     const r = renderEditor('> - 甲\n')
     await flush()

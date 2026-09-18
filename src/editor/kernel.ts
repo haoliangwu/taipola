@@ -1053,6 +1053,23 @@ export class EditorKernel {
         // keeps that placeholder behaviour.
         const { end: softEnd, text: softText } = this.lineBounds(live)
         const softCaretOnEnd = live >= softEnd && softText !== ''
+        // A QUOTE line breaks the same way as a paragraph, but the fresh line
+        // stays inside the quote (Typora: the quote keeps its marker — its
+        // interaction is identical to a paragraph's, only the style differs).
+        // A bare newline would push the next line out of the quote, so the
+        // line's own `> ` (nested `> > ` etc.) prefix is repeated, and the
+        // soft placeholder rides on the marker's end.
+        const quoteParts = parseLine(currentLine)
+        if (kind === 'quote' && quoteParts.prefix !== '') {
+          const insert = `\n${quoteParts.prefix}`
+          this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), at + insert.length)
+          if (softCaretOnEnd) {
+            this.pendingEnterLine = -1
+            this.pendingSoftLine = at + insert.length
+            this.placeCaret(at + insert.length)
+          }
+          return
+        }
         this.insertNewlines(at, 1, at + 1)
         if (softCaretOnEnd) {
           this.pendingEnterLine = -1
