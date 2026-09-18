@@ -79,6 +79,63 @@ export function enterMidParagraph(
 }
 
 /**
+ * Enter at the END of a line INSIDE a multi-line (soft-broken) paragraph: the
+ * paragraph breaks there — the line ends the paragraph, everything below it
+ * becomes a NEW paragraph, with a blank block in between.
+ *
+ * 块语义：`[P('甲\n乙')]`（软换行同段两行）光标在「甲」行尾按 Enter
+ * → `[P('甲'), blank, P('乙')]` —— 源 `甲\n\n乙`：甲 与 乙 各自成段，
+ * 光标落在中间的空白块（新段落占位，kernel 的 Enter-标记让下一次键入成为
+ * 新段落内容，`enter-backspace-smoke/01`「任何位置 Enter 都是硬换行」）。
+ *
+ * `local` 是块内字符偏移，必须停在某一行的行尾（行终止换行符之前）；行终止
+ * 换行归 LEFT（本行仍是左段内容），`right` 从下一行承接。
+ */
+export function splitParagraphAtLineEnd(
+  tree: BlockTree,
+  index: number,
+  local: number,
+): { tree: BlockTree; addedChars: number; caretDelta: number } | null {
+  const block = tree.blocks[index]
+  if (!block || block.kind !== 'paragraph') return null
+  if (local <= 0 || local >= block.raw.length) return null
+  const splitAt = block.raw.indexOf('\n', local)
+  if (splitAt < 0) return null // 最后一行行尾：段尾 Enter 走 growParagraphGap
+
+  const left = block.raw.slice(0, splitAt)
+  const right = block.raw.slice(splitAt + 1)
+  const start = block.startLine
+  const blocks: BlockNode[] = tree.blocks.slice(0, index)
+  // `[A][blank][B]`：左段（含本行）、空行、右段（后续行全部承接为新段）。
+  blocks.push(
+    { kind: 'paragraph', raw: left, startLine: start, endLine: start + 1, headingLevel: 0 },
+    { kind: 'blank', raw: '', startLine: start + 1, endLine: start + 2, headingLevel: 0 },
+    { kind: 'paragraph', raw: right, startLine: start + 2, endLine: start + 3, headingLevel: 0 },
+  )
+  for (let i = index + 1; i < tree.blocks.length; i++) {
+    const b = tree.blocks[i]
+    if (!b) continue
+    blocks.push({ ...b, startLine: b.startLine + 2, endLine: b.endLine + 2 })
+  }
+  // `甲\n乙`（3 字符）→ `甲\n\n乙`（4 字符）：+1；光标补 1 个偏移落在空白块。
+  return { tree: { blocks }, addedChars: 1, caretDelta: 1 }
+}
+
+/** Full command: break the paragraph at the caret's line end. Caret lands on
+    the fresh blank block (the new paragraph placeholder), one past the break. */
+export function enterEndOfLine(
+  source: string,
+  index: number,
+  live: number,
+  local: number,
+): { source: string; caret: number } | null {
+  const tree = parseBlockTree(source)
+  const result = splitParagraphAtLineEnd(tree, index, local)
+  if (result === null) return null
+  return { source: serializeBlocks(result.tree), caret: live + result.caretDelta }
+}
+
+/**
  * Backspace at a paragraph's line start moves it up onto the paragraph above —
  * ONE Blank block is consumed and the two paragraphs merge into one
  * soft-broken paragraph.
@@ -128,14 +185,14 @@ export function backspaceJoinParagraphs(source: string, index: number): string |
   return joined === null ? null : serializeBlocks(joined)
 }
 /**
- * Enter at a single-line paragraph's END opens a fresh line below it — the
- * blank block after it grows by one line, or one is appended when there is
- * none (the paragraph is the document's last and carries no trailing newline).
+ * Enter at a paragraph's END opens a fresh line below it — the blank block
+ * after it grows by one line, or one is appended when there is none (the
+ * paragraph is the document's last and carries no trailing newline).
  *
- * 块语义：`[P, blank(k行)] → [P, blank(k+1行)]`，或 `[P(末块)] → [P, blank(1行)]`
- * —— Enter 一次就是"段落下方多一个空行"，光标落在它上面；随后键入延续同段
- * （软换行），再由 Enter 或中段拆分拉开段落。只做单行段落；空行、多行软换行段
- * 回退字符串路径（行为一致）。
+ * 块语义：`[P, blank(k行)] → [P, blank(k+1行)]`，或 `[P(末块)] → [P, blank(1行)]`。
+ * 接受**多行软换行段**：段尾 Enter 开出一个新空行，随后键入经 kernel 的
+ * Enter-占位标记升级为**新段落**（`enter-backspace-smoke/01` 的"行尾 Enter =
+ * 硬换行"，块级表达 = 段落下方一个空块，`paragraph-spacing/01` 九审）。
  *
  * 返回新树与新增字符数（1）。光标落点 = P 的 raw 之后第一个换行后 —— kernel
  * 用自身 offsets 计算绝对位置。
@@ -145,14 +202,14 @@ export function growParagraphGap(
   index: number,
 ): { tree: BlockTree; addedChars: 1; caretDelta: number } | null {
   const block = tree.blocks[index]
-  if (!block || block.kind !== 'paragraph' || block.raw.includes('\n')) return null
+  if (!block || block.kind !== 'paragraph') return null
   const next = tree.blocks[index + 1]
-  // Enter opens ONE fresh blank line right below the paragraph — an INSERTED
-  // blank block, not a grown span: typing there continues the paragraph (soft
-  // break), exactly like the string path's single newline at the line end. The
-  // old `blank` (when present) and everything after shift down one line.
-  // (Growing the old blank's span instead put the caret on the SECOND empty
-  // line, where typing opened a new paragraph — wrong semantics.)
+  // Enter opens ONE fresh blank line right below the paragraph. At the
+  // document's end that blank serializes to nothing (the trailing newline
+  // belongs to the paragraph), and the caret sits on the virtual blank line —
+  // the kernel's Enter-placeholder mark turns its next keystroke into a new
+  // paragraph. When a blank block already follows, the fresh one serializes
+  // as a real blank line between the two.
   const fresh: BlockNode = {
     kind: 'blank',
     raw: '',

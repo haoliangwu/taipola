@@ -171,11 +171,17 @@ describe('growParagraphGap（行尾 Enter）', () => {
     expect(serializeBlocks(grown.tree)).toBe('甲\n\n')
   })
 
-  it('非段落块/多行段/段后紧邻内容 → null 回退', () => {
+  it('非段落块 → null 回退；多行软换行段的段尾 Enter 同样开空块（九审）', () => {
     const list: BlockTree = { blocks: [{ ...par('甲', 0), kind: 'list' }, blank(1)] }
     const soft: BlockTree = { blocks: [par('甲\n乙', 0, 2), blank(2)] }
     expect(growParagraphGap(list, 0)).toBeNull()
-    expect(growParagraphGap(soft, 0)).toBeNull()
+    const grown = growParagraphGap(soft, 0)!
+    expect(serializeBlocks(grown.tree)).toBe('甲\n乙\n\n')
+    expect(grown.tree.blocks.map((b) => `${b.startLine}-${b.endLine}`)).toEqual([
+      '0-2', '2-3', '3-4',
+    ])
+    expect(grown.addedChars).toBe(1)
+    expect(grown.caretDelta).toBe(1)
   })
 
   it('命令级：round-trip 不破，caretDelta 区分追加/生长', () => {

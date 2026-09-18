@@ -29,6 +29,7 @@ import {
   enterMidParagraph,
   backspaceJoinParagraphs,
   enterEndParagraph,
+  enterEndOfLine,
   enterBlankLine,
 } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
@@ -166,6 +167,13 @@ export class EditorKernel {
   private composeStart = 0
   private composeLength = 0
   private pendingCaret: number | null = null
+  /**
+   * 1-based line number (as `lineOfOffset` reports) of the fresh blank line
+   * that a just-pressed Enter opened — the new paragraph's placeholder. The
+   * NEXT keystroke that turns that line into text is fenced as a new paragraph
+   * (`enterPlaceholder`); the mark is single-shot, cleared by every commit.
+   */
+  private pendingEnterLine = -1
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
@@ -385,15 +393,16 @@ export class EditorKernel {
    * kernel: no reconciler can run in between, so no drift can accumulate.
    */
   private commit(next: string, caretNext: number): void {
-    // A keystroke that turns a whole blank line into a line of text gives that
-    // line a paragraph of its OWN — a blank line on each side — so the
-    // paragraph boundary, and the spacing hanging on it, survives the edit
-    // (`.scratch/paragraph-spacing/issues/01`). Everything else is untouched.
-    //
-    // The gate is the OLD line's kind: only a true blank line (outside any
-    // structure) triggers. A blank line INSIDE a fence, table, quote or list
-    // keeps its old editor behaviour — fencing paragraphs there would break
-    // code, rows and items.
+    // A keystroke that turns a whole blank line into a line of text decides
+    // what that line IS (`paragraph-spacing/01`):
+    // - the blank a fresh Enter just opened (`pendingEnterLine`) — the user is
+    //   starting a NEW paragraph: the line gets fenced into a block of its own
+    //   (`甲` Enter x → `甲\n\nx`);
+    // - a blank already sitting between two paragraphs — the character
+    //   continues the paragraph ABOVE and keeps the paragraph BELOW standing
+    //   (`甲\n\n乙` x → `甲\nx\n\n乙`, Typora-verified);
+    // - a blank inside a fence, table, quote or list — nothing: fencing there
+    //   would break code, rows and items (the gate is the OLD line's kind).
     const clamped = clamp(caretNext, 0, next.length)
     const inserted = next.length - this.doc.length
     if (inserted > 0) {
@@ -402,7 +411,12 @@ export class EditorKernel {
         const lineStart = lineOfOffset(this.doc, insertStart)
         const kind = this.lineStates[lineStart - 1]?.kind
         if (kind === 'blank' || kind === undefined) {
-          const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
+          const paragraphized = paragraphizeTypedBlankLine(
+            this.doc,
+            next,
+            clamped,
+            lineStart === this.pendingEnterLine,
+          )
           if (paragraphized !== null) {
             next = paragraphized.doc
             caretNext = paragraphized.caret
@@ -410,6 +424,9 @@ export class EditorKernel {
         }
       }
     }
+    // The Enter placeholder is single-shot: it names the blank that the NEXT
+    // keystroke turns into text, and only that one.
+    this.pendingEnterLine = -1
     this.doc = next
     this.caret = clamp(caretNext, 0, next.length)
     this.pendingCaret = this.caret
@@ -964,18 +981,23 @@ export class EditorKernel {
         this.commit(renumberLists(edited), live + insert.length)
         return
       }
-      // A plain line, caret at its very END: one fresh line below, opened with a
-      // SINGLE newline. The line's own trailing `\n` is already the boundary to
-      // the next line (a doc-final line without one gains its terminator here).
-      // The caret lands on the fresh line, and typing there continues the SAME
-      // paragraph (a soft break) — exactly like a plain text editor, and like
-      // Shift+Enter. The paragraph gap is made by a SECOND Enter, or by Enter
-      // MID-line, which splits the paragraph in two
-      // (`.scratch/enter-backspace-smoke/issues/10`).
+      // A plain TEXT line, caret at its very END: Enter is a HARD break — the
+      // paragraph ends here and a NEW paragraph starts below it
+      // (`enter-backspace-smoke/01`: any-position Enter is a hard break, the
+      // one case the /10 revision walked back is restored — at the BLOCK
+      // level, a hard break is "a fresh block", not "two more newlines", so
+      // the two-Backspaces complaint that motivated /10 no longer applies).
       //
-      // Inserting at `lineEnd` itself (just before the existing '\n') produced
-      // the same string but left the caret before the break, which made Enter a
-      // silent no-op at the end of any line once.
+      // Block-tree commands do the work:
+      // - caret on the paragraph's LAST line end — `enterEndParagraph` (3c)
+      //   opens a fresh blank block below it; at the document's end that blank
+      //   serializes to nothing and the caret sits on the virtual blank line;
+      // - caret on a line INSIDE a soft-broken paragraph — `enterEndOfLine`
+      //   splits the block there (`[A\nB] → [A][blank][B]`, the rest of the
+      //   paragraph becomes a new paragraph below the blank).
+      // Both land the caret on a fresh blank line that is recorded as the
+      // Enter placeholder: the next keystroke becomes a NEW paragraph's first
+      // character (the paragraphizer fences it), never a soft continuation.
       if (live >= lineEnd) {
         if (currentLine === '') {
           // Blank line: one more blank line — the blank block's span grows by
@@ -992,27 +1014,45 @@ export class EditorKernel {
           this.insertNewlines(at, 1, live + 1)
           return
         }
-        // A single-line PARAGRAPH's end goes through the block-tree command
-        // (box-model migration 3c): the blank block after it grows by a line
-        // (or one is appended at the document's end) — same source as the
-        // string path, caret on the fresh line. Everything else falls back.
         const enterLine = lineOfOffset(this.doc, live)
         const enterKind = this.lineStates[enterLine - 1]?.kind
-        if (enterKind === 'text' && !currentLine.includes('\n')) {
+        if (enterKind === 'text') {
           const ground = this.blockAt(live)
-          const grown = enterEndParagraph(this.doc, ground)
-          if (grown !== null) {
-            const block = this.blocks[ground]
-            if (block === undefined) return
-            this.pushUndo({ value: this.doc, caret: this.caret })
-            this.commit(grown.source, this.offsets[ground] + block.raw.length + grown.caretDelta)
-            return
+          const myBlock = this.blocks[ground]
+          if (myBlock !== undefined) {
+            const local = live - this.offsets[ground]
+            const inside = myBlock.raw.indexOf('\n', local) >= 0
+            if (inside) {
+              // Line INSIDE the paragraph: split here — this line ends the
+              // paragraph, everything below becomes the new paragraph.
+              const split = enterEndOfLine(this.doc, ground, live, local)
+              if (split !== null) {
+                this.pushUndo({ value: this.doc, caret: this.caret })
+                this.commit(split.source, split.caret)
+                this.pendingEnterLine = lineOfOffset(this.doc, this.caret)
+                return
+              }
+            } else {
+              // Paragraph's LAST line end: fresh blank block below (3c).
+              const grown = enterEndParagraph(this.doc, ground)
+              if (grown !== null) {
+                this.pushUndo({ value: this.doc, caret: this.caret })
+                this.commit(
+                  grown.source,
+                  this.offsets[ground] + myBlock.raw.length + grown.caretDelta,
+                )
+                this.pendingEnterLine = lineOfOffset(this.doc, this.caret)
+                return
+              }
+            }
           }
         }
         const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
         // Caret on the FRESH line. A line that already has its trailing newline
         // starts the fresh one at `at`; a doc-final line without one gains its
         // terminator with the insert, so the fresh line starts one past it.
+        // (Non-text lines — headings, prefixed lines, fences — keep the single
+        // newline fallback; their Enter semantics are owned elsewhere.)
         this.insertNewlines(at, 1, lineEnd === this.doc.length ? at + 1 : at)
         return
       }
