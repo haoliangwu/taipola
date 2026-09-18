@@ -1879,6 +1879,28 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('标题行尾 Enter：也是创建新块（块级），打字即成新段落', async () => {
+    const r = renderEditor('# 标题\n')
+    await flush()
+    // run 0 是 `# ` 标记，行尾 = run 1 的末尾。
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // 标题后开一个空块（硬换行 = 创建新块，标题同样走块级 Enter）。
+    expect(r.getDoc()).toBe('# 标题\n\n')
+
+    await r.user.keyboard('x')
+    await flush()
+    // 打字 = 新段落（普通文本，不是新标题）。
+    expect(r.getDoc()).toBe('# 标题\n\nx\n')
+    const texts = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
+      .filter((el) => (el.textContent ?? '') !== '')
+      .map((el) => el.textContent)
+    expect(texts).toEqual(['# 标题', 'x'])
+    await assertDomMatchesSource(r)
+  })
+
   it('硬换行拆出的段没有行尾 <br>；空行分隔的两段行盒干净', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()

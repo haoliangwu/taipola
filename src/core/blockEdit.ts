@@ -185,14 +185,14 @@ export function backspaceJoinParagraphs(source: string, index: number): string |
   return joined === null ? null : serializeBlocks(joined)
 }
 /**
- * Enter at a paragraph's END opens a fresh line below it — the blank block
- * after it grows by one line, or one is appended when there is none (the
- * paragraph is the document's last and carries no trailing newline).
+ * Enter at a PARAGRAPH or HEADING's END opens a fresh line below it — the
+ * blank block after it grows by one line, or one is appended when there is
+ * none (the block is the document's last and carries no trailing newline).
  *
  * 块语义：`[P, blank(k行)] → [P, blank(k+1行)]`，或 `[P(末块)] → [P, blank(1行)]`。
- * 接受**多行软换行段**：段尾 Enter 开出一个新空行，随后键入经 kernel 的
- * Enter-占位标记升级为**新段落**（`enter-backspace-smoke/01` 的"行尾 Enter =
- * 硬换行"，块级表达 = 段落下方一个空块，`paragraph-spacing/01` 九审）。
+ * 接受**多行软换行段**与**标题**：行尾 Enter = 硬换行（开出一个新块），
+ * 光标落在这个新空块上，随后键入经段落化成为**新段落**（`enter-backspace-smoke/01`
+ * 的"行尾 Enter = 硬换行"，块级表达 = 段落下方一个空块，`paragraph-spacing/01` 九审）。
  *
  * 返回新树与新增字符数（1）。光标落点 = P 的 raw 之后第一个换行后 —— kernel
  * 用自身 offsets 计算绝对位置。
@@ -202,7 +202,7 @@ export function growParagraphGap(
   index: number,
 ): { tree: BlockTree; addedChars: 1; caretDelta: number } | null {
   const block = tree.blocks[index]
-  if (!block || block.kind !== 'paragraph') return null
+  if (!block || (block.kind !== 'paragraph' && block.kind !== 'heading')) return null
   const next = tree.blocks[index + 1]
   // Enter opens ONE fresh blank line right below the paragraph. At the
   // document's end that blank serializes to nothing (the trailing newline

@@ -1001,7 +1001,7 @@ export class EditorKernel {
         }
         const enterLine = lineOfOffset(this.doc, live)
         const enterKind = this.lineStates[enterLine - 1]?.kind
-        if (enterKind === 'text') {
+        if (enterKind === 'text' || enterKind === 'heading') {
           const ground = this.blockAt(live)
           const myBlock = this.blocks[ground]
           if (myBlock !== undefined) {
