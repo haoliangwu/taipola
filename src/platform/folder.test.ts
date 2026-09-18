@@ -16,13 +16,33 @@ interface FakeNode {
   children?: FakeNode[]
 }
 
+/**
+ * A file handle bound to its node and its parent, so the mutations the seam
+ * offers (move / remove) actually change the tree the fake serves. Renames are
+ * in place: a cross-directory move is not something this seam does.
+ */
+function fileHandle(node: FakeNode, parent: FakeNode) {
+  return {
+    kind: 'file' as const,
+    name: node.name,
+    async move(_directory: unknown, newName?: string) {
+      if (newName !== undefined) node.name = newName
+    },
+    async remove() {
+      if (!parent.children) return
+      const index = parent.children.indexOf(node)
+      if (index >= 0) parent.children.splice(index, 1)
+    },
+  }
+}
+
 function directory(node: FakeNode) {
   return {
     kind: 'directory' as const,
     name: node.name,
     async *values() {
       for (const child of node.children ?? []) {
-        yield child.kind === 'directory' ? directory(child) : { kind: 'file' as const, name: child.name }
+        yield child.kind === 'directory' ? directory(child) : fileHandle(child, node)
       }
     },
     async getDirectoryHandle(name: string) {
@@ -33,13 +53,27 @@ function directory(node: FakeNode) {
       if (child.kind !== 'directory') throw new TypeError(`not a directory: ${name}`)
       return directory(child)
     },
-    async getFileHandle(name: string) {
-      const child = (node.children ?? []).find((candidate) => candidate.name === name)
-      if (!child) throw new DOMException(`no such file: ${name}`, 'NotFoundError')
+    async getFileHandle(name: string, options?: { create?: boolean }) {
+      let child = (node.children ?? []).find((candidate) => candidate.name === name)
+      if (!child) {
+        // `create: true` makes the file, exactly as the browser would. Nothing
+        // else may conjure one up.
+        if (!(options?.create === true)) {
+          throw new DOMException(`no such file: ${name}`, 'NotFoundError')
+        }
+        child = { name, kind: 'file' }
+        node.children = [...(node.children ?? []), child]
+      }
       // A name that exists but is a directory: the kind mismatch a browser
       // reports as TypeMismatchError (older Chrome) — `fileAt` maps it too.
       if (child.kind !== 'file') throw new DOMException(`not a file: ${name}`, 'TypeMismatchError')
-      return { kind: 'file' as const, name: child.name }
+      return fileHandle(child, node)
+    },
+    async removeEntry(name: string) {
+      const children = node.children ?? []
+      const index = children.findIndex((candidate) => candidate.name === name)
+      if (index < 0) throw new DOMException(`no such entry: ${name}`, 'NotFoundError')
+      children.splice(index, 1)
     },
   }
 }
@@ -71,6 +105,11 @@ function apiWith(handle: ReturnType<typeof directory> | null, fail?: unknown) {
       return handle
     },
   }
+}
+
+/** A fresh copy of the fixture, for tests that MUTATE it. */
+function freshTree() {
+  return directory(structuredClone(TREE))
 }
 
 describe('canOpen', () => {
@@ -178,19 +217,19 @@ describe('fileAt', () => {
     const root = await folders.pick()
     if (!root) throw new Error('expected a folder')
 
-    expect(await folders.fileAt(root, '笔记.md')).toEqual({
+    expect(await folders.fileAt(root, '笔记.md')).toMatchObject({
       name: '笔记.md',
       path: '笔记.md',
       kind: 'file',
       handle: { kind: 'file', name: '笔记.md' },
     })
-    expect(await folders.fileAt(root, '章节/一.md')).toEqual({
+    expect(await folders.fileAt(root, '章节/一.md')).toMatchObject({
       name: '一.md',
       path: '章节/一.md',
       kind: 'file',
       handle: { kind: 'file', name: '一.md' },
     })
-    expect(await folders.fileAt(root, '章节/上/序.md')).toEqual({
+    expect(await folders.fileAt(root, '章节/上/序.md')).toMatchObject({
       name: '序.md',
       path: '章节/上/序.md',
       kind: 'file',
@@ -217,5 +256,109 @@ describe('fileAt', () => {
     expect(await folders.fileAt(root, '笔记.md/下面.md')).toBeNull()
     // 最后一段是目录：getFileHandle 拿到目录名 → 假 API 报 TypeMismatchError。
     expect(await folders.fileAt(root, '章节')).toBeNull()
+  })
+})
+
+describe('createFile', () => {
+  it('在目录里造出一个空文件，路径相对根；list 能看到它', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    const created = await folders.createFile(root, '', '新文档.md')
+
+    expect(created).toMatchObject({
+      name: '新文档.md',
+      path: '新文档.md',
+      kind: 'file',
+      handle: { kind: 'file', name: '新文档.md' },
+    })
+    expect((await folders.list(root, '')).some((e) => e.path === '新文档.md')).toBe(true)
+  })
+
+  it('深层目录也能建', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    const created = await folders.createFile(root, '章节/上', '续.md')
+
+    expect(created.path).toBe('章节/上/续.md')
+    expect((await folders.list(root, '章节/上')).some((e) => e.path === '章节/上/续.md')).toBe(true)
+  })
+
+  it('名字已存在时浏览器静默返回已有的那个（查重是调用者的责任）', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    const created = await folders.createFile(root, '', '笔记.md')
+
+    expect(created.name).toBe('笔记.md')
+    expect((await folders.list(root, '')).length).toBe(4) // 没有多出一条
+  })
+
+  it('目录不存在就抛出去，调用者去提示', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await expect(folders.createFile(root, '没有这个目录', 'x.md')).rejects.toThrow()
+  })
+})
+
+describe('renameFile', () => {
+  it('原地改名：旧路径找不到了，新路径找得到', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await folders.renameFile(root, '笔记.md', '新名字.md')
+
+    expect(await folders.fileAt(root, '笔记.md')).toBeNull()
+    expect(await folders.fileAt(root, '新名字.md')).not.toBeNull()
+  })
+
+  it('深层文件同样改', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await folders.renameFile(root, '章节/一.md', '二.md')
+
+    expect(await folders.fileAt(root, '章节/一.md')).toBeNull()
+    expect(await folders.fileAt(root, '章节/二.md')).not.toBeNull()
+  })
+
+  it('文件不在了就抛出去（调用者先查过重，也拦不住并发删除）', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await expect(folders.renameFile(root, '没了.md', '别的.md')).rejects.toThrow()
+  })
+})
+
+describe('removeFile', () => {
+  it('删掉文件：list 不再列它，fileAt 找不到', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await folders.removeFile(root, '笔记.md')
+
+    expect(await folders.fileAt(root, '笔记.md')).toBeNull()
+    expect((await folders.list(root, '')).some((e) => e.path === '笔记.md')).toBe(false)
+  })
+
+  it('深层文件同样删', async () => {
+    const folders = fileSystemAccessFolders(apiWith(freshTree()))
+    const root = await folders.pick()
+    if (!root) throw new Error('expected a folder')
+
+    await folders.removeFile(root, '章节/上/序.md')
+
+    expect(await folders.fileAt(root, '章节/上/序.md')).toBeNull()
+    expect((await folders.list(root, '章节/上')).length).toBe(0)
   })
 })

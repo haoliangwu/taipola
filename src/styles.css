@@ -831,6 +831,21 @@ body {
   background: var(--accent);
 }
 
+/* The row that asks for a name: a tree row whose button became an input. The
+   input fills the row; the accent border says which row it belongs to. */
+.tree-edit-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  outline: none;
+}
+
 /* ==========================================================================
    Document surface
    One scrolling container holding the source-backed view. Wrapping is the

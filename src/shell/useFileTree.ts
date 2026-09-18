@@ -43,6 +43,16 @@ export interface FileTreeState {
   toggle(path: string): void
   /** Re-reads every level that has been read. */
   refresh(): void
+  /**
+   * Creates an empty file inside a directory. The created row is opened by the
+   * caller, so this returns its entry. `null` on failure (permission, an
+   * unreadable directory — a message is shown).
+   */
+  createFile(path: string, name: string): Promise<FolderEntry | null>
+  /** Renames a file in place. `false` on failure (a message is shown). */
+  renameFile(path: string, newName: string): Promise<boolean>
+  /** Removes a file. `false` on failure (a message is shown). */
+  removeFile(path: string): Promise<boolean>
 }
 
 export function useFileTree(onError: (message: string) => void): FileTreeState {
@@ -189,6 +199,54 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
     for (const path of new Set(['', ...children.keys()])) void read(root, path)
   }, [children, read, root])
 
+  // A mutation ends the same way every time: re-read whatever has been read, so
+  // the new/changed/deleted row shows up — or, when the level can no longer be
+  // read, the rows it still has stay rather than a blank.
+  const createFile = useCallback(
+    async (path: string, name: string) => {
+      if (root === null) return null
+      try {
+        const entry = await folders.createFile(root, path, name)
+        refresh()
+        return entry
+      } catch (error) {
+        onError(`新建文件失败：${String(error)}`)
+        return null
+      }
+    },
+    [onError, refresh, root],
+  )
+
+  const renameFile = useCallback(
+    async (path: string, newName: string) => {
+      if (root === null) return false
+      try {
+        await folders.renameFile(root, path, newName)
+        refresh()
+        return true
+      } catch (error) {
+        onError(`重命名失败：${String(error)}`)
+        return false
+      }
+    },
+    [onError, refresh, root],
+  )
+
+  const removeFile = useCallback(
+    async (path: string) => {
+      if (root === null) return false
+      try {
+        await folders.removeFile(root, path)
+        refresh()
+        return true
+      } catch (error) {
+        onError(`删除失败：${String(error)}`)
+        return false
+      }
+    },
+    [onError, refresh, root],
+  )
+
   const rememberFile = useCallback((path: string) => {
     savedFolder.rememberFile(path).catch(() => {})
   }, [])
@@ -205,5 +263,8 @@ export function useFileTree(onError: (message: string) => void): FileTreeState {
     resume,
     toggle,
     refresh,
+    createFile,
+    renameFile,
+    removeFile,
   }
 }

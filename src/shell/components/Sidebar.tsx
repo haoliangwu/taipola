@@ -2,7 +2,7 @@ import type { Heading } from '../../core/markdown'
 import type { FolderEntry } from '../../platform/folder'
 import type { FileTreeState } from '../useFileTree'
 import type { SidebarPanel } from '../useSidebarPanel'
-import { FileTree } from './FileTree'
+import { FileTree, type TreeEditing } from './FileTree'
 import { Outline } from './Outline'
 
 interface SidebarProps {
@@ -16,6 +16,15 @@ interface SidebarProps {
   hasDraft(entry: FolderEntry): boolean
   onOpenEntry(entry: FolderEntry): void
   onOpenFolder(): void
+  /** Starts a new document at the folder's root (the tree's top edit row). */
+  onNewFile(): void
+  /** The tree's inline edit currently on screen (held by the shell, like the
+      tree menu itself — the component only draws the input). */
+  editing: TreeEditing | null
+  onRowMenu(entry: FolderEntry, x: number, y: number): void
+  onEditSubmit(name: string): void
+  onEditCancel(): void
+  onTreeError(message: string): void
   headings: Heading[]
   activeLine: number
   onJump(line: number): void
@@ -39,6 +48,12 @@ export function Sidebar({
   hasDraft,
   onOpenEntry,
   onOpenFolder,
+  onNewFile,
+  editing,
+  onRowMenu,
+  onEditSubmit,
+  onEditCancel,
+  onTreeError,
   headings,
   activeLine,
   onJump,
@@ -61,6 +76,11 @@ export function Sidebar({
               {tree.root?.name ?? '没有打开文件夹'}
             </span>
             <span className="sidebar-actions">
+              {tree.root !== null && (
+                <button type="button" className="sidebar-action" onClick={onNewFile}>
+                  新建
+                </button>
+              )}
               {tree.root !== null && (
                 <button type="button" className="sidebar-action" onClick={tree.refresh}>
                   刷新
@@ -92,6 +112,11 @@ export function Sidebar({
               activePath={activePath}
               hasDraft={hasDraft}
               onOpen={onOpenEntry}
+              editing={editing}
+              onRowMenu={onRowMenu}
+              onEditSubmit={onEditSubmit}
+              onEditCancel={onEditCancel}
+              onError={onTreeError}
             />
           )}
         </>

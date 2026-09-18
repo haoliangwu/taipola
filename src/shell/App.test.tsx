@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { documents } from '../platform/documents'
@@ -1070,6 +1070,316 @@ describe('侧栏打开文件夹', () => {
     try {
       expect(view.container.querySelector('.sidebar-tab.is-active')?.textContent).toBe('文件')
     } finally {
+      view.unmount()
+    }
+  })
+})
+
+/**
+ * 文件树的新建 / 重命名 / 删除（`.scratch/tree-crud/issues/01`）。
+ *
+ * 三个操作都从行的右键菜单出发：目录行只有「新建文件」，文件行有「重命名」与
+ * 「删除」。菜单项、内联输入行、删除前的确认框各钉在这里。对磁盘的真实调用在
+ * `platform/folder.test.ts` 用假 API 测过，所以这里把 folders 的突变方法做成
+ * 有状态的内存桩 —— 让「行真的变了」也能断言，而不只是「方法被调了」。
+ */
+describe('文件树的新建 / 重命名 / 删除', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    stubSavedFolder()
+    vi.spyOn(folders, 'canOpen').mockReturnValue(true)
+    vi.spyOn(documents, 'openEntry').mockImplementation(async (doc) => ({
+      status: 'opened',
+      document: doc,
+      content: '',
+      modifiedAt: 1,
+    }))
+  })
+
+  const ROOT = { name: '干草堆', handle: { dir: '干草堆' } }
+
+  /**
+   * A folder stub that behaves like the real folders seam: the mutations change
+   * what `list` serves next, so a refresh after a mutation shows the new state.
+   */
+  function setup(extraRoot: FolderEntry[] = []) {
+    const rootEntries: FolderEntry[] = [
+      { name: '章节', path: '章节', kind: 'directory', handle: {} },
+      { name: '笔记.md', path: '笔记.md', kind: 'file', handle: {} },
+      ...extraRoot,
+    ]
+    const chapterEntries: FolderEntry[] = [
+      { name: '一.md', path: '章节/一.md', kind: 'file', handle: {} },
+    ]
+    const stubs = {
+      list: vi.spyOn(folders, 'list').mockImplementation(async (_root, path) =>
+        path === '章节' ? chapterEntries : [...rootEntries],
+      ),
+      pick: vi.spyOn(folders, 'pick').mockResolvedValue(ROOT),
+      createFile: vi.spyOn(folders, 'createFile').mockImplementation(async (_root, path, name) => {
+        const entry = {
+          name,
+          path: path === '' ? name : `${path}/${name}`,
+          kind: 'file' as const,
+          handle: {},
+        }
+        ;(path === '章节' ? chapterEntries : rootEntries).push(entry)
+        return entry
+      }),
+      renameFile: vi.spyOn(folders, 'renameFile').mockImplementation(async (_root, oldPath, name) => {
+        const list = oldPath.startsWith('章节/') ? chapterEntries : rootEntries
+        const index = list.findIndex((entry) => entry.path === oldPath)
+        if (index < 0) return
+        const entry = list[index]
+        if (entry === undefined) return
+        list[index] = {
+          ...entry,
+          name,
+          path: oldPath.slice(0, oldPath.length - entry.name.length) + name,
+        }
+      }),
+      removeFile: vi.spyOn(folders, 'removeFile').mockImplementation(async (_root, path) => {
+        for (const list of [rootEntries, chapterEntries]) {
+          const index = list.findIndex((entry) => entry.path === path)
+          if (index >= 0) {
+            list.splice(index, 1)
+            return
+          }
+        }
+      }),
+    }
+    return { rootEntries, chapterEntries, stubs }
+  }
+
+  async function openFolder(view: ReturnType<typeof render>) {
+    await act(async () => {
+      findButton(view, '打开文件夹').click()
+    })
+  }
+
+  const treeRows = (view: ReturnType<typeof render>) =>
+    [...view.container.querySelectorAll('.file-tree .tree-item')].map((el) =>
+      (el.textContent ?? '').replace(/[▸▾]/g, ''),
+    )
+
+  const treeRow = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.file-tree .tree-item')].find((el) =>
+      (el.textContent ?? '').includes(label),
+    ) as HTMLButtonElement
+
+  const menuItem = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.table-menu [role="menuitem"]')].find(
+      (el) => el.textContent?.trim() === label,
+    ) as HTMLButtonElement
+
+  const sidebarAction = (view: ReturnType<typeof render>, label: string) =>
+    [...view.container.querySelectorAll('.sidebar-action')].find(
+      (el) => el.textContent?.trim() === label,
+    ) as HTMLButtonElement | undefined
+
+  it('右键文件行：菜单有重命名与删除；点别处关掉', async () => {
+    setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      const menu = view.container.querySelector('.table-menu')
+      expect(menu).not.toBeNull()
+      expect(menu!.querySelectorAll('[role="menuitem"]').length).toBe(2)
+      expect(menu!.textContent).toContain('重命名')
+      expect(menu!.textContent).toContain('删除')
+
+      await user.click(view.container.querySelector('.doc') as HTMLElement)
+      expect(view.container.querySelector('.table-menu')).toBeNull()
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('重命名：回车后行与标题栏都换新名，记忆记新路径', async () => {
+    const { stubs } = setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      // 打开笔记.md —— 文档标题先跟着它。
+      await act(async () => {
+        treeRow(view, '笔记.md').click()
+      })
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('笔记.md')
+
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      await user.click(menuItem(view, '重命名'))
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      expect(input.value).toBe('笔记.md')
+      await user.clear(input)
+      await user.type(input, '备忘录')
+      await user.keyboard('{Enter}')
+      await act(async () => {})
+
+      expect(stubs.renameFile).toHaveBeenCalledWith(ROOT, '笔记.md', '备忘录.md')
+      expect(treeRows(view)).toContain('备忘录.md')
+      expect(treeRows(view)).not.toContain('笔记.md')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('备忘录.md')
+      expect(vi.mocked(savedFolder.rememberFile)).toHaveBeenCalledWith('备忘录.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('重命名撞名：报错停在输入框，没真改', async () => {
+    const { stubs } = setup([{ name: '待办.md', path: '待办.md', kind: 'file', handle: {} }])
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      await user.click(menuItem(view, '重命名'))
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      await user.clear(input)
+      await user.type(input, '待办')
+      await user.keyboard('{Enter}')
+      await act(async () => {})
+
+      expect(stubs.renameFile).not.toHaveBeenCalled()
+      expect(view.container.querySelector('.toast')?.textContent).toContain('已经存在')
+      expect(view.container.querySelector('.tree-edit-input')).not.toBeNull()
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('重命名按 Esc：取消，行原样，一个接口都不调', async () => {
+    const { stubs } = setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      await user.click(menuItem(view, '重命名'))
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      await user.type(input, '新名字')
+      await user.keyboard('{Escape}')
+      await act(async () => {})
+
+      expect(stubs.renameFile).not.toHaveBeenCalled()
+      expect(view.container.querySelector('.tree-edit-input')).toBeNull()
+      expect(treeRows(view)).toContain('笔记.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('删除：拒绝不动，确认才删', async () => {
+    const { stubs } = setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      await user.click(menuItem(view, '删除'))
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('笔记.md'))
+      expect(stubs.removeFile).not.toHaveBeenCalled()
+      expect(treeRows(view)).toContain('笔记.md')
+
+      confirm.mockReturnValue(true)
+      fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
+      await user.click(menuItem(view, '删除'))
+      await act(async () => {})
+
+      expect(stubs.removeFile).toHaveBeenCalledWith(ROOT, '笔记.md')
+      expect(treeRows(view)).not.toContain('笔记.md')
+      expect(view.container.querySelector('.toast')?.textContent).toContain('已删除')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('目录行右键只有「新建文件」；点它自动展开，输入行出现在子层', async () => {
+    const { stubs, chapterEntries } = setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      expect(treeRow(view, '章节').getAttribute('aria-expanded')).toBe('false')
+
+      fireEvent.contextMenu(treeRow(view, '章节'), { clientX: 120, clientY: 200 })
+      const menu = view.container.querySelector('.table-menu')
+      expect(menu!.querySelectorAll('[role="menuitem"]').length).toBe(1)
+      expect(menu!.textContent).toBe('新建文件')
+      await user.click(menuItem(view, '新建文件'))
+      await act(async () => {})
+
+      expect(treeRow(view, '章节').getAttribute('aria-expanded')).toBe('true')
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      expect(input?.getAttribute('aria-label')).toBe('新文件名字')
+      expect(input.value).toBe('untitled.md')
+      await user.click(input)
+      await user.keyboard('{Enter}')
+      await act(async () => {})
+
+      expect(stubs.createFile).toHaveBeenCalledWith(ROOT, '章节', 'untitled.md')
+      expect(chapterEntries.some((entry) => entry.name === 'untitled.md')).toBe(true)
+      // 从文件夹里打开的文件，标题栏显示的是它在文件夹里的路径。
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('章节/untitled.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('根级「新建」按钮：默认名撞车时自动递增', async () => {
+    const { stubs } = setup([{ name: 'untitled.md', path: 'untitled.md', kind: 'file', handle: {} }])
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      await user.click(sidebarAction(view, '新建')!)
+      await act(async () => {})
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      expect(input.value).toBe('untitled 2.md')
+      await user.click(input)
+      await user.keyboard('{Enter}')
+      await act(async () => {})
+
+      expect(stubs.createFile).toHaveBeenCalledWith(ROOT, '', 'untitled 2.md')
+      expect(view.container.querySelector('.doc-name')?.textContent).toBe('untitled 2.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
+  it('名字不带 .md 会自动补上', async () => {
+    const { stubs } = setup()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+
+      await user.click(sidebarAction(view, '新建')!)
+      await act(async () => {})
+      const input = view.container.querySelector('.tree-edit-input') as HTMLInputElement
+      await user.clear(input)
+      await user.type(input, '草稿')
+      await user.keyboard('{Enter}')
+      await act(async () => {})
+
+      expect(stubs.createFile).toHaveBeenCalledWith(ROOT, '', '草稿.md')
+    } finally {
+      vi.restoreAllMocks()
       view.unmount()
     }
   })

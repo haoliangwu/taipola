@@ -7,7 +7,18 @@
  * happened to hand them over.
  */
 import { describe, expect, it } from 'vitest'
-import { childPath, isHiddenName, isMarkdownName, visibleEntries, type TreeEntry } from './fileTree'
+import {
+  childPath,
+  editNameError,
+  ensureMarkdownExtension,
+  firstFreeName,
+  isHiddenName,
+  isMarkdownName,
+  lastSegment,
+  parentOf,
+  visibleEntries,
+  type TreeEntry,
+} from './fileTree'
 
 function entry(name: string, kind: TreeEntry['kind'] = 'file'): TreeEntry {
   return { name, path: name, kind }
@@ -109,5 +120,49 @@ describe('visibleEntries', () => {
     visibleEntries(input)
 
     expect(input.map((row) => row.name)).toEqual(['b.md', 'a.md'])
+  })
+})
+
+describe('命名一个新文档/重命名：ensure/firstFree/error', () => {
+  it('ensureMarkdownExtension 补 .md，已有的不动，大小写不敏感', () => {
+    expect(ensureMarkdownExtension('新文档')).toBe('新文档.md')
+    expect(ensureMarkdownExtension('新文档.md')).toBe('新文档.md')
+    expect(ensureMarkdownExtension('新文档.MD')).toBe('新文档.MD')
+    expect(ensureMarkdownExtension('新文档.markdown')).toBe('新文档.markdown')
+  })
+
+  it('firstFreeName：没撞车就用原名，撞了从 2 往上数', () => {
+    expect(firstFreeName(new Set(), 'untitled.md')).toBe('untitled.md')
+    expect(firstFreeName(new Set(['untitled.md']), 'untitled.md')).toBe('untitled 2.md')
+    expect(firstFreeName(new Set(['untitled.md', 'untitled 2.md']), 'untitled.md')).toBe(
+      'untitled 3.md',
+    )
+    // 别的名字撞车时同样递增，后缀保持在最后。
+    expect(firstFreeName(new Set(['草稿.md']), '草稿.md')).toBe('草稿 2.md')
+  })
+
+  it('editNameError：空名、路径分隔符、隐藏名、撞名各说各的', () => {
+    const taken = new Set(['已存在.md'])
+    expect(editNameError('', taken, null)).toContain('不能为空')
+    expect(editNameError('a/b.md', taken, null)).toContain('/')
+    expect(editNameError('a\\b.md', taken, null)).toContain('\\')
+    expect(editNameError('.hidden.md', taken, null)).toContain('不会显示')
+    expect(editNameError('node_modules', taken, null)).toContain('不会显示')
+    expect(editNameError('已存在.md', taken, null)).toContain('已经存在')
+    expect(editNameError('.', taken, null)).toContain('不能用')
+  })
+
+  it('editNameError：被排除的原名不算撞车，其他同名才算', () => {
+    const taken = new Set(['笔记.md'])
+    expect(editNameError('笔记.md', taken, '笔记.md')).toBeNull()
+    expect(editNameError('笔记.md', taken, null)).toContain('已经存在')
+  })
+
+  it('parentOf 与 lastSegment 互为反义', () => {
+    expect(parentOf('章节/一.md')).toBe('章节')
+    expect(parentOf('一.md')).toBe('')
+    expect(lastSegment('章节/一.md')).toBe('一.md')
+    expect(lastSegment('一.md')).toBe('一.md')
+    expect(childPath(parentOf('章节/一.md'), '二.md')).toBe('章节/二.md')
   })
 })

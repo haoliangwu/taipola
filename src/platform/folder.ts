@@ -18,7 +18,7 @@
  * path walking and the entry shape can be tested against a fake API; the seam is
  * the interface above it.
  */
-import { childPath } from '../core/fileTree'
+import { childPath, lastSegment, parentOf } from '../core/fileTree'
 import { isAbort } from './abort'
 
 /** A directory the user opened. One at a time, replaced when another is picked. */
@@ -54,6 +54,25 @@ export interface Folders {
    * here; reading the content is the document seam's (`documents.openEntry`).
    */
   fileAt(root: FolderRoot, path: string): Promise<FolderEntry | null>
+  /**
+   * Creates an EMPTY file by name inside a directory. Throws on permission
+   * failure. When the name already exists the browser hands back the existing
+   * handle silently — callers check the name against the tree before asking.
+   */
+  createFile(root: FolderRoot, path: string, name: string): Promise<FolderEntry>
+  /**
+   * Removes the FILE at a path. Deliberately files only: a directory removal is
+   * a whole-tree decision this seam does not get to make. Throws on permission
+   * failure. There is no undo — the filesystem has no recycle bin here.
+   */
+  removeFile(root: FolderRoot, path: string): Promise<void>
+  /**
+   * Renames the FILE at a path, in place. `move()` — the only rename the File
+   * System API offers — exists on file handles only, so this is files only too.
+   * Throws on permission failure; the browser rejects a move onto an existing
+   * name, so callers check first.
+   */
+  renameFile(root: FolderRoot, path: string, newName: string): Promise<void>
 }
 
 /**
@@ -67,12 +86,18 @@ interface DirectoryHandleLike {
   readonly name: string
   values(): AsyncIterableIterator<FileHandleLike | DirectoryHandleLike>
   getDirectoryHandle(name: string): Promise<DirectoryHandleLike>
-  getFileHandle(name: string): Promise<FileHandleLike>
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>
+  removeEntry(name: string): Promise<void>
 }
 
 interface FileHandleLike {
   readonly kind: 'file'
   readonly name: string
+  /** The File System API's rename: move within (or across) directories. */
+  move(parent: DirectoryHandleLike, newName?: string): Promise<void>
+  /** Removes this entry. Files only in this seam — the directory half is the
+      caller's shape to decide about, via `removeEntry`. */
+  remove(): Promise<void>
 }
 
 interface DirectoryPickerWindow {
@@ -125,6 +150,28 @@ export function fileSystemAccessFolders(api: DirectoryPickerWindow): Folders {
         if (isMissingPath(error)) return null
         throw error
       }
+    },
+
+    async createFile(root, path, name) {
+      const directory = await directoryAt(root.handle as DirectoryHandleLike, path)
+      // `create: true` returns the EXISTING file when the name is taken — the
+      // browsers' silent behaviour, so callers must have checked the name first.
+      const handle = await directory.getFileHandle(name, { create: true })
+      return { name, path: childPath(path, name), kind: 'file', handle }
+    },
+
+    async removeFile(root, path) {
+      const directory = await directoryAt(root.handle as DirectoryHandleLike, parentOf(path))
+      const handle = await directory.getFileHandle(lastSegment(path))
+      await handle.remove()
+    },
+
+    async renameFile(root, path, newName) {
+      const directory = await directoryAt(root.handle as DirectoryHandleLike, parentOf(path))
+      const handle = await directory.getFileHandle(lastSegment(path))
+      // Moving a file onto its own directory with a new name IS the rename: the
+      // File System API has no other. The handle stays the same entry afterwards.
+      await handle.move(directory, newName)
     },
   }
 }

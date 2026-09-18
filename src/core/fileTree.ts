@@ -72,6 +72,62 @@ export function childPath(parent: string, name: string): string {
   return parent === '' ? name : `${parent}/${name}`
 }
 
+/** `章节/一.md` → `章节`, `一.md` → `''`. The inverse of `childPath`. */
+export function parentOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
+
+/** `章节/一.md` → `一.md`. The tail of a path. */
+export function lastSegment(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? path : path.slice(slash + 1)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  naming a new or renamed document                                           */
+/* -------------------------------------------------------------------------- */
+
+/** `笔记` → `笔记.md`; `笔记.md` and `笔记.MARKDOWN` already end in the kept set. */
+export function ensureMarkdownExtension(name: string): string {
+  return isMarkdownName(name) ? name : `${name}.md`
+}
+
+/**
+ * A free name next to `base`: `untitled.md` when it is free, otherwise
+ * `untitled 2.md`, `untitled 3.md`… A directory of five `untitled`s is far more
+ * likely than a user who wants to count them by hand.
+ */
+export function firstFreeName(taken: ReadonlySet<string>, base: string): string {
+  if (!taken.has(base)) return base
+  const stem = base.slice(0, base.lastIndexOf('.'))
+  for (let n = 2; ; n++) {
+    const candidate = `${stem} ${n}${base.slice(base.lastIndexOf('.'))}`
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
+/**
+ * Why a name may not become a row, or null when it may.
+ *
+ * The rules an editor adds on top of the filesystem's: a name that would vanish
+ * from the tree (hidden, `node_modules`), a name that breaks the path shape
+ * (`/`, `\`), and a name already taken by a sibling row. `exclude` names the
+ * entry being renamed, so its own name is not a collision.
+ */
+export function editNameError(
+  name: string,
+  taken: ReadonlySet<string>,
+  exclude: string | null,
+): string | null {
+  if (name.trim() === '') return '名字不能为空'
+  if (name.includes('/') || name.includes('\\')) return '名字不能包含 / 或 \\'
+  if (name === '.' || name === '..') return '这个名字不能用'
+  if (isHiddenName(name)) return '这个名字开头的文件不会显示在树里'
+  if (taken.has(name) && name !== exclude) return '这个名字已经存在'
+  return null
+}
+
 /**
  * The rows of one directory, in the order they should be shown.
  *

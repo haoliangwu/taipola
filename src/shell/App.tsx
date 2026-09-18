@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Editor, type EditorHandle } from './components/Editor'
 import { TableMenu, type TableMenuCommand, type TableMenuState } from './components/TableMenu'
+import { TreeMenu, type TreeMenuCommand, type TreeMenuState } from './components/TreeMenu'
 import { HelpPanel } from './components/HelpPanel'
 import { Sidebar } from './components/Sidebar'
+import type { TreeEditing } from './components/FileTree'
 import {
   BoldIcon,
   BulletListIcon,
@@ -43,6 +45,7 @@ import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
 import { folders, type FolderEntry } from '../platform/folder'
 import type { FolderPlacement } from '../core/fileTree'
+import { childPath, parentOf } from '../core/fileTree'
 import { THEME_LABEL, useTheme } from './useTheme'
 import { useFileTree } from './useFileTree'
 import { useSidebarPanel } from './useSidebarPanel'
@@ -685,6 +688,71 @@ export default function App() {
 
   /** The keyboard reference, behind the titlebar's 帮助 button (desktop only). */
   const [helpOpen, setHelpOpen] = useState(false)
+
+  // --- folder tree: right-click menu and the inline edit it starts ----------
+  const [treeMenu, setTreeMenu] = useState<TreeMenuState | null>(null)
+  const [treeEditing, setTreeEditing] = useState<TreeEditing | null>(null)
+
+  /** 删除：a confirm first — the filesystem has no recycle bin behind this. */
+  const deleteTreeFile = useCallback(
+    async (entry: FolderEntry) => {
+      if (!window.confirm(`确定删除「${entry.name}」吗？删除不会进回收站。`)) return
+      if (await tree.removeFile(entry.path)) notify(`已删除 ${entry.name}`)
+    },
+    [notify, tree.removeFile],
+  )
+
+  /** The two menus are siblings with the same habits: Escape and an outside
+      click close the menu; choosing an item closes it and does the thing. */
+  const runTreeMenuCommand = useCallback(
+    (command: TreeMenuCommand, entry: FolderEntry) => {
+      if (command === 'createFile') setTreeEditing({ kind: 'create', dirPath: entry.path })
+      else if (command === 'rename') setTreeEditing({ kind: 'rename', entry })
+      else void deleteTreeFile(entry)
+    },
+    [deleteTreeFile],
+  )
+
+  const handleTreeRowMenu = useCallback((entry: FolderEntry, x: number, y: number) => {
+    setTreeMenu({ x, y, entry })
+  }, [])
+
+  const handleTreeEditCancel = useCallback(() => {
+    setTreeEditing(null)
+  }, [])
+
+  /** A validated name (`core/fileTree` said it was fine to use). */
+  const handleTreeEditSubmit = useCallback(
+    (name: string) => {
+      if (treeEditing === null) return
+      setTreeEditing(null)
+      void (async () => {
+        if (treeEditing.kind === 'create') {
+          const entry = await tree.createFile(treeEditing.dirPath, name)
+          if (entry === null) return
+          notify(`已新建 ${entry.name}`)
+          // A new file IS a new document: adopt it exactly like a tree click.
+          await handleOpenEntry(entry)
+        } else {
+          const { entry } = treeEditing
+          const renamed = await tree.renameFile(entry.path, name)
+          if (!renamed) return
+          notify(`已重命名为 ${name}`)
+          // The open document, when it was the renamed file, follows the file:
+          // its title is the name, and a reload must find it at the new path.
+          if (activePath === entry.path) {
+            setFileName(name)
+            setFilePlacement((placement) =>
+              placement === null ? placement : { ...placement, path: childPath(parentOf(entry.path), name) },
+            )
+            tree.rememberFile(childPath(parentOf(entry.path), name))
+          }
+        }
+      })()
+    },
+    [activePath, handleOpenEntry, notify, tree, treeEditing],
+  )
+
   const runTableCommand = useCallback(
     (command: TableMenuCommand) => {
       setTableMenu(null)
@@ -1133,6 +1201,12 @@ export default function App() {
             hasDraft={hasDraft}
             onOpenEntry={(entry) => void handleOpenEntry(entry)}
             onOpenFolder={() => void handleOpenFolder()}
+            onNewFile={() => setTreeEditing({ kind: 'create', dirPath: '' })}
+            editing={treeEditing}
+            onRowMenu={handleTreeRowMenu}
+            onEditSubmit={handleTreeEditSubmit}
+            onEditCancel={handleTreeEditCancel}
+            onTreeError={notify}
             headings={headings}
             activeLine={caretLine}
             onJump={jumpToLine}
@@ -1169,6 +1243,17 @@ export default function App() {
           state={tableMenu}
           onCommand={runTableCommand}
           onClose={() => setTableMenu(null)}
+        />
+      )}
+
+      {treeMenu && (
+        <TreeMenu
+          state={treeMenu}
+          onCommand={(command, entry) => {
+            setTreeMenu(null)
+            runTreeMenuCommand(command, entry)
+          }}
+          onClose={() => setTreeMenu(null)}
         />
       )}
 
