@@ -16,6 +16,7 @@ import {
   isMarkdownName,
   lastSegment,
   parentOf,
+  resolveEditName,
   visibleEntries,
   type TreeEntry,
 } from './fileTree'
@@ -164,5 +165,31 @@ describe('命名一个新文档/重命名：ensure/firstFree/error', () => {
     expect(lastSegment('章节/一.md')).toBe('一.md')
     expect(lastSegment('一.md')).toBe('一.md')
     expect(childPath(parentOf('章节/一.md'), '二.md')).toBe('章节/二.md')
+  })
+
+  /**
+   * The ORDER `EditRow` submits by (`.scratch/tree-crud/issues/02`): the raw
+   * input is judged before the `.md` suffix is appended, or the empty/dot
+   * messages would be swallowed by the hidden-name rule.
+   */
+  it('resolveEditName：空/点号在补后缀之前就被拦住', () => {
+    const taken = new Set(['已存在.md'])
+    expect(resolveEditName('', taken, null)).toEqual({ error: '名字不能为空' })
+    expect(resolveEditName('   ', taken, null)).toEqual({ error: '名字不能为空' })
+    expect(resolveEditName('.', taken, null)).toEqual({ error: '这个名字不能用' })
+    expect(resolveEditName('..', taken, null)).toEqual({ error: '这个名字不能用' })
+  })
+
+  it('resolveEditName：后缀、撞名、隐藏名、斜杠各说各的', () => {
+    const taken = new Set(['已存在.md'])
+    expect(resolveEditName('新文档', taken, null)).toEqual({ name: '新文档.md' })
+    expect(resolveEditName('新文档.md', taken, null)).toEqual({ name: '新文档.md' })
+    expect(resolveEditName('已存在', taken, null)).toEqual({ error: '这个名字已经存在' })
+    expect(resolveEditName('.secret', taken, null)).toEqual({
+      error: '这个名字开头的文件不会显示在树里',
+    })
+    expect(resolveEditName('a/b', taken, null)).toEqual({ error: '名字不能包含 / 或 \\' })
+    // 重命名自己的原位：不撞车（exclude 放行），交给 UI 判断是"没改"。
+    expect(resolveEditName('笔记', new Set(['笔记.md']), '笔记.md')).toEqual({ name: '笔记.md' })
   })
 })

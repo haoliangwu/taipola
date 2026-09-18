@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { editNameError, ensureMarkdownExtension, firstFreeName, parentOf } from '../../core/fileTree'
+import { firstFreeName, parentOf, resolveEditName } from '../../core/fileTree'
 import type { FolderEntry } from '../../platform/folder'
 import type { FileTreeState } from '../useFileTree'
 
@@ -265,19 +265,21 @@ function EditRow({ initial, taken, exclude, onSubmit, onCancel, onError }: EditR
   }
 
   const submit = () => {
-    const name = ensureMarkdownExtension(draft.trim())
+    // The raw input is judged BEFORE the extension is appended (`resolveEditName`
+    // is where that order lives): an empty or `.`/`..` name must say what it is,
+    // not get read as a hidden name (`.scratch/tree-crud/issues/02`).
+    const result = resolveEditName(draft, taken, exclude)
+    if ('error' in result) {
+      doneRef.current = false
+      onError(result.error)
+      return
+    }
     // Renaming to the very same name is not a rename; cancel silently.
-    if (exclude !== null && name === exclude) {
+    if (exclude !== null && result.name === exclude) {
       onCancel()
       return
     }
-    const error = editNameError(name, taken, exclude)
-    if (error !== null) {
-      doneRef.current = false
-      onError(error)
-      return
-    }
-    onSubmit(name)
+    onSubmit(result.name)
   }
 
   return (

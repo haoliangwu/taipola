@@ -129,6 +129,27 @@ export function editNameError(
 }
 
 /**
+ * From a row's RAW input to a usable name, or the reason it is not one.
+ *
+ * The ORDER is the point: the empty and dot cases are judged BEFORE the
+ * extension is appended. Done the other way round, `''` → `.md`, `.` → `.md`
+ * and `..` → `...md` would all fall into the hidden-name rule and the specific
+ * messages would never fire (`.scratch/tree-crud/issues/02`).
+ */
+export function resolveEditName(
+  raw: string,
+  taken: ReadonlySet<string>,
+  exclude: string | null,
+): { name: string } | { error: string } {
+  const trimmed = raw.trim()
+  if (trimmed === '') return { error: '名字不能为空' }
+  if (trimmed === '.' || trimmed === '..') return { error: '这个名字不能用' }
+  const name = ensureMarkdownExtension(trimmed)
+  const error = editNameError(name, taken, exclude)
+  return error === null ? { name } : { error }
+}
+
+/**
  * The rows of one directory, in the order they should be shown.
  *
  * Generic in the entry type so that whatever the platform layer attached to a row
