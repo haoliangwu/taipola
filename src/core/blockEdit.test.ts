@@ -11,8 +11,10 @@ import { parseBlockTree, type BlockNode, type BlockTree } from './blockTree'
 import { serializeBlocks, roundTripInvariant } from './serialize'
 import {
   backspaceJoinParagraphs,
+  enterBlankLine,
   enterEndParagraph,
   enterMidParagraph,
+  growBlankLine,
   growParagraphGap,
   joinParagraphWithAbove,
   splitParagraphAtMid,
@@ -187,5 +189,31 @@ describe('growParagraphGap（行尾 Enter）', () => {
     expect(roundTripInvariant(next.source)).toBe(true)
     const lastIndex = parseBlockTree('末段').blocks.length - 1
     expect(enterEndParagraph('末段', lastIndex)!.caretDelta).toBe(1)
+  })
+})
+
+describe('growBlankLine（空行上 Enter）', () => {
+  it('空行块 span +1，后续行号 +1', () => {
+    const tree: BlockTree = { blocks: [par('甲', 0), blank(1), par('乙', 2)] }
+    const grown = growBlankLine(tree, 1)!
+    expect(serializeBlocks(grown.tree)).toBe('甲\n\n\n乙')
+    expect(grown.tree.blocks.map((b) => `${b.startLine}-${b.endLine}`)).toEqual([
+      '0-1', '1-3', '3-4',
+    ])
+  })
+
+  it('非 blank 块 → null 回退', () => {
+    const tree: BlockTree = { blocks: [par('甲', 0), blank(1)] }
+    expect(growBlankLine(tree, 0)).toBeNull()
+  })
+
+  it('命令级：字符与 caretDelta 与字符串路径一致（caret = live+1）', () => {
+    const source = '甲\n\n乙'
+    const tree = parseBlockTree(source)
+    const index = tree.blocks.findIndex((b) => b.kind === 'blank' && b.endLine - b.startLine === 1)
+    const result = enterBlankLine(source, index)!
+    expect(result.source).toBe('甲\n\n\n乙')
+    expect(result.caretDelta).toBe(1)
+    expect(roundTripInvariant(result.source)).toBe(true)
   })
 })

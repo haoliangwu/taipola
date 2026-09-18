@@ -28,6 +28,7 @@ import {
   enterMidParagraph,
   backspaceJoinParagraphs,
   enterEndParagraph,
+  enterBlankLine,
 } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
 import {
@@ -951,7 +952,16 @@ export class EditorKernel {
       // silent no-op at the end of any line once.
       if (live >= lineEnd) {
         if (currentLine === '') {
-          // Blank line: one more blank line, exactly as before.
+          // Blank line: one more blank line — the blank block's span grows by
+          // a line (box-model migration 3d), same source as the string path,
+          // caret on the newly added line.
+          const blankIndex = this.blockAt(live)
+          const grownBlank = enterBlankLine(this.doc, blankIndex)
+          if (grownBlank !== null) {
+            this.pushUndo({ value: this.doc, caret: this.caret })
+            this.commit(grownBlank.source, live + grownBlank.caretDelta)
+            return
+          }
           const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
           this.insertNewlines(at, 1, live + 1)
           return

@@ -191,3 +191,39 @@ export function enterEndParagraph(
     ? null
     : { source: serializeBlocks(grown.tree), caretDelta: grown.caretDelta }
 }
+
+/**
+ * Enter on a BLANK line adds one more blank line — the blank block grows by a
+ * line (this time growing IS the semantics: there is no caret-to-typing
+ * ambiguity, the caret lands on the newly added line).
+ *
+ * 后续块行号 +1。只对 blank 块生效;其它块回退字符串路径。
+ */
+export function growBlankLine(
+  tree: BlockTree,
+  index: number,
+): { tree: BlockTree; addedChars: 1; caretDelta: number } | null {
+  const block = tree.blocks[index]
+  if (!block || block.kind !== 'blank') return null
+  const blocks: BlockNode[] = [...tree.blocks]
+  blocks[index] = { ...block, endLine: block.endLine + 1 }
+  for (let i = index + 1; i < blocks.length; i++) {
+    const b = blocks[i]
+    if (!b) continue
+    blocks[i] = { ...b, startLine: b.startLine + 1, endLine: b.endLine + 1 }
+  }
+  return { tree: { blocks }, addedChars: 1, caretDelta: 1 }
+}
+
+/** Full command: grow, serialize. Caret = the caret's own offset + 1 (the
+    kernel adds `caretDelta`), matching the string path's `live + 1`. */
+export function enterBlankLine(
+  source: string,
+  index: number,
+): { source: string; caretDelta: number } | null {
+  const tree = parseBlockTree(source)
+  const grown = growBlankLine(tree, index)
+  return grown === null
+    ? null
+    : { source: serializeBlocks(grown.tree), caretDelta: grown.caretDelta }
+}
