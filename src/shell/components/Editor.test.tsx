@@ -2069,6 +2069,79 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
+  it('IME 组合输入落在 Enter 占位：仍是新段落（`啊` Enter `啊` = 两段）', async () => {
+    // 组合进行中的每次 input 都会使 handleInput 的 composing 分支把 DOM 直接吸收
+    // 成模型——吸收绕过段落化，提交后 DOM 又与模型一致，段落化永远没有机会，
+    // `啊` + Enter + `啊`（输入法打的第二个字）变成一段软换行（用户实测）。
+    // 占位旁的组合输入现在跳过中期吸收，由 compositionend 的提交走正常段落化。
+    const r = renderEditor('啊')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('啊\n')
+    // 光标在尾占位空行；组合输入"啊"（含组合中期的输入事件）。
+    const blank = r.container.querySelector('.vl-blank')
+    if (!blank) throw new Error('没有占位空行')
+    placeCaretAt(blank, 0)
+    await flush()
+    const tn = document.createTextNode('啊')
+    blank.insertBefore(tn, blank.firstChild)
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '啊', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '啊', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    blank.dispatchEvent(new CompositionEvent('compositionend', { data: '啊', bubbles: true, cancelable: true }))
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '啊', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '啊', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    await flush()
+    // Enter 的占位打字 = 新段落，不是软换行。
+    expect(r.getDoc()).toBe('啊\n\n啊')
+    expect(caretFromDom()).toBe(4)
+    await assertDomMatchesSource(r)
+  })
+
+  it('IME 组合输入落在 Shift+Enter 占位：仍是软换行续行（一段）', async () => {
+    const s = renderEditor('甲')
+    await flush()
+    await clickInRun(s, 0, 0, 0, 'end')
+    await flush()
+    await pressShiftEnter(s)
+    await flush()
+    expect(s.getDoc()).toBe('甲\n')
+    const blank = s.container.querySelector('.vl-blank')
+    if (!blank) throw new Error('没有占位空行')
+    placeCaretAt(blank, 0)
+    await flush()
+    const tn = document.createTextNode('乙')
+    blank.insertBefore(tn, blank.firstChild)
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '乙', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '乙', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    blank.dispatchEvent(new CompositionEvent('compositionend', { data: '乙', bubbles: true, cancelable: true }))
+    blank.dispatchEvent(
+      new InputEvent('beforeinput', { data: '乙', inputType: 'insertCompositionText', bubbles: true, cancelable: true, composed: true }),
+    )
+    blank.dispatchEvent(
+      new InputEvent('input', { data: '乙', inputType: 'insertCompositionText', bubbles: true, composed: true }),
+    )
+    await flush()
+    // Shift+Enter 的占位打字 = 软续行（同块 `甲\n乙`），不被段落化。
+    expect(s.getDoc()).toBe('甲\n乙')
+    expect(caretFromDom()).toBe(3)
+    await assertDomMatchesSource(s)
+  })
+
   it('行尾 Enter 与 Shift+Enter 同款：都只插一个换行（距离差只在段中）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
