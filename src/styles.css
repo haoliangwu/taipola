@@ -1606,3 +1606,14 @@ body {
     transform: translateX(-100%);
   }
 }
+
+/* Reduced motion: the two entrance animations (toast, drawer) play nothing.
+   Layout is unaffected — both animate transform/opacity only, so the final
+   position is identical with the animation disabled (`.scratch/
+   reduced-motion/issues/01`). */
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .outline {
+    animation: none;
+  }
+}
