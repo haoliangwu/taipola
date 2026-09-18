@@ -1,31 +1,30 @@
 /**
  * 空行被输入占用时的处置（`.scratch/paragraph-spacing/issues/01`）。
  *
- * 断的是：两段之间**既有**空行上打字 = 字符并入前一段（软换行续行）+ 后一段的
- * 边界保留（Typora 真机实测，`甲\n\n乙` 打 x → `甲\nx\n\n乙`，间距不消失）；
- * Enter 开出的占位空行才补前边界成独立段落；所有非本形状的编辑（段中插入、
- * 删除、替换）原样不动。
+ * 断的是：结构外的空行被打字占用 = 该行**新建一个块**（用户裁定，十审）——
+ * 补上缺失的两侧边界成为独立段落（`甲\n\n乙` 打 x → `甲\n\nx\n\n乙`，三段；
+ * `甲\n` Enter 打 x → `甲\n\nx`）；所有非本形状的编辑（段中插入、删除、
+ * 替换）原样不动。
  */
 import { describe, expect, it } from 'vitest'
 import { paragraphizeTypedBlankLine } from './paragraphize'
 
 describe('paragraphizeTypedBlankLine', () => {
-  it('两段之间夹空行：字符并入前段（软换行），后段边界保留', () => {
-    // 'A\n\nB' 的空行上打 X：'A\nX\nB' → 只补后边界 → 'A\nX\n\nB'
-    // （X 与 A 同段紧挨，B 与间距不消失——Typora 实测）
+  it('两段之间夹空行：输入后两侧补出段落边界（x 成为新块）', () => {
+    // 'A\n\nB' 的空行上打 X：'A\nX\nB' → 'A\n\nX\n\nB' —— 三个段落
     expect(paragraphizeTypedBlankLine('A\n\nB', 'A\nX\nB', 3)).toEqual({
-      doc: 'A\nX\n\nB',
-      caret: 3,
+      doc: 'A\n\nX\n\nB',
+      caret: 4,
     })
   })
 
-  it('段尾 Enter 开出的空行（后一行是空）：补前边界成新段', () => {
+  it('段尾 Enter 开出的空行：补前边界成新段', () => {
     // 'A\n' 行尾 Enter 后的空行打 X：补出前边界 → 'A\n\nX'，新段保留
     expect(paragraphizeTypedBlankLine('A\n', 'A\nX', 3)).toEqual({ doc: 'A\n\nX', caret: 4 })
   })
 
-  it('段尾 Enter 开出的空行（后一行也是空）：补前边界成新段', () => {
-    // 'A\n\n\nB' 第一个空行打 X → 补前边界 → 'A\n\nX\n\nB'
+  it('连续多个空行：只补缺的一侧，原空行保留', () => {
+    // 'A\n\n\nB' 第一个空行打 X → 'A\nX\n\nB' → 补前边界 → 'A\n\nX\n\nB'
     expect(paragraphizeTypedBlankLine('A\n\n\nB', 'A\nX\n\nB', 3)).toEqual({
       doc: 'A\n\nX\n\nB',
       caret: 4,

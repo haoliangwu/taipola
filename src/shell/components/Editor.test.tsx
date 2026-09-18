@@ -1355,10 +1355,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     // 空格不参与排版，所以这一行只有一个光标位：行首。打进去的字落在空格**之前**
     // ——比丢掉空格好；这个代价记在 ADR-0002。空格行与空行同一条规则
-    // （isBlankLine）：夹在两段之间 = 并入前段软换行，后段边界保留
-    // （`paragraph-spacing/01` 八审）。
-    expect(r.getDoc()).toBe('甲\nX   \n\n乙\n')
-    expect(caretFromDom()).toBe(3)
+    // （isBlankLine）：被占用 = 新建一个块（`paragraph-spacing/01` 十审）。
+    expect(r.getDoc()).toBe('甲\n\nX   \n\n乙\n')
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 
@@ -1687,11 +1686,11 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 两段之间既有空行上打字 = 字符并入前一段（软换行续行），后一段边界保留：
-    // `甲\n\n乙` 打 x → `甲\nx\n\n乙`——段落不合并，间距不缩小（Typora 真机
-    // 实测，`paragraph-spacing/01` 八审）。
-    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
-    expect(caretFromDom()).toBe(3)
+    // 空行打字 = 新建一个块（`paragraph-spacing/01` 十审，Typora 语义）：
+    // 字符补上两侧空行边界成为独立段落——`甲\n\n乙` 打 x → `甲\n\nx\n\n乙`，
+    // 甲、x、乙三个段落，段落间距全部保留。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    expect(caretFromDom()).toBe(4)
     // 屏幕上三行各自成行：并排才是"换行符消失"。
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
@@ -1815,9 +1814,8 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     await r.user.keyboard('x')
     await flush()
-    // 两段之间空行打字：字符并入前段软换行、后段边界保留（Typora 实测），
-    // 一次插入即一步撤销。
-    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
+    // 空行打字 = 新建一个块：一次插入即一步撤销。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
 
     await pressUndo(r)
     await flush()

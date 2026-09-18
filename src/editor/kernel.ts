@@ -167,13 +167,6 @@ export class EditorKernel {
   private composeStart = 0
   private composeLength = 0
   private pendingCaret: number | null = null
-  /**
-   * 1-based line number (as `lineOfOffset` reports) of the fresh blank line
-   * that a just-pressed Enter opened — the new paragraph's placeholder. The
-   * NEXT keystroke that turns that line into text is fenced as a new paragraph
-   * (`enterPlaceholder`); the mark is single-shot, cleared by every commit.
-   */
-  private pendingEnterLine = -1
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
@@ -393,16 +386,16 @@ export class EditorKernel {
    * kernel: no reconciler can run in between, so no drift can accumulate.
    */
   private commit(next: string, caretNext: number): void {
-    // A keystroke that turns a whole blank line into a line of text decides
-    // what that line IS (`paragraph-spacing/01`):
-    // - the blank a fresh Enter just opened (`pendingEnterLine`) — the user is
-    //   starting a NEW paragraph: the line gets fenced into a block of its own
-    //   (`甲` Enter x → `甲\n\nx`);
-    // - a blank already sitting between two paragraphs — the character
-    //   continues the paragraph ABOVE and keeps the paragraph BELOW standing
-    //   (`甲\n\n乙` x → `甲\nx\n\n乙`, Typora-verified);
-    // - a blank inside a fence, table, quote or list — nothing: fencing there
-    //   would break code, rows and items (the gate is the OLD line's kind).
+    // A keystroke that turns a whole blank line into a line of text gives that
+    // line a paragraph of its OWN — a blank line on each side — so the
+    // paragraph boundary, and the spacing hanging on it, survives the edit
+    // (`paragraph-spacing/01` 十审: typing on a blank CREATES a block).
+    // Everything else is untouched.
+    //
+    // The gate is the OLD line's kind: only a true blank line (outside any
+    // structure) triggers. A blank line INSIDE a fence, table, quote or list
+    // keeps its old editor behaviour — fencing paragraphs there would break
+    // code, rows and items.
     const clamped = clamp(caretNext, 0, next.length)
     const inserted = next.length - this.doc.length
     if (inserted > 0) {
@@ -411,12 +404,7 @@ export class EditorKernel {
         const lineStart = lineOfOffset(this.doc, insertStart)
         const kind = this.lineStates[lineStart - 1]?.kind
         if (kind === 'blank' || kind === undefined) {
-          const paragraphized = paragraphizeTypedBlankLine(
-            this.doc,
-            next,
-            clamped,
-            lineStart === this.pendingEnterLine,
-          )
+          const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
           if (paragraphized !== null) {
             next = paragraphized.doc
             caretNext = paragraphized.caret
@@ -424,9 +412,6 @@ export class EditorKernel {
         }
       }
     }
-    // The Enter placeholder is single-shot: it names the blank that the NEXT
-    // keystroke turns into text, and only that one.
-    this.pendingEnterLine = -1
     this.doc = next
     this.caret = clamp(caretNext, 0, next.length)
     this.pendingCaret = this.caret
@@ -995,9 +980,9 @@ export class EditorKernel {
       // - caret on a line INSIDE a soft-broken paragraph — `enterEndOfLine`
       //   splits the block there (`[A\nB] → [A][blank][B]`, the rest of the
       //   paragraph becomes a new paragraph below the blank).
-      // Both land the caret on a fresh blank line that is recorded as the
-      // Enter placeholder: the next keystroke becomes a NEW paragraph's first
-      // character (the paragraphizer fences it), never a soft continuation.
+      // Both land the caret on a fresh blank line; the next keystroke turns
+      // that blank into a NEW paragraph (the paragraphizer fences it —
+      // `paragraph-spacing/01` 十审), never a soft continuation.
       if (live >= lineEnd) {
         if (currentLine === '') {
           // Blank line: one more blank line — the blank block's span grows by
@@ -1029,7 +1014,6 @@ export class EditorKernel {
               if (split !== null) {
                 this.pushUndo({ value: this.doc, caret: this.caret })
                 this.commit(split.source, split.caret)
-                this.pendingEnterLine = lineOfOffset(this.doc, this.caret)
                 return
               }
             } else {
@@ -1041,7 +1025,6 @@ export class EditorKernel {
                   grown.source,
                   this.offsets[ground] + myBlock.raw.length + grown.caretDelta,
                 )
-                this.pendingEnterLine = lineOfOffset(this.doc, this.caret)
                 return
               }
             }
