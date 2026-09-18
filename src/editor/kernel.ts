@@ -24,6 +24,7 @@ import { parseDocument, type Block } from '../core/markdown'
 import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
+import { enterMidParagraph } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
 import {
   backspaceAtContentStart,
@@ -965,6 +966,27 @@ export class EditorKernel {
       }
       // MID-line: the hard break splits the paragraph here — one blank line
       // between the two halves, caret on the second half's first character.
+      // A single-line PARAGRAPH goes through the block-tree command first
+      // (box-model migration, `.scratch/block-model/issues/02`): the tree
+      // splits the paragraph block into two with a blank block between, and
+      // `serializeBlocks` rebuilds the source — byte-identical to the string
+      // insert below. Everything else (headings, multi-line soft-broken
+      // paragraphs) falls back to the string form until its slice lands.
+      const myLine = lineOfOffset(this.doc, live)
+      const lineKind = this.lineStates[myLine - 1]?.kind
+      if (lineKind === 'text' && !currentLine.includes('\n')) {
+        const edited = enterMidParagraph(
+          this.doc,
+          this.blockAt(live),
+          live,
+          live - this.offsets[this.blockAt(live)],
+        )
+        if (edited) {
+          this.pushUndo({ value: this.doc, caret: this.caret })
+          this.commit(edited.source, edited.caret)
+          return
+        }
+      }
       this.insertNewlines(live, 2, live + 2)
       return
     }
