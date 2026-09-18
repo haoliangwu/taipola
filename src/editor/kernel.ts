@@ -1062,14 +1062,16 @@ private reportLine(): void {
         // keeps that placeholder behaviour.
         const { end: softEnd, text: softText } = this.lineBounds(live)
         const softCaretOnEnd = live >= softEnd && softText !== ''
-        // A QUOTE line breaks the same way as a paragraph, but the fresh line
-        // stays inside the quote (Typora: the quote keeps its marker — its
-        // interaction is identical to a paragraph's, only the style differs).
-        // A bare newline would push the next line out of the quote, so the
-        // line's own `> ` (nested `> > ` etc.) prefix is repeated, and the
-        // soft placeholder rides on the marker's end.
+        // A line that carries a QUOTE marker breaks the same way as a paragraph,
+        // but the fresh line stays inside the quote (Typora: the quote keeps
+        // its marker — its interaction is identical to a paragraph's, only the
+        // style differs). A bare newline would push the next line out of the
+        // quote, so the line's own marker prefix is repeated — `> `, nested
+        // `> > `, and nested inside a list (`> - `, whose line kind is list,
+        // not quote — the `>` in the prefix is the test, not the kind) — and
+        // the soft placeholder rides on the marker's end.
         const prefix = parseLine(currentLine).prefix
-        const insert = kind === 'quote' && prefix !== '' ? `\n${prefix}` : '\n'
+        const insert = prefix.includes('>') ? `\n${prefix}` : '\n'
         const fresh = at + insert.length
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {

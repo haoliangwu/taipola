@@ -2459,6 +2459,23 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     await assertDomMatchesSource(r)
   })
 
+  it('引用内列表行尾 Shift+Enter：`> - ` 一并抄（软换行不退出引用）', async () => {
+    // 用户实测：引用内（嵌套列表行）软换行后新行丢 marker、退出引用。
+    // 判定条件不是行 kind（`> - 甲` 的 kind 是 list 不是 quote），而是
+    // prefix 里是否带 `>`——带引用 marker 的整段 prefix 都要抄。
+    const r = renderEditor('> - 甲\n')
+    await flush()
+    await clickInRun(r, 0, 0, 1, 'end')
+    await flush()
+    await pressShiftEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('> - 甲\n> - \n')
+    await r.user.keyboard('乙')
+    await flush()
+    expect(r.getDoc()).toBe('> - 甲\n> - 乙\n')
+    await assertDomMatchesSource(r)
+  })
+
   it('引用嵌套列表行尾 Enter：`> - ` 一并抄', async () => {
     const r = renderEditor('> - 甲\n')
     await flush()
