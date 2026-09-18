@@ -842,12 +842,11 @@ body {
    (`paragraph-spacing/01` 十一审). A trailing blank (Enter's fresh paragraph
    placeholder) still renders its one line box, so the caret survives Enter.
 
-   Amount: 26px ≈ one line — a paragraph boundary reads at least as wide as a
-   line inside the paragraph (soft wrap lines sit 26.25px apart); the old
-   4/8/12px values were ADDED to a rendered blank row and do not transfer.
-   Tuning history lives in the ticket; adjust here directly. */
+   Amount: 4px — tuned by the user on the block-level model; the old 4/8/12px
+   values were ADDED to a rendered blank row and do not transfer (26px read as
+   too much without the blank row). Adjust here directly. */
 .blk:not([data-kind='blank']) {
-  margin-bottom: 26px;
+  margin-bottom: 4px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its

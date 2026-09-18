@@ -100,10 +100,10 @@ describe('每个行种的行盒高度', () => {
       expect(height).toBeCloseTo(line, 1)
     }
     // 段落间距长在**段落块自己**的底部（`paragraph-spacing/01` 十一审）：中间
-    // 空行不渲染行盒，段距 = 块 margin（26px ≈ 一行，软换行行距 26.25 之下仍可辨）。
+    // 空行不渲染行盒，段距 = 块 margin（4px，用户在线调定的值）。
     // 空行块本身零 margin；尾空行块（若有）也是零 margin 的一格行盒。
     const textBlock = r.container.querySelector<HTMLElement>('[data-block="0"]')
-    expect(parseFloat(getComputedStyle(textBlock!).marginBottom)).toBe(26)
+    expect(parseFloat(getComputedStyle(textBlock!).marginBottom)).toBe(4)
     // 中间空行块不渲染 DOM（十一审）：空行不占行盒，段距全由段块 margin 承担。
     // 尾空行块（渲染为占位行盒的例外）零 margin。
     const blankBlock = r.container.querySelector<HTMLElement>('[data-block="1"]')
