@@ -178,6 +178,18 @@ export class EditorKernel {
    */
   private pendingEnterLine = -1
 
+  /**
+   * The line Shift+Enter opened at a LINE END (a paragraph's last line, or a
+   * soft-broken line inside one): the fresh line after it. Unlike the Enter
+   * placeholder, the next keystroke CONTINUES the block — no paragraphization,
+   * so `甲` + Shift+Enter + `x` is `甲\nx`, one paragraph, matching Typora's
+   * soft break. The caret rides on it the same way (`placeCaret` keeps the
+   * trailing blank visible, walks in-between ones back), and one Backspace
+   * undoes the break exactly like the Enter placeholder's.
+   * Single-shot: cleared by every commit.
+   */
+  private pendingSoftLine = -1
+
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
 
@@ -389,11 +401,13 @@ export class EditorKernel {
     // visual anchor walks back to the previous rendered block's end. The same applies
     // when `want` sits exactly at a trailing blank block's line start — that offset
     // is really "the end of the block above", and typing there must stay IN the block
-    // above rather than land on a bare `<br>` line. EXCEPT when that blank is the
-    // Enter placeholder (the new paragraph's opening): there the blank's own line box
-    // is the anchor, so the next keystroke is re-homed into a new paragraph.
+    // above rather than land on a bare `<br>` line. EXCEPT when that blank is a
+    // placeholder — the Enter one (the new paragraph's opening) or the soft one
+    // (Shift+Enter's fresh line): there the blank's own line box is the anchor,
+    // so the next keystroke lands where the break put it.
     const isEnterSpot =
-      this.pendingEnterLine >= 0 && want === this.pendingEnterLine && index === this.blockAt(want)
+      (this.pendingEnterLine >= 0 && want === this.pendingEnterLine) ||
+      (this.pendingSoftLine >= 0 && want === this.pendingSoftLine)
     while (
       index > 0 &&
       this.blocks[index] !== undefined &&
@@ -442,6 +456,13 @@ export class EditorKernel {
         const lineStart = lineOfOffset(this.doc, insertStart)
         const placeholder = this.pendingEnterLine
         const nearEnter = placeholder >= 0 && insertStart >= placeholder - 1 && insertStart <= placeholder
+        // Shift+Enter's own placeholder: a line-end soft break whose fresh
+        // line the paragraph OWNS. The next keystroke CONTINUES the block
+        // (`甲` + Shift+Enter + `x` → `甲\nx`, one paragraph — Typora's soft
+        // break), so there is no paragraphization here, only the same
+        // re-home from the diff when the character landed beside the line.
+        const softLine = this.pendingSoftLine
+        const nearSoft = softLine >= 0 && insertStart >= softLine - 1 && insertStart <= softLine
         if (nearEnter && inserted === 1) {
           // Enter's placeholder blank renders no line box, so the keystroke
           // that was meant for it landed on the nearest rendered text (the
@@ -470,6 +491,14 @@ export class EditorKernel {
             next = paragraphized.doc
             caretNext = paragraphized.caret
           }
+        } else if (nearSoft && inserted === 1) {
+          // Same re-home as above, but for the soft placeholder: the character
+          // is placed on Shift+Enter's fresh line and the source keeps the
+          // single newline — the break stays SOFT (no paragraphization).
+          const diffStart = sharedPrefix(this.doc, next)
+          const placed = next.slice(diffStart, diffStart + inserted)
+          next = `${this.doc.slice(0, softLine)}${placed}${this.doc.slice(softLine)}`
+          caretNext = softLine + placed.length
         } else {
           const kind = this.lineStates[lineStart - 1]?.kind
           if (kind === 'blank' || kind === undefined) {
@@ -496,6 +525,7 @@ export class EditorKernel {
     // own `placeCaret` (the Enter that just carried it consults it again), so
     // it is consumed here at the very end.
     this.pendingEnterLine = -1
+    this.pendingSoftLine = -1
   }
 
   private reportLine(): void {
@@ -988,7 +1018,21 @@ export class EditorKernel {
         // break stays inside the paragraph, so its line gap is the small one
         // (`.scratch/enter-backspace-smoke/issues/02`).
         const at = live
+        // At a LINE END the fresh line after it is a line the paragraph OWNS
+        // (Typora: the break is inside the block): mark it so the next
+        // keystroke continues the block instead of paragraphizing the new
+        // text, and one Backspace undoes the break. Mid-line and line-start
+        // breaks put the caret on real text right away and need none of this;
+        // a break on an EMPTY line is a paragraph break like Enter's, so it
+        // keeps that placeholder behaviour.
+        const { end: softEnd, text: softText } = this.lineBounds(live)
+        const softCaretOnEnd = live >= softEnd && softText !== ''
         this.insertNewlines(at, 1, at + 1)
+        if (softCaretOnEnd) {
+          this.pendingEnterLine = -1
+          this.pendingSoftLine = at + 1
+          this.placeCaret(at + 1)
+        }
         return
       }
       // Fenced code (marker or body line) has no paragraphs to split. A fence
@@ -1107,6 +1151,7 @@ export class EditorKernel {
                 // back to the paragraph end while keeping the trailing one
                 // visible, and the Backspace placeholder branch joins either.)
                 this.pendingEnterLine = nextCaret
+                this.pendingSoftLine = -1
                 // Re-anchor with the mark visible: WITHOUT it the commit's
                 // own placeCaret walked the caret to the paragraph end.
                 this.placeCaret(nextCaret)
@@ -1135,6 +1180,7 @@ export class EditorKernel {
           this.lineStates[freshBlock.startLine]?.kind === 'blank'
         ) {
           this.pendingEnterLine = caretOn
+          this.pendingSoftLine = -1
           this.placeCaret(caretOn)
         }
         return
@@ -1172,6 +1218,7 @@ export class EditorKernel {
           // is unaffected: `paragraphizeTypedBlankLine` declines a non-blank
           // insert line, so the character stays where the caret put it.
           this.pendingEnterLine = edited.caret
+          this.pendingSoftLine = -1
           this.placeCaret(edited.caret)
           return
         }
@@ -1181,6 +1228,7 @@ export class EditorKernel {
       // soft-broken paragraph or a heading): the placeholder is the content
       // block below, marked the same way.
       this.pendingEnterLine = live + 2
+      this.pendingSoftLine = -1
       this.placeCaret(live + 2)
       return
     }
@@ -1240,34 +1288,34 @@ export class EditorKernel {
       // Backspace means "undo the paragraph break" — delete the placeholder
       // blank line and join, the same single keystroke as on a rendered blank.
       if (
-        this.pendingEnterLine >= 0 &&
-        (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)
+        (this.pendingEnterLine >= 0 &&
+          (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)) ||
+        (this.pendingSoftLine >= 0 &&
+          (live === this.pendingSoftLine || live === this.pendingSoftLine - 1))
       ) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        const at = this.pendingEnterLine
+        const at =
+          this.pendingEnterLine >= 0 ? this.pendingEnterLine : this.pendingSoftLine
+        const isSoftBreak = this.pendingEnterLine < 0
+        // A SOFT-break placeholder is a plain blank line the paragraph owns:
+        // one Backspace undoes the break, exactly like the Enter blank below.
         const placeholderBlock = this.blocks[this.blockAt(at)]
-        if (placeholderBlock?.raw === '') {
-          // A BLANK placeholder — the line a line-end Enter opened. When Enter
-          // opened the document's TRAILING blank (the one that still renders
-          // its own line, `paragraph-spacing/01` 十一审), the placeholder sits
-          // at EOF, so there is no placeholder character after it to delete:
-          // the `at + 1` cut below would slice nothing and the whole keystroke
-          // would spin (measured: the first Backspace after Enter did nothing,
-          // the second one joined). One Backspace instead undoes the break —
-          // delete the newline that stands in front of the placeholder, which
-          // is exactly what the in-between path's cut amounts to.
-          if (at >= this.doc.length) {
-            this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
-          } else {
-            this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
-          }
-        } else {
+        if (placeholderBlock?.raw !== '' && !isSoftBreak) {
           // A CONTENT placeholder — the right half a mid-line Enter split off.
           // One Backspace undoes the split: delete the two newlines it added
           // (`甲\n\n乙` → `甲乙`), the caret lands on the join point, and a
           // single keystroke pairs the Enter that made the split.
           this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
+        } else if (at >= this.doc.length) {
+          // The placeholder sits at EOF (the document's trailing blank, or a
+          // trailing soft line): there is no placeholder character after it to
+          // delete — the `at + 1` cut would slice nothing and the keystroke
+          // would spin. Delete the newline in front of it instead, which is
+          // exactly what the in-between path's cut amounts to.
+          this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+        } else {
+          this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
         }
         return
       }
