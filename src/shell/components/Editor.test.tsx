@@ -467,7 +467,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     await pressEnter(r)
     await flush()
-    // 行尾 Enter 是普通断行（`enter-backspace-smoke/10`）：每次只开一个新行。
+    // 行尾 Enter = 硬换行（九审块级：段落下方开一个新空块占位，源只多这一个
+    // 换行——`/10` 反向后：一次退格还原，见 12 号票）。
     expect(r.getDoc()).toBe('第一段文字\n\n\n第二段\n')
     // 中间空白不渲染行盒，光标吸附在段尾（十一审）。
     expect(caretFromDom()).toBe(5)
@@ -511,8 +512,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     await pressEnter(r)
     await flush()
-    // 行尾 Enter 是普通断行（`enter-backspace-smoke/10`）：只插一个换行，
-    // 光标落在新行行首。
+    // 行尾 Enter = 硬换行：段落下方开新空块（源只多这一个换行，
+    // `enter-backspace-smoke/10` 九审反向后；退格一次还原见 12 号票），
+    // 光标落在新空行上。
     expect(r.getDoc()).toBe('标题行测试\n\n\n')
     await r.user.keyboard('第二行')
     await flush()
@@ -1061,8 +1063,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('# 标题\n\n正文\n')
-    // 行尾 Enter 只插一个换行（`enter-backspace-smoke/10`），一次退格恰好还原，
-    // 光标回到回车前的偏移（4 → 5 → 4，落在被删换行的原位上）。空行上的退格
+    // 行尾 Enter 只多这一个换行（占位空块，`/10` 九审反转后），一次退格恰好
+    // 还原，光标回到回车前的偏移（4 → 5 → 4，落在被删换行的原位上）。空行上的退格
     // 规则（`09`）不变：删掉的是光标前面那个换行，光标留在剩下的空行上。
     expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
@@ -1092,7 +1094,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(caretFromDom()).toBe(7) // `## 有序列表` 末尾
     await pressEnter(split)
     await flush()
-    // 行尾 Enter 是普通断行（`enter-backspace-smoke/10`）：只插一个换行。
+    // 行尾 Enter = 硬换行：占位空块插入两个标题之间（`/10` 九审反转后，
+    // 一次退格还原，见 12 号票）。
     expect(split.getDoc()).toBe('## 有序列表\n\n## 列表嵌套\n')
     await pressBackspace(split)
     await flush()
