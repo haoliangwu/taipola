@@ -5,6 +5,7 @@ import { TreeMenu, type TreeMenuCommand, type TreeMenuState } from './components
 import { HelpPanel } from './components/HelpPanel'
 import { Sidebar } from './components/Sidebar'
 import type { TreeEditing } from './components/FileTree'
+import { ConfirmDialog, type ConfirmRequest } from './components/ConfirmDialog'
 import {
   BoldIcon,
   BulletListIcon,
@@ -332,13 +333,29 @@ export default function App() {
    * file changed underneath, giving up after a write that did not happen, never
    * writing a superseded text twice); this is the wiring.
    */
+  // One modal confirm dialog serves the three places that used to block on
+  // `window.confirm`: discard-before-replace, overwrite-after-external-edit,
+  // and the tree's delete. The request carries the promise the answer resolves.
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
+  const ask = useCallback((message: string): Promise<boolean> => {
+    return new Promise((resolve) => setConfirmRequest({ message, resolve }))
+  }, [])
+
+  const handleConfirmAnswer = useCallback((ok: boolean) => {
+    setConfirmRequest((request) => {
+      request?.resolve(ok)
+      return null
+    })
+  }, [])
+
   const writeBack = useMemo(() => {
     if (!canWriteBack || file === null) return null
     return createWriteBack({
       openedAt: file.modifiedAt,
       currentModifiedAt: () => documents.modifiedAt(file.document),
       write: async (text) => (await documents.save(file.document, text)).status === 'saved',
-      confirmOverwrite: () => window.confirm(`磁盘上的「${fileName}」被别的程序改过，确定覆盖吗？`),
+      confirmOverwrite: () =>
+        ask(`磁盘上的「${fileName}」被别的程序改过，确定覆盖吗？`),
       onWritten: (text) => {
         // The slot holds content that is now in the file — unless something newer
         // got into it while the write was in flight, which is why the check is by
@@ -353,7 +370,7 @@ export default function App() {
       setTimer: (run, delayMs) => window.setTimeout(run, delayMs),
       clearTimer: (handle) => window.clearTimeout(handle),
     })
-  }, [autosave, canWriteBack, draftKey, file, fileName, notify])
+  }, [ask, autosave, canWriteBack, draftKey, file, fileName, notify])
 
   const writeBackRef = useRef<WriteBack | null>(null)
   useEffect(() => {
@@ -461,9 +478,9 @@ export default function App() {
    * where the draft slot is the only copy there is.
    */
   const confirmDiscard = useCallback(
-    (action: string): boolean =>
-      !dirty || canWriteBack || window.confirm(`当前文档还没保存，确定${action}吗？`),
-    [canWriteBack, dirty],
+    async (action: string): Promise<boolean> =>
+      !dirty || canWriteBack || (await ask(`当前文档还没保存，确定${action}吗？`)),
+    [ask, canWriteBack, dirty],
   )
 
   /**
@@ -517,7 +534,7 @@ export default function App() {
     // Asked AFTER the picker, unlike 新建: the question is worth answering only
     // about a file that exists, and it can then name both sides of the trade.
     // A dismissed picker never gets here, so declining it costs no prompt.
-    if (!confirmDiscard(`丢弃改动并打开「${document.name}」`)) return
+    if (!(await confirmDiscard(`丢弃改动并打开「${document.name}」`))) return
     adoptOpened(document, content, modifiedAt, null)
     notify(`已打开 ${document.name}`)
   }, [adoptOpened, confirmDiscard, notify])
@@ -531,7 +548,7 @@ export default function App() {
         notify(`打开失败：${String(result.error)}`)
         return
       }
-      if (!confirmDiscard(`丢弃改动并打开「${result.document.name}」`)) return
+      if (!(await confirmDiscard(`丢弃改动并打开「${result.document.name}」`))) return
       adoptOpened(result.document, result.content, result.modifiedAt, {
         root: tree.root?.name ?? '',
         path: entry.path,
@@ -656,10 +673,10 @@ export default function App() {
     [leaveDocument],
   )
 
-  const handleNew = useCallback(() => {
+  const handleNew = useCallback(async () => {
     // No picker on this path, so there is nothing to pick before asking: the
     // question comes first, and 新建 is the operation that has always asked.
-    if (!confirmDiscard('新建')) return
+    if (!(await confirmDiscard('新建'))) return
     adoptDocument(NEW_DOC.content, NEW_DOC.name)
     editorRef.current?.focus()
   }, [adoptDocument, confirmDiscard])
@@ -696,10 +713,10 @@ export default function App() {
   /** 删除：a confirm first — the filesystem has no recycle bin behind this. */
   const deleteTreeFile = useCallback(
     async (entry: FolderEntry) => {
-      if (!window.confirm(`确定删除「${entry.name}」吗？删除不会进回收站。`)) return
+      if (!(await ask(`确定删除「${entry.name}」吗？删除不会进回收站。`))) return
       if (await tree.removeFile(entry.path)) notify(`已删除 ${entry.name}`)
     },
-    [notify, tree.removeFile],
+    [ask, notify, tree.removeFile],
   )
 
   /** The two menus are siblings with the same habits: Escape and an outside
@@ -890,10 +907,18 @@ export default function App() {
       // closing the layer is what the key means there. Dispatching through the
       // table keeps `shortcuts.ts` the one place that says which key is which
       // command.
-      if (shortcut === 'blur' && (exportOpen || desktopExportOpen || (sidebarOpen && isNarrowScreen()))) {
+      if (
+        shortcut === 'blur' &&
+        (exportOpen || desktopExportOpen || confirmRequest !== null || (sidebarOpen && isNarrowScreen()))
+      ) {
         if (exportOpen) setExportOpen(false)
         else if (desktopExportOpen) setDesktopExportOpen(false)
-        else setSidebarOpen(false)
+        // A modal confirm dialog owns Escape while it is open: the dialog's own
+        // cancel handling answers it (false), and this branch must not blur the
+        // editor underneath.
+        else if (confirmRequest !== null) {
+          /* handled by the dialog */
+        } else setSidebarOpen(false)
         return
       }
       // Escape is the exception: swallowing it takes the key away from the IME
@@ -905,7 +930,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [shortcutActions, sidebarOpen, exportOpen, desktopExportOpen])
+  }, [shortcutActions, sidebarOpen, exportOpen, desktopExportOpen, confirmRequest])
 
   // Crossing the breakpoint mid-session (a rotation, a resized window) adopts
   // that mode's default: a column that has just become a drawer must not sit on
@@ -1262,6 +1287,8 @@ export default function App() {
           onClose={() => setTreeMenu(null)}
         />
       )}
+
+      <ConfirmDialog request={confirmRequest} onAnswer={handleConfirmAnswer} />
 
       {toast && <div className="toast">{toast}</div>}
     </div>

@@ -629,8 +629,8 @@ export class EditorKernel {
     const start = this.caretFromDom()
     const end = this.caretEndFromDom()
     if (start === null || end === null) return
-    const from = Math.min(start, end)
-    const to = Math.max(start, end)
+    const rawFrom = Math.min(start, end)
+    const rawTo = Math.max(start, end)
 
     // Pasting inside a table ROW: the clip's newlines must not split the row,
     // so — like `cellSource` on read — newline runs and their surrounding
@@ -639,18 +639,42 @@ export class EditorKernel {
     // caret sitting on an empty cell's padding cannot leave the padding inside
     // the content. Outside a row the text keeps its newlines and re-parses
     // into the blocks they make.
-    if (inTable(this.doc, from)) {
+    if (inTable(this.doc, rawFrom)) {
       const flattened = text.replace(/[ \t]*\n[ \t]*/g, ' ').trim()
-      const cellPaste = pasteTableCell(this.doc, from, to, flattened)
+      const cellPaste = pasteTableCell(this.doc, rawFrom, rawTo, flattened)
       if (cellPaste) {
         this.pushUndo({ value: this.doc, caret: this.caret })
         this.commit(cellPaste.doc, cellPaste.caret)
         return
       }
       this.pushUndo({ value: this.doc, caret: this.caret })
-      this.commit(this.doc.slice(0, from) + flattened + this.doc.slice(to), from + flattened.length)
+      this.commit(
+        this.doc.slice(0, rawFrom) + flattened + this.doc.slice(rawTo),
+        rawFrom + flattened.length,
+      )
       return
     }
+
+    // Replace the selection's source range — extended to the line edges the way
+    // the COPY side does (`copyLineEdge`; clipboard/01). Chromium's ⌘A starts
+    // its range at the first VISIBLE run, leaving a collapsed line marker (`# `
+    // on the document's first line) OUTSIDE the range; without the same
+    // extension here, replacing the whole document would keep that marker and
+    // the pasted first line would come back as a heading (clipboard/02). The
+    // range ends are only extended when their run sits at a line's collapsed
+    // edge — the same judgement the copy side relies on.
+    const selection = window.getSelection()
+    const range = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+    // A collapsed range is a caret, not a selection: extending it would make a
+    // paste at the end of a line replace the WHOLE line.
+    const hasSelection = range !== null && !range.collapsed
+    const from = hasSelection
+      ? (this.copyLineEdge(range.startContainer, start, 'start') ?? rawFrom)
+      : rawFrom
+    const to = hasSelection
+      ? (this.copyLineEdge(range.endContainer, end, 'end') ?? rawTo)
+      : rawTo
+
     this.pushUndo({ value: this.doc, caret: this.caret })
     this.commit(this.doc.slice(0, from) + text + this.doc.slice(to), from + text.length)
   }
@@ -876,6 +900,17 @@ export class EditorKernel {
       // marker and repeating it would open a second fence.
       const parts = parseLine(currentLine)
       const prefix = parts.prefix
+
+      // Enter on the LAST empty quote line LEAVES the quote — and has to leave a
+      // blank separator line behind it. Typing straight below the quote would
+      // otherwise be read by CommonMark as the quote's lazy continuation (a bare
+      // line, no `>`, that still belongs to the block) and the whole quote would
+      // slip back into its editing state (`.scratch/blockquote/issues/01`).
+      const quoteGap = this.leaveQuoteWithGap(live)
+      if (quoteGap) {
+        this.commit(quoteGap.doc, quoteGap.caret)
+        return
+      }
 
       const left = this.leavingEmptyItem(live)
       if (left) {
@@ -1107,6 +1142,30 @@ export class EditorKernel {
         return
       }
     }
+  }
+
+  /**
+   * Enter on an EMPTY quote line that is the quote's LAST line: leaves the quote
+   * AND guarantees a blank line between it and whatever is typed next. Without
+   * the blank, the next line (no `>`) would be the quote's lazy continuation and
+   * the whole block would re-enter its editing state with the new text absorbed
+   * (`.scratch/blockquote/issues/01`). A quote line with more quote lines below
+   * is NOT the tail — leaving a middle item keeps the old semantics (the line
+   * becomes blank, no gap inserted), which is what `leavingEmptyItem` does.
+   */
+  private leaveQuoteWithGap(live: number): { doc: string; caret: number } | null {
+    const { start: lineStart, end: lineEnd, text: line } = this.lineBounds(live)
+    if (!/^>\s*$/.test(line)) return null
+    // The next line decides: a quoted line right below means the quote continues,
+    // this is a middle item, not the tail. (The terminator of THIS line is the
+    // first character of the rest.)
+    if (/^\n?[ \t]*>/.test(this.doc.slice(lineEnd + 1))) return null
+    const stripped = this.doc.slice(0, lineStart) + this.doc.slice(lineStart + line.length)
+    // `stripped` ends with the blank line just created (its `\n`). One more `\n`
+    // makes that blank a real separator line, and the caret lands past it — a
+    // fresh line that typing will NOT attach to the quote.
+    const doc = stripped.endsWith('\n\n') ? stripped : `${stripped}\n`
+    return { doc, caret: doc.length }
   }
 
   /**

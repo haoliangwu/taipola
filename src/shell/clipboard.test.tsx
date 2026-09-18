@@ -177,4 +177,39 @@ describe('粘贴（clipboard/02）', () => {
     expect(readDocumentSource(doc)).toBe(WELCOME_DOC)
     view.unmount()
   })
+
+  it('首行 # 折叠时全选粘贴：行首标记不残留，新内容不是标题', async () => {
+    // 写照 clipboard/02 的真机路径：光标先离开首行（首行收起、`# ` 折叠隐藏），
+    // 然后选区从第一个可见 run 开始——Chromium ⌘A 就是这个起点。
+    const { view, doc } = await renderWithDoc('# 标题\n\n正文\n')
+    const lines = [...doc.querySelectorAll('[data-vline]')]
+    const thirdLine = lines[lines.length - 2] as HTMLElement // 「正文」
+    const thirdRun = thirdLine.querySelector('[data-run]')?.firstChild as Text
+    placeCaretAt(thirdRun, thirdRun.textContent?.length ?? 0)
+    const hidden = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run]') as HTMLElement
+    expect(getComputedStyle(hidden).display).toBe('none')
+    const firstVisible = [
+      ...doc.querySelectorAll('[data-block="0"] [data-vline="0"] [data-run]'),
+    ].find((r) => getComputedStyle(r).display !== 'none') as HTMLElement
+    const range = document.createRange()
+    range.setStart(firstVisible.firstChild as Text, 0)
+    range.setEnd(doc, doc.childNodes.length)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+
+    pasteLikeTheBrowser(doc, '一个干净的短段落。\n\n另一个干净的短段落。')
+
+    // 替换全程：开头没有残留的 `# `，第一行是普通段落，内容与粘贴文本逐字一致。
+    expect(readDocumentSource(doc)).toBe('一个干净的短段落。\n\n另一个干净的短段落。')
+    view.unmount()
+  })
+
+  it('首行无标记的全选粘贴：无残留（回归）', async () => {
+    const { view, doc } = await renderWithDoc('甲段落\n\n乙段落\n')
+    selectAll(doc)
+    pasteLikeTheBrowser(doc, '新内容\n')
+    expect(readDocumentSource(doc)).toBe('新内容\n')
+    view.unmount()
+  })
 })

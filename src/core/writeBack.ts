@@ -38,8 +38,9 @@ export interface WriteBackDeps {
   currentModifiedAt(): Promise<number | null>
   /** Writes `text` into the file. `false` when nothing was written. */
   write(text: string): Promise<boolean>
-  /** Asked once, when the file changed since it was read. */
-  confirmOverwrite(): boolean
+  /** Asked once, when the file changed since it was read. May be async (a page
+   dialog instead of the browser's blocking confirm). */
+  confirmOverwrite(): boolean | Promise<boolean>
   /** The text is on disk. The shell marks the document saved and drops its slot. */
   onWritten(text: string): void
   /** The automatic writes have stopped. Fired once. */
@@ -98,7 +99,7 @@ export function createWriteBack(deps: WriteBackDeps): WriteBack {
         deps.onStopped('missing')
         return
       }
-      if (current !== baseline && !deps.confirmOverwrite()) {
+      if (current !== baseline && !(await deps.confirmOverwrite())) {
         // The user would rather not overwrite whatever is out there. The draft
         // slot keeps the content; asking again on every later keystroke would be
         // worse than stopping, so this document's automatic writes stop here.

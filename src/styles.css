@@ -1423,6 +1423,61 @@ body {
   color: #c98a2b;
 }
 
+.confirm-dialog {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0;
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  width: min(320px, calc(100vw - 48px));
+}
+
+.confirm-dialog::backdrop {
+  background: rgb(0 0 0 / 0.28);
+}
+
+.confirm-message {
+  margin: 0;
+  padding: 16px 18px 4px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 14px;
+}
+
+.confirm-actions button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.confirm-actions button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.confirm-actions .confirm-ok {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.confirm-actions .confirm-ok:hover {
+  background: var(--accent);
+  color: var(--bg);
+  opacity: 0.9;
+}
+
 .toast {
   position: fixed;
   left: 50%;

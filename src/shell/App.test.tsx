@@ -52,6 +52,23 @@ async function typeInto(view: ReturnType<typeof render>, key: string) {
   await user.keyboard(key)
 }
 
+/**
+ * Answers the app's OWN confirm dialog (`.confirm-dialog`, since
+ * `confirm-dialog/01` replaced `window.confirm`): flush the render that opened
+ * it, then click 确定 or 取消. Throws when no dialog is on screen — a question
+ * the test expected but the shell never asked is a failed test, not a no-op.
+ */
+async function answerDialog(view: ReturnType<typeof render>, ok: boolean) {
+  await act(async () => {})
+  const dialog = view.container.querySelector('.confirm-dialog') as HTMLDialogElement | null
+  if (!dialog) throw new Error('确认对话框没有出现')
+  const button = dialog.querySelector(ok ? '.confirm-ok' : '.confirm-cancel') as HTMLButtonElement
+  await act(async () => {
+    button.click()
+  })
+  await act(async () => {})
+}
+
 /** Past the draft debounce (500ms), which is where a wrong cross-tab notice would show. */
 const pastDraftDebounce = () => new Promise((resolve) => setTimeout(resolve, 700))
 
@@ -345,15 +362,17 @@ describe('丢弃未保存内容前的确认', () => {
     await makeDirty(doc())
 
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     try {
       await act(async () => {
         button('打开').click()
       })
+      await act(async () => {})
 
       // 顺序是"先选文件、再问"：问题里点得出文件名，用户才知道要丢弃哪一篇换来哪一篇。
       expect(open, '应该先让用户选出要打开的文件').toHaveBeenCalled()
-      expect(confirm.mock.calls[0]?.[0]).toContain('别的.md')
+      expect(view.container.querySelector('.confirm-dialog')?.textContent).toContain('别的.md')
+
+      await answerDialog(view, false)
 
       // 内容、文件名都还在 —— 被拒绝的那一次「打开」整个没有发生。
       expect(readDocumentSource(doc())).toBe('X原来的内容\n')
@@ -366,7 +385,6 @@ describe('丢弃未保存内容前的确认', () => {
       expect(readDocumentSource(doc())).toBe('原来的内容\n')
     } finally {
       open.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -379,11 +397,11 @@ describe('丢弃未保存内容前的确认', () => {
     await makeDirty(doc())
 
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     try {
       await act(async () => {
         button('打开').click()
       })
+      await answerDialog(view, true)
 
       expect(readDocumentSource(doc())).toBe('新文件的内容\n')
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('别的.md')
@@ -394,7 +412,6 @@ describe('丢弃未保存内容前的确认', () => {
       expect(readDocumentSource(doc())).toBe('新文件的内容\n')
     } finally {
       open.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -407,20 +424,18 @@ describe('丢弃未保存内容前的确认', () => {
         `.titlebar-right [aria-label="${label}"]`,
       ) as HTMLButtonElement
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
-    const confirm = vi.spyOn(window, 'confirm')
     try {
       await act(async () => {
         button('打开').click()
       })
 
-      expect(confirm).not.toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
       expect(readDocumentSource(view.container.querySelector('.doc') as HTMLElement)).toBe(
         '新文件的内容\n',
       )
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('别的.md')
     } finally {
       open.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -434,17 +449,16 @@ describe('丢弃未保存内容前的确认', () => {
     const { view, doc, button } = setup()
 
     const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     try {
       await act(async () => {
         button('打开').click()
       })
+      await answerDialog(view, false)
 
-      expect(confirm).toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
       expect(readDocumentSource(doc())).toBe('原来的内容\n')
     } finally {
       open.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -453,17 +467,54 @@ describe('丢弃未保存内容前的确认', () => {
     const { view, doc, button } = setup()
     await makeDirty(doc())
 
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     try {
       await act(async () => {
         button('新建').click()
       })
+      await act(async () => {})
+      expect(view.container.querySelector('.confirm-dialog')?.textContent).toContain(
+        '当前文档还没保存，确定新建吗？',
+      )
+      await answerDialog(view, true)
 
       // 不经过系统选择器，所以只有"动作之前问"这一种可能；措辞与重构前一致。
-      expect(confirm.mock.calls[0]?.[0]).toBe('当前文档还没保存，确定新建吗？')
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('untitled.md')
     } finally {
-      confirm.mockRestore()
+      view.unmount()
+    }
+  })
+
+  it('对话框开着时按 Esc：只关对话框，编辑器不 blur、文档没换', async () => {
+    // 快捷键短路（App.tsx 的 blur 分支）必须认得"对话 modal 开着"：此刻 Esc
+    // 只能答"取消"，不能顺带 blur 编辑器——否则焦点落到 dialog 背后的文档上，
+    // 与 modal 语义矛盾（`confirm-dialog/01` 的验证点）。
+    const { view, doc, button } = setup()
+    await makeDirty(doc())
+    const open = vi.spyOn(documents, 'open').mockResolvedValue(PICKED)
+    try {
+      const user = userEvent.setup({ delay: null })
+      await act(async () => {
+        button('打开').click()
+      })
+      await act(async () => {})
+      const dialog = view.container.querySelector('.confirm-dialog') as HTMLDialogElement
+      expect(dialog.open).toBe(true)
+      // modal 的焦点陷阱：焦点在对话框内，而不是留在背后的编辑器里。
+      expect(dialog.contains(document.activeElement)).toBe(true)
+
+      await user.keyboard('{Escape}')
+      // 合成按键不触发 dialog 的原生 cancel 默认动作（非受信事件豁免），等价
+      // 路径是派发 cancel 事件本身——那是浏览器在真实 Esc 时做的事情。
+      const dialog2 = view.container.querySelector('.confirm-dialog') as HTMLDialogElement
+      dialog2.dispatchEvent(new Event('cancel', { cancelable: true, bubbles: true }))
+      await act(async () => {})
+      expect(dialog2.open).toBe(false)
+      // 编辑器仍在、还能拿回焦点；打开动作被取消。
+      doc().focus({ preventScroll: true })
+      expect(document.activeElement).toBe(doc())
+      expect(readDocumentSource(doc())).toBe('X原来的内容\n')
+    } finally {
+      open.mockRestore()
       view.unmount()
     }
   })
@@ -579,7 +630,6 @@ describe('有文件时自动写回', () => {
       document: FILE.document,
     })
     const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(FILE.modifiedAt)
-    const confirm = vi.spyOn(window, 'confirm')
     try {
       await openFile(view)
       await typeInto(view, 'X')
@@ -591,12 +641,11 @@ describe('有文件时自动写回', () => {
         content: '另一篇的内容\n',
       })
 
-      expect(confirm).not.toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
       expect(readDocumentSource(documentBody(view))).toBe('另一篇的内容\n')
     } finally {
       saveSpy.mockRestore()
       modified.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -633,7 +682,6 @@ describe('有文件时自动写回', () => {
       document: FILE.document,
     })
     const modified = vi.spyOn(documents, 'modifiedAt').mockResolvedValue(999)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     try {
       await openFile(view)
       await typeInto(view, 'X')
@@ -641,8 +689,9 @@ describe('有文件时自动写回', () => {
         await pastWriteBack()
       })
 
-      expect(confirm).toHaveBeenCalledTimes(1)
-      expect(confirm.mock.calls[0]?.[0]).toContain('笔记.md')
+      // 写回问了一次：对话框里点得出文件的名字。
+      expect(view.container.querySelector('.confirm-dialog')?.textContent).toContain('笔记.md')
+      await answerDialog(view, false)
       expect(saveSpy).not.toHaveBeenCalled()
       expect(view.container.querySelector('.toast')?.textContent).toContain('停止自动写回')
       expect(JSON.parse(localStorage.getItem('taipola:draft:笔记.md') ?? '{}').content).toBe(
@@ -651,7 +700,6 @@ describe('有文件时自动写回', () => {
     } finally {
       saveSpy.mockRestore()
       modified.mockRestore()
-      confirm.mockRestore()
       view.unmount()
     }
   })
@@ -886,7 +934,6 @@ describe('侧栏打开文件夹', () => {
       content: doc.name === '一.md' ? '第一章\n' : '笔记正文\n',
       modifiedAt: 111,
     }))
-    const confirm = vi.spyOn(window, 'confirm')
     const view = render(<App />)
     const user = userEvent.setup({ delay: null })
     try {
@@ -898,7 +945,7 @@ describe('侧栏打开文件夹', () => {
       await user.click(row(view, '一.md'))
 
       // 有文件句柄 = 内容会自己写回，所以切换不再问任何问题。
-      expect(confirm).not.toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
       expect(readDocumentSource(documentBody(view))).toBe('第一章\n')
       // 相对路径，而不是裸文件名：同名文档在两个子目录里才分得开。
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('章节/一.md')
@@ -920,7 +967,7 @@ describe('侧栏打开文件夹', () => {
       expect(openEntry).toHaveBeenCalledTimes(2)
       expect(openEntry.mock.calls[1]?.[0]).toEqual({ name: '笔记.md', handle: NOTE.handle })
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('笔记.md')
-      expect(confirm).not.toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
       expect(readDocumentSource(documentBody(view))).toBe('笔记正文\n')
       expect(row(view, '笔记.md').classList.contains('is-active')).toBe(true)
       expect(row(view, '一.md').classList.contains('is-active')).toBe(false)
@@ -943,7 +990,6 @@ describe('侧栏打开文件夹', () => {
       content: '第一章\n',
       modifiedAt: 111,
     })
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const view = render(<App />)
     const user = userEvent.setup({ delay: null })
     try {
@@ -954,7 +1000,8 @@ describe('侧栏打开文件夹', () => {
       await user.click(row(view, '章节'))
       await user.click(row(view, '一.md'))
 
-      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(view.container.querySelector('.confirm-dialog')).not.toBeNull()
+      await answerDialog(view, false)
       // 拒绝之后整篇没被替换。
       expect(readDocumentSource(documentBody(view))).toBe(before)
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
@@ -1285,17 +1332,16 @@ describe('文件树的新建 / 重命名 / 删除', () => {
     try {
       await openFolder(view)
 
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
       fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
       await user.click(menuItem(view, '删除'))
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('笔记.md'))
+      expect(view.container.querySelector('.confirm-dialog')?.textContent).toContain('笔记.md')
+      await answerDialog(view, false)
       expect(stubs.removeFile).not.toHaveBeenCalled()
       expect(treeRows(view)).toContain('笔记.md')
 
-      confirm.mockReturnValue(true)
       fireEvent.contextMenu(treeRow(view, '笔记.md'), { clientX: 120, clientY: 200 })
       await user.click(menuItem(view, '删除'))
-      await act(async () => {})
+      await answerDialog(view, true)
 
       expect(stubs.removeFile).toHaveBeenCalledWith(ROOT, '笔记.md')
       expect(treeRows(view)).not.toContain('笔记.md')
@@ -1599,7 +1645,6 @@ describe('侧栏记忆上次的文件夹', () => {
 
   it('点「恢复」前在 welcome 里打过字：不顶掉那半篇没落盘的内容', async () => {
     stubSavedFolder({ status: 'offered', root: ROOT, lastFile: '笔记.md' })
-    const confirm = vi.spyOn(window, 'confirm')
     const view = render(<App />)
     const user = userEvent.setup({ delay: null })
     try {
@@ -1618,7 +1663,7 @@ describe('侧栏记忆上次的文件夹', () => {
       await act(async () => {})
       expect(view.container.querySelector('.doc-name')?.textContent).toBe('welcome.md')
       expect(vi.mocked(documents.openEntry)).not.toHaveBeenCalled()
-      expect(confirm).not.toHaveBeenCalled()
+      expect((view.container.querySelector('.confirm-dialog') as HTMLDialogElement).open).toBe(false)
     } finally {
       view.unmount()
     }
