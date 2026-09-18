@@ -515,11 +515,10 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     expect(r.getDoc()).toBe('标题行测试\n\n\n')
     await r.user.keyboard('第二行')
     await flush()
-    // 接在刚开的那一行上继续写：与标题行同一段（软换行）——行尾 Enter 不再
-    // 自带段落间距，要间距就再按一次回车，或段中 Enter。
-    expect(r.getDoc()).toBe('标题行测试\n第二行\n\n')
-    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 换行 + `第二行` 3 字 = 9。
-    expect(caretFromDom()).toBe(9)
+    // 打在空行上 = 新起一段：第二行两边补上空行边界，段落间距不随输入消失。
+    expect(r.getDoc()).toBe('标题行测试\n\n第二行\n\n')
+    // 光标还在刚打的那一行正文末尾：`标题行测试` 5 字 + 两个换行 + `第二行` 3 字 = 10。
+    expect(caretFromDom()).toBe(10)
     const tops = [...r.container.querySelectorAll<HTMLElement>('[data-vline]')]
       .filter((el) => (el.textContent ?? '') !== '')
       .map((el) => Math.round(el.getBoundingClientRect().top))
@@ -1347,7 +1346,7 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('只有空格的行：在这一行上打字，字符落在这一行、空格一个不少', async () => {
+  it('只有空格的行：在这一行上打字，字符落在这一行、空格一个不少，且自成一段', async () => {
     const r = renderEditor('甲\n   \n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
@@ -1355,10 +1354,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await r.user.keyboard('X')
     await flush()
     // 空格不参与排版，所以这一行只有一个光标位：行首。打进去的字落在空格**之前**
-    // ——比丢掉空格好；这个代价记在 ADR-0002。
-    expect(r.getDoc()).toBe('甲\nX   \n乙\n')
-    // 光标随后面的字（`X` 之后），没有跳回上一行、也没有跳到文档末尾。
-    expect(caretFromDom()).toBe(3)
+    // ——比丢掉空格好；这个代价记在 ADR-0002。空行（空格行）被占用 = 新段落。
+    expect(r.getDoc()).toBe('甲\n\nX   \n\n乙\n')
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 
@@ -1678,7 +1676,7 @@ describe('空行上打字只插一个字符', () => {
     return { texts: content.map((row) => row.text), tops: new Set(content.map((row) => row.top)) }
   }
 
-  it('两段之间的空行：写进去的字符就落在那一行（用户报的那条）', async () => {
+  it('两段之间的空行：写进去的字符自成一段（`paragraph-spacing/01` A 方案）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickAtLine(r, 1, 0)
@@ -1687,9 +1685,9 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 理想结果：`甲\nx\n乙`——只多这一个字符，一个换行都不加。
-    expect(r.getDoc()).toBe('甲\nx\n乙\n')
-    expect(caretFromDom()).toBe(3)
+    // 空行打字 = 新起一段：x 两侧补出空行边界，段落间距不随输入消失。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    expect(caretFromDom()).toBe(4)
     // 屏幕上三行各自成行：并排才是"换行符消失"。
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
@@ -1710,15 +1708,15 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // 打字接在刚开的那一行上、与 `甲` 同一段（软换行，两行紧排）；想要段落间距
-    // （空行分隔）就再按一次回车。
-    expect(r.getDoc()).toBe('甲\nx')
+    // 段尾 Enter 开出的那一行是空行；打字占用它 = 新起一段（x 前自动补上
+    // 空行边界，`paragraph-spacing/01` A 方案），不是软换行续段。
+    expect(r.getDoc()).toBe('甲\n\nx')
     expect(contentRows(r).texts).toEqual(['甲', 'x'])
     expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
   })
 
-  it('行尾回车再打字：字符落在光标那一行，与上一行同段（软换行）', async () => {
+  it('行尾回车再打字：字符自成一段（段落间距不随输入消失）', async () => {
     const r = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
@@ -1731,14 +1729,14 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    // x 落在光标那一行（紧贴 `甲` 的下一行，同段）；`乙` 仍在空行之后。
-    expect(r.getDoc()).toBe('甲\nx\n\n乙\n')
+    // x 写在光标那一行，但因为是空行被占用，自动成为独立段落。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
     expect(contentRows(r).texts).toEqual(['甲', 'x', '乙'])
     expect(contentRows(r).tops.size).toBe(3)
     await assertDomMatchesSource(r)
   })
 
-  it('文档开头的空行：字符就落在那一行', async () => {
+  it('文档开头的空行：字符落在那一行并自成一段', async () => {
     const r = renderEditor('\n甲\n')
     await flush()
     await clickAtLine(r, 0, 0)
@@ -1747,7 +1745,7 @@ describe('空行上打字只插一个字符', () => {
 
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('x\n甲\n')
+    expect(r.getDoc()).toBe('x\n\n甲\n')
     expect(contentRows(r).texts).toEqual(['x', '甲'])
     expect(contentRows(r).tops.size).toBe(2)
     await assertDomMatchesSource(r)
@@ -1772,7 +1770,7 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     await r.user.keyboard('x')
     await flush()
-    expect(r.getDoc()).toBe('甲\nx\n乙\n')
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
 
     await pressUndo(r)
     await flush()
@@ -1885,9 +1883,9 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     expect(caretFromDom()).toBe(2)
     await r.user.keyboard('x')
     await flush()
-    // x 接在刚开的那一行上、与甲同一段（软换行）——行尾 Enter 不再自带段落间距
-    // （`enter-backspace-smoke/10`）。想隔一个空行就再按一次回车。
-    expect(r.getDoc()).toBe('甲\nx\n')
+    // x 写在空行上 = 新起一段（两侧补空行，段落间距不随输入消失）。
+    expect(r.getDoc()).toBe('甲\n\nx\n\n')
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 

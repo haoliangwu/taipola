@@ -837,34 +837,30 @@ body {
 }
 
 /* The paragraph gap, held BY THE PARAGRAPHs: every non-blank block carries
-   `margin-bottom: 12px`. The blank line between two blocks is then just one
+   `margin-bottom: 8px`. The blank line between two blocks is then just one
    clean line box — a real caret target, `blank-line-typing/01` — and the gap
    belongs to the paragraph, so it does not vanish with the blank block the way
-   it did when it hung off `blank` (the reviewer's "空格打字会上移" was that
-   gap disappearing).
+   it did when it hung off `blank`.
    
-   Amount: 12px ≈ 0.46 line, so a paragraph boundary reads clearly wider than a
-   soft wrap (38.25px between paragraphs vs 26.25px inside one). 8px was the
-   first attempt and the reviewer asked for more; 4px before that was invisible
-   altogether.
+   Amount: 8px ≈ 0.3 line — enough that a paragraph boundary reads wider
+   than a soft wrap (34.25px between paragraphs vs 26.25px inside one); 12px
+   read as too much and 4px as nothing, both tried and rejected.
    
-   What the gap does NOT survive, and cannot: typing a character INTO the blank
-   line between two paragraphs. `甲\n\n乙` + typing `x` on the blank line is
-   `甲\nx\n乙` — in Markdown single newlines are one paragraph, so the three
-   lines become ONE soft-broken paragraph and there is no boundary left for a
-   gap to hang on. Measured; the reviewer considered making the keystroke open
-   a paragraph of its own (`甲\n\nx\n\n乙`) and chose against it: that would add
-   two newlines to the source the user did not type, and it reverses the
-   behaviour pinned by `Editor.test.tsx` ("两段之间的空行：写进去的字符就落在
-   那一行（用户报的那条）" and "行尾回车再打字…同段"). To keep two paragraphs,
-   Enter at the end of one — do not type on the boundary.
+   Typing a character INTO the blank line between two paragraphs does NOT eat
+   the gap: the keystroke gets a paragraph of its own. `甲\n\n乙` + typing `x`
+   on the blank line would naively be `甲\nx\n乙` (single newlines = one
+   paragraph, three lines merged, boundary gone) — the kernel's
+   `paragraphizeTypedBlankLine` fences the new line instead (`甲\n\nx\n\n乙`),
+   Typora-style, so the boundary and the spacing survive the edit
+   (`.paragraphize` is not triggered inside fences, tables, quotes or lists;
+   structures keep their blank lines untouched).
    
-   The other trade-off is real too: Enter at a paragraph's end drops the caret
-   into a blank line whose top now sits 12px below the paragraph, because the
-   gap is above it — the price of a gap that belongs to the paragraph at all.
+   The trade-off stands: Enter at a paragraph's end drops the caret into a
+   blank line whose top sits 8px below the paragraph, because the gap is above
+   it — the price of a gap that belongs to the paragraph at all.
    (`.scratch/paragraph-spacing/issues/01`) */
 .blk:not([data-kind='blank']) {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 /* One source line. One line box tall, whatever the browser would do with its

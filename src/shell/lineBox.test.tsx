@@ -103,7 +103,7 @@ describe('每个行种的行盒高度', () => {
 // 下都稳定——空行被文字占用时，8px 也不会跟着消失。空行块本身零 margin，
 // 保持正好一行（真实光标目标）。
     const textBlock = r.container.querySelector<HTMLElement>('[data-block="0"]')
-    expect(parseFloat(getComputedStyle(textBlock!).marginBottom)).toBe(12)
+    expect(parseFloat(getComputedStyle(textBlock!).marginBottom)).toBe(8)
     const blankBlock = r.container.querySelector<HTMLElement>('[data-block="1"]')
     expect(parseFloat(getComputedStyle(blankBlock!).marginBottom)).toBe(0)
 

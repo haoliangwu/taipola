@@ -21,6 +21,7 @@
  * position is derived through the view (`core/view.ts`) on every render.
  */
 import { parseDocument, type Block } from '../core/markdown'
+import { paragraphizeTypedBlankLine } from '../core/paragraphize'
 import { computeLineStates, parseLine, type LineState } from '../core/inline'
 import { buildBlockView, type BlockView } from '../core/view'
 import { exportableHref } from '../core/markdownIt'
@@ -384,6 +385,31 @@ export class EditorKernel {
    * kernel: no reconciler can run in between, so no drift can accumulate.
    */
   private commit(next: string, caretNext: number): void {
+    // A keystroke that turns a whole blank line into a line of text gives that
+    // line a paragraph of its OWN — a blank line on each side — so the
+    // paragraph boundary, and the spacing hanging on it, survives the edit
+    // (`.scratch/paragraph-spacing/issues/01`). Everything else is untouched.
+    //
+    // The gate is the OLD line's kind: only a true blank line (outside any
+    // structure) triggers. A blank line INSIDE a fence, table, quote or list
+    // keeps its old editor behaviour — fencing paragraphs there would break
+    // code, rows and items.
+    const clamped = clamp(caretNext, 0, next.length)
+    const inserted = next.length - this.doc.length
+    if (inserted > 0) {
+      const insertStart = clamped - inserted
+      if (insertStart >= 0) {
+        const lineStart = lineOfOffset(this.doc, insertStart)
+        const kind = this.lineStates[lineStart - 1]?.kind
+        if (kind === 'blank' || kind === undefined) {
+          const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
+          if (paragraphized !== null) {
+            next = paragraphized.doc
+            caretNext = paragraphized.caret
+          }
+        }
+      }
+    }
     this.doc = next
     this.caret = clamp(caretNext, 0, next.length)
     this.pendingCaret = this.caret
