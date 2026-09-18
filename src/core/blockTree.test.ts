@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { WELCOME_DOC } from './welcome'
-import { kindOfBlock, parseBlockTree, type BlockNode } from './blockTree'
+import { kindOfBlock, listItemDetails, parseBlockTree, type BlockNode } from './blockTree'
 import { serializeBlocks, roundTripInvariant } from './serialize'
 
 /** 覆盖全部块类型与边界形态的文档集。 */
@@ -97,5 +97,27 @@ describe('serializeBlocks 字节双射', () => {
     expect(tree.blocks[2]?.endLine).toBe(3)
     expect(tree.blocks[3]?.startLine).toBe(3)
     expect(tree.blocks[3]?.endLine).toBe(4)
+  })
+})
+describe('列表块的 item 子块', () => {
+  it('子弹列表：顶层项、嵌套项与续行分开', () => {
+    const item = (raw: string) => listItemDetails(raw)
+    expect(item('- 甲\n  - 子甲\n  续行（不是项）\n- 乙')).toEqual([
+      { line: 0, indent: '', marker: '- ', body: '甲' },
+      { line: 1, indent: '  ', marker: '- ', body: '子甲' },
+      { line: 3, indent: '', marker: '- ', body: '乙' },
+    ])
+  })
+
+  it('有序与任务 marker 原样保留', () => {
+    const items = listItemDetails('1. 甲\n- [x] 完成\n- [ ] 未完成')
+    expect(items.map((i) => i.marker)).toEqual(['1. ', '- [x] ', '- [ ] '])
+    expect(items[1]?.body).toBe('完成')
+  })
+
+  it('parseBlockTree 把 items 填进 list 块', () => {
+    const tree = parseBlockTree('- 甲\n- 乙\n\n正文\n')
+    const list = tree.blocks.find((b) => b.kind === 'list')
+    expect(list?.items?.map((i) => i.body)).toEqual(['甲', '乙'])
   })
 })

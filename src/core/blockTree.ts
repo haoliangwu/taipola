@@ -19,6 +19,7 @@ import {
   parseLine,
   type LineParts,
 } from './inline'
+import { parseListItem } from './lists'
 
 export type BlockKind =
   | 'heading'
@@ -43,6 +44,35 @@ export interface BlockNode {
   endLine: number
   /** Heading depth 1–6, 0 otherwise (already parsed by `parseDocument`). */
   headingLevel: number
+  /**
+   * A LIST block's item lines, broken out (pure derived view — serialization
+   * still uses `raw`). List items are the box model's real sub-blocks
+   * (Typora `list_item`); this is the seed of that structure, fed by
+   * `lists.parseListItem` so the two never disagree on the marker grammar.
+   */
+  items?: ListItemDetail[]
+}
+
+/** One list item's line in its block: its place, marker and body. */
+export interface ListItemDetail {
+  /** Line index relative to the block's first line. */
+  line: number
+  /** The indentation in front of the marker (spaces), verbatim. */
+  indent: string
+  /** The marker, verbatim (`- `, `1. `, `- [x] ` — everything up to the body). */
+  marker: string
+  /** The item's text after the marker. */
+  body: string
+}
+
+/** A `list` block's items: every line that `parseListItem` recognises. */
+export function listItemDetails(raw: string): ListItemDetail[] {
+  const items: ListItemDetail[] = []
+  for (const [lineNumber, line] of raw.split('\n').entries()) {
+    const item = parseListItem(line, lineNumber)
+    if (item !== null) items.push(item)
+  }
+  return items
 }
 
 export interface BlockTree {
@@ -95,13 +125,17 @@ export function kindOfBlock(block: Pick<Block, 'raw' | 'headingLevel'>): BlockKi
  */
 export function parseBlockTree(source: string): BlockTree {
   const parsed = parseDocument(source)
-  const blocks: BlockNode[] = parsed.blocks.map((block) => ({
-    kind: kindOfBlock(block),
-    raw: block.raw,
-    startLine: block.startLine,
-    endLine: block.endLine,
-    headingLevel: block.headingLevel,
-  }))
+  const blocks: BlockNode[] = parsed.blocks.map((block) => {
+    const node: BlockNode = {
+      kind: kindOfBlock(block),
+      raw: block.raw,
+      startLine: block.startLine,
+      endLine: block.endLine,
+      headingLevel: block.headingLevel,
+    }
+    if (node.kind === 'list') node.items = listItemDetails(block.raw)
+    return node
+  })
   return { blocks }
 }
 
