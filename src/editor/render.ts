@@ -232,6 +232,7 @@ function lineElement(
   index: number,
   state: LineState | undefined,
   raw: string,
+  softBreakNext = false,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-vline') ? existing : document.createElement('div')
   setAttr(el, 'data-vline', String(index))
@@ -319,9 +320,20 @@ function lineElement(
     })
     return el
   }
-  syncChildren(el, line.runs.length, (runIndex, current) =>
-    runElement(current, line.runs[runIndex], runIndex, state),
-  )
+  // A SOFT BREAK inside the block is a real `<br>` at the line's end — the
+  // next line is this paragraph's continuation (`lines[i+1].continues`),
+  // Typora renders it that way and so does the markdown-it output: the
+  // paragraph keeps its lines inside ONE block, the break lives in the line
+  // box. The `<br>` comes AFTER the runs; it carries no source offset, exactly
+  // like a blank line's. The line box's fixed `min-height` keeps the box one
+  // line tall either way. Fenced code lines, table rows and blank lines never
+  // take this path (they return above), so no break appears inside structures.
+  syncChildren(el, line.runs.length + (softBreakNext ? 1 : 0), (runIndex, current) => {
+    if (runIndex === line.runs.length) {
+      return current && current.hasAttribute('data-br') ? current : brElement()
+    }
+    return runElement(current, line.runs[runIndex], runIndex, state)
+  })
   return el
 }
 
@@ -350,6 +362,7 @@ function blockElement(
       index,
       lineStates[block.startLine + index],
       raw,
+      view.lines[index + 1]?.continues === true,
     )
   })
   return el

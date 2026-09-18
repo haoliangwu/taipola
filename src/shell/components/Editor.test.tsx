@@ -1856,12 +1856,50 @@ describe('空行上打字只插一个字符', () => {
 
 /**
  * Enter / Shift+Enter 的语义判据来自用户对 Typora 的实测（`enter-backspace-smoke/01、02`）：
- * Enter 是硬换行、Shift+Enter 是软换行，换行距离前者大、后者小。
- * 源码表达：**段中** Enter 插两个换行（拆段、多一个空行），Shift+Enter 插一个；
- * **行尾**（非空行）两键相同：都只插一个换行、普通断行——段落间距来自段中 Enter
- * 或行尾连按两次（`enter-backspace-smoke/10`）。行首与空行上两键都只插一个换行。
+ * **Enter 是硬换行、Shift+Enter 是软换行，换行距离前者大、后者小**（九审恢复——
+ * 任何位置 Enter 都是硬换行；块级表达 = 创建新块，`enter-backspace-smoke/10` 九审）。
+ * 源码表达：Enter 拆段/开新段（段落边界 = 空行），Shift+Enter 在块内插一个
+ * `\n`（软换行，渲染为行尾 `<br>`）。
  */
 describe('Enter 硬换行 / Shift+Enter 软换行', () => {
+  it('软换行在同一块内渲染为行尾 <br>（Typora DOM 结构，不拆块）', async () => {
+    const r = renderEditor('甲\n乙\n')
+    await flush()
+    // 一个块、两个行盒——软换行不产生块边界。
+    const rows = r.container.querySelectorAll('[data-block="0"] [data-vline]')
+    expect(rows.length).toBe(2)
+    // 第一行行尾挂着 <br data-br="">（下一行是本段的续行）。
+    const first = rows[0]
+    expect(first?.querySelector('br[data-br]')).not.toBeNull()
+    // 最后一行（段尾）没有 <br>。
+    const last = rows[1]
+    expect(last?.querySelector('br[data-br]')).toBeNull()
+    // 行盒结构：run 在后、br 在后（用户给的 Typora 形状）。
+    expect(first!.querySelector('br[data-br]')?.previousElementSibling?.hasAttribute('data-run')).toBe(true)
+    await assertDomMatchesSource(r)
+  })
+
+  it('硬换行拆出的段没有行尾 <br>；空行分隔的两段行盒干净', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    r.container.querySelectorAll<HTMLElement>('[data-vline]').forEach((row) => {
+      // 行尾不应有软换行标记：空行本身的 <br data-br="">（第一段桶）除外
+      const br = row.querySelector('br[data-br]')
+      const isBlankRow = row.classList.contains('vl-blank')
+      expect(br === null || isBlankRow).toBe(true)
+    })
+    await assertDomMatchesSource(r)
+  })
+
+  it('围栏代码行之间没有软换行 <br>', async () => {
+    const r = renderEditor('```\na\nb\n```\n')
+    await flush()
+    const rows = r.container.querySelectorAll('[data-block="0"] [data-vline]')
+    rows.forEach((row) => {
+      expect(row.querySelector('br[data-br]')).toBeNull()
+    })
+    await assertDomMatchesSource(r)
+  })
   it('段落中间 Enter：源码插入一个空行，把段落拆成两段', async () => {
     const r = renderEditor('甲乙\n')
     await flush()

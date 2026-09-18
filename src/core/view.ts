@@ -127,6 +127,13 @@ interface ViewLine {
   sourceStart: number
   runs: ViewRun[]
   /**
+   * True when this line is the CONTINUATION of the line above (the previous
+   * line ended in a soft break). The renderer uses lines[i].continues of the
+   * NEXT line to put a `<br>` at THIS line's end — a soft break renders as a
+   * real `<br>` inside the block (Typora shape), not as a block boundary.
+   */
+  continues?: boolean
+  /**
    * Table rows only: run-index ranges, one per cell (empty range = empty cell).
    * The DOM must render each CELL as one grid item — a run-per-item grid splits
    * a cell whose inline markers are revealed into several columns.
@@ -1150,14 +1157,14 @@ export function buildBlockView(
   for (let li = 0; li < total; li++) {
     const line = lineText(li)
     const local = reveals.filter((r) => r >= base && r <= base + line.length)
-    lines.push(
-      buildLine(line, local.length ? local[0] - base : null, base, {
-        revealInBlock,
-        inCode: inCode[li],
-        continues: softBreaks.has(li - 1),
-        codeTokens: codeTokens[li],
-      }),
-    )
+    const viewLine = buildLine(line, local.length ? local[0] - base : null, base, {
+      revealInBlock,
+      inCode: inCode[li],
+      continues: softBreaks.has(li - 1),
+      codeTokens: codeTokens[li],
+    })
+    viewLine.continues = softBreaks.has(li - 1)
+    lines.push(viewLine)
     base += line.length + 1
   }
   return { lines }
