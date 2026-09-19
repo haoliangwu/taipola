@@ -498,10 +498,12 @@ export function renderDocument(
       lineStates,
       srcStart,
       gap,
-      // Only an IN-BETWEEN placeholder hides its extra separator rows; a
-      // TRAILING one (the document's last block) shows every row — repeated
-      // Enters at the document end are visible blank lines, as in Typora.
-      i === placeholderBlock && i !== lastIndex,
+      // A placeholder blank hides its extra separator rows — in-between AND
+      // trailing: `甲\n` + Enter yields a TWO-row trailing block (the existing
+      // separator + the fresh line), and rendering both showed two `<br>`s for
+      // one keystroke (user: one Enter should be one line). Once the mark is
+      // consumed the block renders every row again, as it always did.
+      i === placeholderBlock,
     )
   })
 }
