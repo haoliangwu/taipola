@@ -849,11 +849,14 @@ body {
   margin-bottom: 4px;
 }
 
-/* The Enter placeholder block renders its separator rows (they must exist in
-   the DOM for the read-back) but only the FIRST row is the break Enter just
-   opened — the rest are the pre-existing paragraph separator, hidden so one
-   Enter shows exactly one new line (`.scratch/paragraph-spacing/01`). */
-.blk[data-placeholder] .vl-blank:not(:first-child) {
+/* The Enter placeholder block draws ALL of its rows (they must exist in the
+   DOM for the read-back). IN-BETWEEN the document — a block follows — the
+   LAST row is the pre-existing paragraph separator (fresh Enter rows are
+   inserted before it), so only it is hidden: one Enter shows one new line,
+   repeated Enters show one each, the separator stays an invisible margin
+   (`.scratch/paragraph-spacing/01`). A TRAILING placeholder shows every row:
+   each Enter there opened one more blank line, and each Backspace pops one. */
+.blk[data-ph-sep] .vl-blank:last-child {
   display: none;
 }
 

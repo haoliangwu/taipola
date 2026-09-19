@@ -475,15 +475,17 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
-    // 第二次 Enter 在占位空行上（空行分支）：占位块又长一行（视觉只多一个
-    // 空行），光标留在占位行，Enter 标记保持——打字仍归位成新段落。
-    expect(caretFromDom()).toBe(6)
+    // 第二次 Enter 在占位空行上（空行分支）：占位块再长一行——新行插在
+    // 光标行之后（分隔行之前），光标落到 NEW 一行：每个 Enter 都可见地
+    // 多出一个空行、光标跟着往下走（Typora：每次回车光标下移一行）。
+    expect(caretFromDom()).toBe(7)
     // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
     await r.user.keyboard('X')
     await flush()
-    // X 被归位成新段落：占位空行 + 原有空行在 X 两侧（补边界只补缺失的一侧，
-    // 已有的空行保留）。关键性质是 X 不粘进下一段——修复前这里是 'X第二段'。
-    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n\n第二段\n')
+    // X 被归位成新段落：X 占据它所在的那一行（第二个 Enter 开出的行），
+    // 上方的回车行保留为空行边界、下方的分隔行并入段落间隙——两侧各一
+    // 个空行，无残留（旧实现 X 落在第一行，X 下方多出一个残留空行）。
+    expect(r.getDoc()).toBe('第一段文字\n\nX\n\n第二段\n')
     await assertDomMatchesSource(r)
   })
 
@@ -652,8 +654,6 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     expect(r.getDoc()).toBe('甲ABC\n\n乙\n')
     // 提交后的光标在 ABC 末尾（`甲ABC` 的尽头 = 偏移 4）。
-    // eslint-disable-next-line no-console
-    console.log('SEL-DEBUG', (() => { const sel = window.getSelection()!; const r = sel.rangeCount ? sel.getRangeAt(0) : null; return r ? r.startContainer.nodeType + '@' + r.startOffset + ' paren=' + (r.startContainer.parentElement?.getAttribute('data-src') ?? '?') : 'none' })())
     expect(caretFromDom()).toBe('甲'.length + 3)
 
     // 接着打字：字符必须落在 ABC 之后，光标跟走——坏掉时落点和光标都会错位。
@@ -1189,8 +1189,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('> 引用\n\n')
-    // 退出引用后光标在引用行尾（尾空行无行盒，吸附，十一审）。
-    expect(caretFromDom()).toBe(4)
+    // 退出引用后光标落尾空行行首（该行是 Enter 开出的占位行盒、可见）：
+    // 继续键入会开新段落，而不是粘回引用行。
+    expect(caretFromDom()).toBe(5)
     await assertDomMatchesSource(r)
   })
 
@@ -2558,6 +2559,112 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     for (const b of blanksAfter) {
       expect(b.closest('[data-block]')?.getAttribute('data-block')).toBe(lastBlock)
     }
+    await assertDomMatchesSource(r)
+  })
+
+  it('文档末尾连按 Enter：每按一次多一个可见空行，光标落最新行；退格逐个收回', async () => {
+    // 用户诉求「一个 Enter = 一个可见换行，符合正常按键习惯」：尾随占位
+    // 的每一行都是 Enter 开出的新行，全部可见；光标永远落在最新的可见
+    // 行上（修复前光标落在被 CSS 隐藏的行上 —— 屏幕上看不见光标）。
+    const r = renderEditor('甲')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n')
+    let blanks = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
+    expect(blanks).toHaveLength(1)
+    expect(getComputedStyle(blanks[0]!).display).not.toBe('none')
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n')
+    blanks = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
+    expect(blanks).toHaveLength(2)
+    for (const b of blanks) expect(getComputedStyle(b).display).not.toBe('none')
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n\n')
+    blanks = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
+    expect(blanks).toHaveLength(3)
+    for (const b of blanks) expect(getComputedStyle(b).display).not.toBe('none')
+    // 每次退格收回一行，三次退格原样回到 `甲`，没有空操作。
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n')
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n')
+    await pressBackspace(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲')
+    await assertDomMatchesSource(r)
+  })
+
+  it('连按两次回车后打字：字符落最新空行并成独立段（文档末尾）', async () => {
+    const r = renderEditor('甲')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n')
+    // 光标在最后一行的可见空行上；键入的 X 落在那一行，成为新段落
+    // （Typora：两次回车开两行，第三次输入落在第二行上）。
+    await r.user.keyboard('X')
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\nX')
+    await assertDomMatchesSource(r)
+  })
+
+  it('回车两次后点回第一空行再打字：字符落在那一行，不被并进上一段', async () => {
+    // 占位行都是真实行盒、都可以点击落光标；第二次 Enter 的标记仍在"最新
+    // 行"上，但字符必须落在用户点击的那一行——浏览器把光标停在行盒起点
+    // （比插入点差一位），段落化判定必须看真实插入行而不是光标推导行
+    // （修复前软并进甲块：`甲\nx\n`）。
+    const r = renderEditor('甲')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n')
+    // 点击第一个空行（行首）；字符 x 应当落在这行并成为独立段。
+    await clickAtLine(r, 1, 0)
+    await flush()
+    await r.user.keyboard('x')
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\nx\n')
+    await assertDomMatchesSource(r)
+  })
+
+  it('两个段落之间连按两次回车：两个新空行都可见，分隔行仍隐藏', async () => {
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n\n乙\n')
+    await pressEnter(r)
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\n\n\n乙\n')
+    // 占位块的可见行 = 两个 Enter 行；最后一个分隔行保持隐藏。
+    const rows = [...r.container.querySelectorAll<HTMLElement>('.blk[data-placeholder]')].flatMap((b) =>
+      [...b.querySelectorAll<HTMLElement>('.vl-blank')],
+    )
+    expect(rows).toHaveLength(3)
+    expect(getComputedStyle(rows[0]!).display).not.toBe('none')
+    expect(getComputedStyle(rows[1]!).display).not.toBe('none')
+    expect(getComputedStyle(rows[2]!).display).toBe('none')
+    // 打字落最新行，成独立段，两侧各一空行。
+    await r.user.keyboard('x')
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
     await assertDomMatchesSource(r)
   })
 

@@ -367,6 +367,7 @@ function blockElement(
   start: number,
   gap = 0,
   placeholder = false,
+  sepHidden = false,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
   // The `blk` class is a CSS contract, not decoration: every block-level rule is
@@ -379,13 +380,19 @@ function blockElement(
   setAttr(el, 'data-gap', String(gap))
   setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
   // A PLACEHOLDER blank draws ALL of its rows — the separator rows must stay
-  // in the DOM or the read-back silently drops them — but only the FIRST one
-  // is the fresh line Enter opened, so the rest are hidden by CSS
-  // (`[data-placeholder] .vl-blank:not(:first-child)`): one Enter renders one
-  // visible break, the pre-existing separator stays invisible as its margin
-  // does (user: "one Enter should be one line").
+  // in the DOM or the read-back silently drops them. Which rows are VISIBLE
+  // depends on the block's place in the document:
+  // - in-between (a block follows): every row except the LAST one shows — the
+  //   last row is the separator that predates the Enter (fresh lines are
+  //   inserted before it), hidden by CSS (`[data-ph-sep] .vl-blank:last-child`)
+  //   so one Enter shows one new line and repeated Enters show one each;
+  // - trailing (the block IS the document's last): every row is a break Enter
+  //   opened — ALL show, the caret rides the newest (each Enter = one more
+  //   visible blank line, one Backspace pops it back).
   if (placeholder) setAttr(el, 'data-placeholder', '')
   else el.removeAttribute('data-placeholder')
+  if (placeholder && sepHidden) setAttr(el, 'data-ph-sep', '')
+  else el.removeAttribute('data-ph-sep')
   syncChildren(el, view.lines.length, (index, current) => {
     const line = view.lines[index]
     const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
@@ -498,12 +505,15 @@ export function renderDocument(
       lineStates,
       srcStart,
       gap,
-      // A placeholder blank hides its extra separator rows — in-between AND
-      // trailing: `甲\n` + Enter yields a TWO-row trailing block (the existing
-      // separator + the fresh line), and rendering both showed two `<br>`s for
-      // one keystroke (user: one Enter should be one line). Once the mark is
-      // consumed the block renders every row again, as it always did.
-      i === placeholderBlock,
+      block.index === placeholderBlock,
+      // A placeholder blank hides its separator rows differently by place:
+      // a TRAILING placeholder (the document's last block) shows every row —
+      // each one is a break Enter opened, one visible blank per Enter
+      // (`甲` Enter Enter shows two blanks, caret on the second); an
+      // IN-BETWEEN placeholder hides its LAST row only, the separator that
+      // predates the break (`data-ph-sep`). Once the mark is consumed the
+      // block renders every row again, as it always did.
+      block.index === placeholderBlock && block.index < lastIndex,
     )
   })
 }

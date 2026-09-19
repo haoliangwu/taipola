@@ -30,7 +30,6 @@ import {
   backspaceJoinParagraphs,
   enterEndParagraph,
   enterEndOfLine,
-  enterBlankLine,
 } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
 import {
@@ -416,47 +415,36 @@ export class EditorKernel {
     let index = this.blockAt(want)
     // A blank separator between two blocks renders NO line box (`paragraph-spacing/01`
     // 十一审): a caret whose source offset falls on it has nowhere to anchor, so the
-    // visual anchor walks back to the previous rendered block's end. The same applies
-    // when `want` sits exactly at a trailing blank block's line start — that offset
-    // is really "the end of the block above", and typing there must stay IN the block
-    // above rather than land on a bare `<br>` line. EXCEPT when that blank is a
-    // placeholder — the Enter one (the new paragraph's opening) or the soft one
-    // (Shift+Enter's fresh line): there the blank's own line box is the anchor,
-    // so the next keystroke lands where the break put it.
+    // visual anchor walks back to the previous rendered block's end. A TRAILING
+    // blank block is the exception in the other direction: it renders every row
+    // (the paragraph placeholder Enter opened, and every fresh line a repeated
+    // Enter added), each row is a real line box, so a caret at its line starts
+    // anchors ON the row — walking it back would strand the caret on the
+    // paragraph's end and the next keystroke would edit the wrong line
+    // (measured: the third Backspace of `甲` Enter Enter Enter Backspace
+    // Backspace Backspace deleted 甲 instead of the last blank row).
     const isEnterSpot =
       (this.pendingEnterLine >= 0 && want === this.pendingEnterLine) ||
       (this.pendingSoftLine >= 0 && want === this.pendingSoftLine)
-    // A placeholder spot never walks: in-between blanks walk back to the
-    // block above's end, but the placeholder's OWN rendered row is the anchor
-    // (trailing: `want === offsets[index] && !isEnterSpot` used to carry the
-    // exception; the Enter-just-opened middle blank needs it too now that its
-    // row renders — otherwise the caret fell back onto the paragraph and the
-    // next keystroke joined the paragraph instead of opening the new one).
     while (
       !isEnterSpot &&
       index > 0 &&
       this.blocks[index] !== undefined &&
       this.blocks[index]!.raw === '' &&
       this.lineStates[this.blocks[index]!.startLine]?.kind === 'blank' &&
-      (index < this.blocks.length - 1 || want === this.offsets[index])
+      index < this.blocks.length - 1
     ) {
       index -= 1
     }
     const view = this.views[index]
     if (!view) return
-    // An IN-BETWEEN Enter placeholder spot anchors on the block's FIRST row — its
-    // visible one. Anchoring on the wanted offset directly lands on a hidden
-    // separator row (the placeholder block renders all its rows for the
-    // read-back; CSS hides all but the first), and the browser then parks the
-    // selection elsewhere — measured: a second Enter stranded the caret at the
-    // document end's trailing blank. A TRAILING placeholder shows every row,
-    // so its wanted offset anchors directly (as before); the soft one keeps
-    // the wanted offset too.
-    const enterSpot =
-      this.pendingEnterLine >= 0 &&
-      want === this.pendingEnterLine &&
-      index < this.blocks.length - 1
-    const anchor = enterSpot ? this.offsets[index] : want
+    // A placeholder spot anchors on the wanted offset DIRECTLY: the Enter
+    // block renders every row, and with `data-ph-sep` only the block's LAST
+    // row (the in-between separator that predates the break) is hidden — the
+    // fresh lines are all visible, so the wanted row is a real anchor and
+    // the caret lands on the newest row Enter opened (Typora: each Enter
+    // drops the caret one line down; the previous rows stay on screen).
+    const anchor = want
     if (applyCaret(host, index, view, this.offsets[index], anchor)) {
       this.placedByUs = true
       return
@@ -508,7 +496,24 @@ export class EditorKernel {
         const diffStart = sharedPrefix(this.doc, next)
         const placed = next.slice(diffStart, diffStart + inserted)
         const placeholder = this.pendingEnterLine
-        const nearEnter = placeholder >= 0 && insertStart >= placeholder - 1 && insertStart <= placeholder
+        // The re-home needs the ±1 tolerance because the browser's caret is
+        // usually one position SHORT of the inserted text (the caret sits on
+        // the placeholder line box's start, before its `<br>`): tolerated
+        // positions mean "the character was meant for the placeholder line",
+        // and further ones are a real caret move (a click on another row keeps
+        // the mark alive but the character goes where the caret is).
+        const nearEnter =
+          placeholder >= 0 &&
+          insertStart >= placeholder - 1 &&
+          insertStart <= placeholder &&
+          // THE READ-BACK'S insert line, not an approximation: the re-home is
+          // "the keystroke was meant for the placeholder row" — true only when
+          // the character actually landed THERE. Clicking another row keeps
+          // the mark alive, but the character belongs to the clicked row and
+          // must take the paragraphization path instead (measured: `甲` Enter
+          // Enter, click the first row and type — the character was re-homed
+          // onto the second row, or fell back to a soft line of 甲's block).
+          lineOfOffset(next, diffStart) === lineOfOffset(this.doc, placeholder)
         // Shift+Enter's own placeholder: a line-end soft break whose fresh
         // line the paragraph OWNS. The next keystroke CONTINUES the block
         // (`甲` + Shift+Enter + `x` → `甲\nx`, one paragraph — Typora's soft
@@ -535,9 +540,31 @@ export class EditorKernel {
           next = `${this.doc.slice(0, softLine)}${placed}${this.doc.slice(softLine)}`
           caretNext = softLine + placed.length
         } else {
+          // A keystroke that turns a blank row into text must paragraphize
+          // even when the browser's caret LAGS one position (it parks on the
+          // line box's start, before the `<br>`): the caret-derived line then
+          // falls on the row ABOVE the edit, and the character gets absorbed
+          // as a soft line of the paragraph above (measured: `甲` Enter Enter,
+          // click the FIRST row and type — the character joined 甲's block).
+          // The DIFF's insert point is the edit's true line, with ONE
+          // exception: a line-end Enter inserts `\n- ` AFTER the newline, so
+          // the shared prefix swallows that newline and the diff point lands
+          // on the NEXT (empty) line — taking it at face value would fence a
+          // blank line around every list/quote continuation (measured: the
+          // list Enter gained a stray blank). The acid test is the INSERTED
+          // TEXT: paragraphization is for plain typing — text without a
+          // newline. Enter's row insert, a multi-line paste and a table row
+          // all carry `\n` and are never paragraphized.
           const kind = this.lineStates[lineStart - 1]?.kind
-          if (kind === 'blank' || kind === undefined) {
-            const paragraphized = paragraphizeTypedBlankLine(this.doc, next, clamped)
+          const diffLine = lineOfOffset(this.doc, diffStart)
+          const diffKind = this.lineStates[diffLine - 1]?.kind
+          const plainTyping = !placed.includes('\n')
+          const blank = (k: string | undefined): boolean => k === 'blank' || k === undefined
+          if (plainTyping && (blank(kind) || blank(diffKind))) {
+            // The paragraphizer computes its own insert point from the caret:
+            // the caret must be the end of the inserted text — the diff's end,
+            // never the lagging DOM caret.
+            const paragraphized = paragraphizeTypedBlankLine(this.doc, next, diffStart + inserted)
             if (paragraphized !== null) {
               next = paragraphized.doc
               caretNext = paragraphized.caret
@@ -1057,7 +1084,15 @@ private reportLine(): void {
       // The key set for each edge, like every other branch in this handler.
       if (event.key === 'ArrowDown' || event.key === 'End') {
         event.preventDefault()
-        this.moveCaretToEdge(this.doc.length)
+        // The END edge is the end of the LAST TEXT line, not raw
+        // `doc.length`: the document's tail newlines are its separator and
+        // trailing blank (which now renders its rows — a real line box), and
+        // the jump must land on the last content the user sees
+        // (`paragraph-spacing/01` 十一审: "Ctrl+End 落点=最后文本行尾").
+        // Typing right there still appends.
+        let edge = this.doc.length
+        while (edge > 0 && this.doc[edge - 1] === '\n') edge -= 1
+        this.moveCaretToEdge(edge)
         return
       }
       if (event.key === 'ArrowUp' || event.key === 'Home') {
@@ -1215,29 +1250,21 @@ private reportLine(): void {
       // `paragraph-spacing/01` 十审), never a soft continuation.
       if (live >= lineEnd) {
         if (currentLine === '') {
-          // Blank line: one more blank line — the blank block's span grows by
-          // a line (box-model migration 3d), same source as the string path,
-          // caret on the newly added line.
-          //
-          // The Enter MARK survives this key: an Enter on the placeholder (a
-          // repeated Enter) is still "about to write the new paragraph", so
-          // the next keystroke re-homes onto the SAME placeholder row and the
-          // grown block only adds invisible separator rows (`甲` Enter Enter
-          // X → `甲\n\nX…`, X lands where the first Enter put it).
-          const pendingAt = this.pendingEnterLine
-          const keepPlaceholder =
-            pendingAt >= 0 && this.blockAt(pendingAt) < this.blocks.length - 1
-          const blankIndex = this.blockAt(live)
-          const grownBlank = enterBlankLine(this.doc, blankIndex)
-          if (grownBlank !== null) {
-            this.pushUndo({ value: this.doc, caret: this.caret })
-            const keep = keepPlaceholder ? pendingAt : live + grownBlank.caretDelta
-            this.commit(grownBlank.source, keep)
-            this.markEnterPlaceholder(keep)
-            return
-          }
-          const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length
-          this.insertNewlines(at, 1, live + 1)
+          // Blank line: Enter opens ONE more blank line right below the
+          // caret's row. The fresh line is inserted AFTER the caret row's own
+          // newline — before the block's separator row, or at EOF for a
+          // trailing block — so repeated Enters stack the visible rows in
+          // order and the separator (the row that predates the first Enter)
+          // stays LAST, where the placeholder rendering hides it
+          // (`data-ph-sep`). The Enter mark re-anchors on the fresh row and
+          // the caret rides it: every Enter lands on a VISIBLE row, one more
+          // blank line per Enter (Typora: each Enter drops the caret one
+          // line down; one Backspace pops one row back).
+          const { end: rowEnd } = this.lineBounds(live)
+          const at = rowEnd < this.doc.length ? rowEnd + 1 : rowEnd
+          this.pushUndo({ value: this.doc, caret: this.caret })
+          this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), rowEnd + 1)
+          this.markEnterPlaceholder(rowEnd + 1)
           return
         }
         const enterLine = lineOfOffset(this.doc, live)
