@@ -359,6 +359,14 @@ function lineElement(
   return el
 }
 
+/**
+ * 一个空白块的渲染态：`none`（普通分隔，不渲染行）、`trailing`（文档末尾的
+ * Enter 占位，每一行都渲染）、`in-between`（两块之间的 Enter 占位，只隐藏
+ * 最后一行——既有的分隔行）。这个三态取代了历史实现里 "is placeholder" +
+ * "hide separator" 两个布尔 + 调用方 `-1` 哨兵的推导组合。
+ */
+export type PlaceholderState = 'none' | 'trailing' | 'in-between'
+
 function blockElement(
   existing: HTMLElement | null,
   block: Block,
@@ -366,8 +374,7 @@ function blockElement(
   lineStates: LineState[],
   start: number,
   gap = 0,
-  placeholder = false,
-  sepHidden = false,
+  placeholder: PlaceholderState = 'none',
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
   // The `blk` class is a CSS contract, not decoration: every block-level rule is
@@ -389,9 +396,9 @@ function blockElement(
   // - trailing (the block IS the document's last): every row is a break Enter
   //   opened — ALL show, the caret rides the newest (each Enter = one more
   //   visible blank line, one Backspace pops it back).
-  if (placeholder) setAttr(el, 'data-placeholder', '')
+  if (placeholder !== 'none') setAttr(el, 'data-placeholder', '')
   else el.removeAttribute('data-placeholder')
-  if (placeholder && sepHidden) setAttr(el, 'data-ph-sep', '')
+  if (placeholder === 'in-between') setAttr(el, 'data-ph-sep', '')
   else el.removeAttribute('data-ph-sep')
   syncChildren(el, view.lines.length, (index, current) => {
     const line = view.lines[index]
@@ -505,7 +512,6 @@ export function renderDocument(
       lineStates,
       srcStart,
       gap,
-      block.index === placeholderBlock,
       // A placeholder blank hides its separator rows differently by place:
       // a TRAILING placeholder (the document's last block) shows every row —
       // each one is a break Enter opened, one visible blank per Enter
@@ -513,7 +519,11 @@ export function renderDocument(
       // IN-BETWEEN placeholder hides its LAST row only, the separator that
       // predates the break (`data-ph-sep`). Once the mark is consumed the
       // block renders every row again, as it always did.
-      block.index === placeholderBlock && block.index < lastIndex,
+      block.index === placeholderBlock
+        ? block.index === lastIndex
+          ? 'trailing'
+          : 'in-between'
+        : 'none',
     )
   })
 }

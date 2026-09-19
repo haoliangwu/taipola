@@ -21,6 +21,38 @@ export interface SplitParagraphResult {
 }
 
 /**
+ * 拆块共享骨架：把第 `index` 个段落块按 `left`/`right` 切成 `[A, blank, B]`
+ * 三块，并把后续所有块的行号整体 +2（拆一块的跨度代价，本文件唯一会动行号
+ * 的地方）。`left`/`right` 的切法、`addedChars` 由两个公共入口各自决定。
+ */
+function splitAt(
+  tree: BlockTree,
+  index: number,
+  left: string,
+  right: string,
+): BlockNode[] {
+  const block = tree.blocks[index]
+  if (!block) return tree.blocks
+  const start = block.startLine
+  const blocks: BlockNode[] = tree.blocks.slice(0, index)
+
+  // `[A][blank][B]` — three lines where one stood: A(span 1), the blank
+  // separator (span 1: exactly the `\n\n` between two paragraphs), B(span 1).
+  blocks.push(
+    { kind: 'paragraph', raw: left, startLine: start, endLine: start + 1, headingLevel: 0 },
+    { kind: 'blank', raw: '', startLine: start + 1, endLine: start + 2, headingLevel: 0 },
+    { kind: 'paragraph', raw: right, startLine: start + 2, endLine: start + 3, headingLevel: 0 },
+  )
+  // Every block AFTER the split shifts down by the two lines it gained.
+  for (let i = index + 1; i < tree.blocks.length; i++) {
+    const b = tree.blocks[i]
+    if (!b) continue
+    blocks.push({ ...b, startLine: b.startLine + 2, endLine: b.endLine + 2 })
+  }
+  return blocks
+}
+
+/**
  * Splits the single-line paragraph block containing `index` at `local`
  * characters into two paragraphs with one blank block between them.
  *
@@ -43,26 +75,9 @@ export function splitParagraphAtMid(
 
   const left = block.raw.slice(0, local)
   const right = block.raw.slice(local)
-  const start = block.startLine
-  const blocks: BlockNode[] = tree.blocks.slice(0, index)
-
-  // `[A][blank][B]` — three lines where one stood: A(span 1), the blank
-  // separator (span 1: exactly the `\n\n` between two paragraphs), B(span 1).
   // A paragraph split puts the caret on B's first character (the source shifted
   // by the two newline characters the split added).
-  blocks.push(
-    { kind: 'paragraph', raw: left, startLine: start, endLine: start + 1, headingLevel: 0 },
-    { kind: 'blank', raw: '', startLine: start + 1, endLine: start + 2, headingLevel: 0 },
-    { kind: 'paragraph', raw: right, startLine: start + 2, endLine: start + 3, headingLevel: 0 },
-  )
-  // Every block AFTER the split shifts down by the two lines it gained.
-  for (let i = index + 1; i < tree.blocks.length; i++) {
-    const b = tree.blocks[i]
-    if (!b) continue
-    blocks.push({ ...b, startLine: b.startLine + 2, endLine: b.endLine + 2 })
-  }
-
-  return { tree: { blocks }, addedChars: 2 }
+  return { tree: { blocks: splitAt(tree, index, left, right) }, addedChars: 2 }
 }
 
 /** The full command: split, serialize, and report the caret to land on. */
@@ -99,27 +114,18 @@ export function splitParagraphAtLineEnd(
   const block = tree.blocks[index]
   if (!block || block.kind !== 'paragraph') return null
   if (local <= 0 || local >= block.raw.length) return null
-  const splitAt = block.raw.indexOf('\n', local)
-  if (splitAt < 0) return null // 最后一行行尾：段尾 Enter 走 growParagraphGap
+  const breakAt = block.raw.indexOf('\n', local)
+  if (breakAt < 0) return null // 最后一行行尾：段尾 Enter 走 growParagraphGap
 
-  const left = block.raw.slice(0, splitAt)
-  const right = block.raw.slice(splitAt + 1)
-  const start = block.startLine
-  const blocks: BlockNode[] = tree.blocks.slice(0, index)
-  // `[A][blank][B]`：左段（含本行）、空行、右段（后续行全部承接为新段）。
-  blocks.push(
-    { kind: 'paragraph', raw: left, startLine: start, endLine: start + 1, headingLevel: 0 },
-    { kind: 'blank', raw: '', startLine: start + 1, endLine: start + 2, headingLevel: 0 },
-    { kind: 'paragraph', raw: right, startLine: start + 2, endLine: start + 3, headingLevel: 0 },
-  )
-  for (let i = index + 1; i < tree.blocks.length; i++) {
-    const b = tree.blocks[i]
-    if (!b) continue
-    blocks.push({ ...b, startLine: b.startLine + 2, endLine: b.endLine + 2 })
-  }
+  const left = block.raw.slice(0, breakAt)
+  const right = block.raw.slice(breakAt + 1)
   // `甲\n乙`（3 字符）→ `甲\n\n乙`（4 字符）：+1。光标落**右段首**——中间的
   // 空白块不渲染行盒（十一审），caret 只能落在有行盒的位置。
-  return { tree: { blocks }, addedChars: 1, caretDelta: 2 }
+  return {
+    tree: { blocks: splitAt(tree, index, left, right) },
+    addedChars: 1,
+    caretDelta: 2,
+  }
 }
 
 /** Full command: break the paragraph at the caret's line end. Caret lands on
@@ -186,11 +192,18 @@ export function backspaceJoinParagraphs(source: string, index: number): string |
   return joined === null ? null : serializeBlocks(joined)
 }
 /**
- * Enter at a PARAGRAPH or HEADING's END opens a fresh line below it — the
- * blank block after it grows by one line, or one is appended when there is
- * none (the block is the document's last and carries no trailing newline).
+ * Enter at a PARAGRAPH or HEADING's END opens a fresh line below it: a NEW
+ * blank block is INSERTED BEFORE the blank block that already follows — the
+ * existing blank is not stretched, it just shifts down one line. The two
+ * adjacent blanks only LOOK like one grown blank because re-parsing the
+ * serialized source folds them into a single wider block; the tree-level
+ * operation is an insert. When no blank follows (the block is the document's
+ * last and carries no trailing newline), one is appended at the end.
  *
- * 块语义：`[P, blank(k行)] → [P, blank(k+1行)]`，或 `[P(末块)] → [P, blank(1行)]`。
+ * 块语义：树层面 `[P, blank(k行)] → [P, fresh, blank(k行)]`（fresh 插到既有
+ * blank 之前，旧 blank 行号 +1）；序列化后 re-parse 把相邻两个空白合并成
+ * `blank(k+1行)`，文档层面的净效果与「blank 增长」相同。`[P(末块)] →
+ * [P, blank(1行)]` 则本来就是追加。
  * 接受**多行软换行段**与**标题**：行尾 Enter = 硬换行（开出一个新块），
  * 光标落在这个新空块上，随后键入经段落化成为**新段落**（`enter-backspace-smoke/01`
  * 的"行尾 Enter = 硬换行"，块级表达 = 段落下方一个空块，`paragraph-spacing/01` 九审）。

@@ -16,8 +16,6 @@ import { parseDocument, type Block } from './markdown'
 import {
   FOOTNOTE_DEFINITION,
   isThematicBreak,
-  parseLine,
-  type LineParts,
 } from './inline'
 import { parseListItem } from './lists'
 
@@ -137,10 +135,4 @@ export function parseBlockTree(source: string): BlockTree {
     return node
   })
   return { blocks }
-}
-
-/** What a single line's markup prefix is — the tree's line-level structure
-    consumer (list items, quote layers, table rows; used by later steps). */
-export function lineStructure(line: string): LineParts {
-  return parseLine(line)
 }
