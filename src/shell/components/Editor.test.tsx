@@ -2476,6 +2476,92 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     await assertDomMatchesSource(r)
   })
 
+  it('列表/引用行尾 Enter 后一次 Backspace：整行删除、干净还原（不留空行）', async () => {
+    // 用户实测：`> 甲`/`- 甲` Enter（抄出新 marker 行）再 Backspace 会留下
+    // 一个尾随空行 + 冗余 <br>，要按两次才回退。prefix 行 Enter 现在打
+    // pendingPrefixLine 标记，Backspace 整行删除（含 marker 与换行）一次还原。
+    const q = renderEditor('> 甲\n')
+    await flush()
+    await clickInRun(q, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(q)
+    await flush()
+    expect(q.getDoc()).toBe('> 甲\n> \n')
+    await pressBackspace(q)
+    await flush()
+    expect(q.getDoc()).toBe('> 甲\n')
+    expect(caretFromDom()).toBe(3)
+    const list = renderEditor('- 甲\n- 乙\n')
+    await flush()
+    await clickInRun(list, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(list)
+    await flush()
+    expect(list.getDoc()).toBe('- 甲\n- \n- 乙\n')
+    await pressBackspace(list)
+    await flush()
+    // 中间插入的空项被整行删除，下面的项原位不动。
+    expect(list.getDoc()).toBe('- 甲\n- 乙\n')
+    expect(caretFromDom()).toBe(3)
+    const task = renderEditor('- [ ] 甲\n')
+    await flush()
+    await clickInRun(task, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(task)
+    await flush()
+    expect(task.getDoc()).toBe('- [ ] 甲\n- [ ] \n')
+    await pressBackspace(task)
+    await flush()
+    expect(task.getDoc()).toBe('- [ ] 甲\n')
+    await assertDomMatchesSource(q)
+    await assertDomMatchesSource(list)
+    await assertDomMatchesSource(task)
+  })
+
+  it('嵌套引用渲染态：内层行缩进一级并带自己的竖线（data-nest）', async () => {
+    const r = renderEditor('> 外层\n> > 内层\n> 回到外层\n')
+    await flush()
+    const rows = [...r.container.querySelectorAll<HTMLElement>('[data-block="0"] [data-vline]')]
+    expect(rows[0]?.hasAttribute('data-nest')).toBe(false)
+    expect(rows[1]?.getAttribute('data-nest')).toBe('')
+    expect(rows[1]?.style.getPropertyValue('--vl-lvl')).toBe('2')
+    expect(rows[2]?.hasAttribute('data-nest')).toBe(false)
+    await assertDomMatchesSource(r)
+  })
+
+  it('段落间 Enter 的占位空行可见；打字/退格后回归为隐形分隔', async () => {
+    // 用户实测：第一句后 Enter「没换行」——中间空行是段落 margin、不可见，
+    // Enter 的新占位同样看不见，多次 Enter 还悄悄堆空行。现在 Enter 的占位
+    // 行渲染自己的行盒（break 可见，与 trailing 占位一致）；字打进去或被
+    // 退格撤销后，占位消费，中间空行回到不可见的 margin。
+    const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r)
+    await flush()
+    // Enter 的占位空行渲染为可见行盒（源 `甲\n\n\n乙` 的中间 blank 块）。
+    const blanks = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
+    expect(blanks.length).toBeGreaterThan(0)
+    // 打字：占位被字取代，回退为不可见分隔——只剩文档末尾的 trailing 占位行盒。
+    await r.user.keyboard('x')
+    await flush()
+    expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
+    const blanksAfter = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
+    // 渲染后 data-block 编号不连续（中间的 separator 被滤掉），尾块是最大编号。
+    const lastBlock = String(
+      Math.max(
+        ...Array.from(r.container.querySelectorAll<HTMLElement>('[data-block]')).map((b) =>
+          Number(b.getAttribute('data-block')),
+        ),
+      ),
+    )
+    for (const b of blanksAfter) {
+      expect(b.closest('[data-block]')?.getAttribute('data-block')).toBe(lastBlock)
+    }
+    await assertDomMatchesSource(r)
+  })
+
   it('引用嵌套列表行尾 Enter：`> - ` 一并抄', async () => {
     const r = renderEditor('> - 甲\n')
     await flush()

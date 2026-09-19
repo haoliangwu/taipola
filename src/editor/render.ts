@@ -262,6 +262,22 @@ function lineElement(
     el.style.setProperty('--vl-indent', indent)
   }
 
+  // A line inside a NESTED quote indents to its own level and draws its own
+  // bar there (`> > 甲` sits one step deeper than `> 甲`; the block's bar is
+  // level 1 and stays continuous across the whole quote, `blockquote/03`).
+  // Revealed lines show the dim `> > ` source instead and need no bar of
+  // their own, so the marker test is the one honest sign of nesting depth.
+  if (state?.kind === 'quote') {
+    const level = (line.runs[0]?.text.match(/>/g) ?? []).length || 1
+    if (level > 1) {
+      el.style.setProperty('--vl-lvl', String(level))
+      setAttr(el, 'data-nest', '')
+    } else {
+      el.style.removeProperty('--vl-lvl')
+      el.removeAttribute('data-nest')
+    }
+  }
+
   // A table's `| --- |` row: an EMPTY line box in both states (the view never
   // emits runs for it). In Typora it is not a visible row at all — it collapses so
   // the table has no blank band in the middle, and the separator it stands for is
@@ -414,6 +430,7 @@ export function renderDocument(
   views: BlockView[],
   lineStates: LineState[],
   offsets: number[],
+  placeholderBlock = -1,
 ): void {
   // A blank block BETWEEN two blocks is a paragraph SEPARATOR, not a visible
   // row: it renders no DOM node, and the gap is carried by the blocks' own
@@ -424,13 +441,22 @@ export function renderDocument(
   // paragraph placeholder Enter just opened — it must render its line box or
   // the caret has nowhere to go and the next keystroke cannot open the new
   // paragraph (`.scratch/paragraph-spacing/issues/01` 十一审).
+  //
+  // `placeholderBlock` is the same exception for an IN-BETWEEN blank: the
+  // placeholder Enter just opened mid-document. It renders its own row so the
+  // break is VISIBLE (Typora drops the caret onto a fresh blank line) instead
+  // of collapsing into the paragraph margin and looking like Enter did
+  // nothing; once the mark is consumed the block goes back to being an
+  // invisible separator (user-measured: Enter after the first line showed no
+  // new line, and repeated Enters piled invisible blanks).
   const lastIndex = blocks.length - 1
   const renderable = blocks.filter(
     (block, i) =>
       views[i] &&
       (lineStates[block.startLine]?.kind !== 'blank' ||
         block.raw !== '' ||
-        i === lastIndex),
+        i === lastIndex ||
+        i === placeholderBlock),
   )
   syncChildren(host, renderable.length, (i, current) => {
     const block = renderable[i]

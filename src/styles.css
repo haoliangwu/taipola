@@ -1141,6 +1141,17 @@ body {
   padding-left: 0.6em;
 }
 
+/* A line inside a NESTED quote indents one step per extra level and draws
+   ITS OWN bar at that depth — the block's bar is level 1 (continuous over
+   the whole quote); the inner bars are per-line, exactly where the nested
+   content sits (Typora draws one bar per `> ` level). Revealed lines show
+   the dim `> > ` source instead, so the bars only exist in the rendered
+   state (`blockquote/03`). */
+.vl-quote:not(.revealed)[data-nest] {
+  margin-left: calc((var(--vl-lvl, 2) - 1) * 0.9em);
+  border-left: 3px solid var(--border-strong);
+}
+
 /* ==========================================================================
    List decorations (rendered state)
    ==========================================================================

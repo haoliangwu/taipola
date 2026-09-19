@@ -190,6 +190,17 @@ export class EditorKernel {
    */
   private pendingSoftLine = -1
 
+  /**
+   * The fresh row a line-end Enter COPIED (list item / quote / task marker):
+   * `\n` + the repeated prefix (`- `, `> `, `> - `, `[ ] `, …). Unlike the
+   * blank placeholders, this row is a real content line, so one Backspace
+   * deletes the WHOLE row and lands back at the break point — without the
+   * mark, Backspace un-marks the row and leaves a stray blank line behind
+   * (measured: `> 甲` Enter Backspace → `> 甲\n` + a trailing blank `<br>`).
+   * Single-shot: cleared by every commit.
+   */
+  private pendingPrefixLine = -1
+
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
 
@@ -387,6 +398,13 @@ export class EditorKernel {
     if (this.composing) return false
     const signature = markupSignature(this.blocks, this.views, this.lineStates, this.offsets)
     if (signature === this.signature) return false
+    // The Enter placeholder's row is drawn by `renderWithPlaceholder` only:
+    // an ordinary render here must NOT resolve the still-pending mark against
+    // the new blocks — one commit after the mark was consumed (a keystroke
+    // re-homed into the placeholder) would then point at whatever block now
+    // sits at that offset and render an in-between blank that belongs to the
+    // separator, not to Enter (measured: typing into the placeholder left
+    // two rendered blank rows).
     renderDocument(host, this.blocks, this.views, this.lineStates, this.offsets)
     this.signature = signature
     return true
@@ -523,6 +541,7 @@ export class EditorKernel {
     // it is consumed here at the very end.
     this.pendingEnterLine = -1
     this.pendingSoftLine = -1
+    this.pendingPrefixLine = -1
   }
 
   /**
@@ -536,7 +555,28 @@ export class EditorKernel {
   private markEnterPlaceholder(at: number): void {
     this.pendingEnterLine = at
     this.pendingSoftLine = -1
+    this.pendingPrefixLine = -1
+    // The mark changes WHAT renders (its blank block gains a row) without
+    // changing the markup signature, so the just-finished commit's own render
+    // cannot have drawn it — render again, now with the placeholder visible,
+    // before the caret is anchored onto its row.
+    this.renderWithPlaceholder()
     this.placeCaret(at)
+  }
+
+  /** Re-renders with the Enter placeholder's block drawn as a row (see
+      `renderDocument`): must run AFTER `pendingEnterLine` is set. */
+  private renderWithPlaceholder(): void {
+    if (!this.host || this.composing) return
+    const placeholderBlock = this.pendingEnterLine >= 0 ? this.blockAt(this.pendingEnterLine) : -1
+    renderDocument(
+      this.host,
+      this.blocks,
+      this.views,
+      this.lineStates,
+      this.offsets,
+      placeholderBlock,
+    )
   }
 
 private reportLine(): void {
@@ -1076,6 +1116,7 @@ private reportLine(): void {
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
           this.pendingEnterLine = -1
+          this.pendingPrefixLine = -1
           this.pendingSoftLine = fresh
           this.placeCaret(fresh)
         }
@@ -1128,6 +1169,11 @@ private reportLine(): void {
         // push the rest down: renumber the lists instead of only bumping ours
         // (`1 2 3` + Enter on 2 used to give `1 2 3 3`).
         this.commit(renumberLists(edited), live + insert.length)
+        // Mark the copied row as the Enter placeholder: one Backspace deletes
+        // the whole fresh row and lands back at the break point.
+        this.pendingEnterLine = -1
+        this.pendingSoftLine = -1
+        this.pendingPrefixLine = live + insert.length
         return
       }
       // A plain TEXT line, caret at its very END: Enter is a HARD break — the
@@ -1330,26 +1376,44 @@ private reportLine(): void {
       const onSoft =
         this.pendingSoftLine >= 0 &&
         (live === this.pendingSoftLine || live === this.pendingSoftLine - 1)
-      if (onEnter || onSoft) {
+      const onPrefix =
+        this.pendingPrefixLine >= 0 &&
+        (live === this.pendingPrefixLine || live === this.pendingPrefixLine - 1)
+      if (onEnter || onSoft || onPrefix) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        const at = onEnter ? this.pendingEnterLine : this.pendingSoftLine
-        // A CONTENT placeholder — the right half a mid-line Enter split off —
-        // undoes the split: delete the two newlines it added (`甲\n\n乙` →
-        // `甲乙`), the caret lands on the join point. A soft placeholder is
-        // always a blank line, so it takes the cuts below.
-        const placeholderBlock = this.blocks[this.blockAt(at)]
-        if (!onSoft && placeholderBlock?.raw !== '') {
-          this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
-        } else if (at >= this.doc.length) {
-          // The placeholder sits at EOF (the document's trailing blank, or a
-          // trailing soft line): there is no placeholder character after it to
-          // delete — the `at + 1` cut would slice nothing and the keystroke
-          // would spin. Delete the newline in front of it instead, which is
-          // exactly what the in-between path's cut amounts to.
-          this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+        const at = onEnter
+          ? this.pendingEnterLine
+          : onSoft
+            ? this.pendingSoftLine
+            : this.pendingPrefixLine
+        // The copied marker row a prefix-line Enter opened (`- `, `> `, …):
+        // delete the WHOLE row — the newline before it plus the marker — and
+        // land back at the break point, one stroke per Enter. The blank and
+        // split placeholders take the cuts below.
+        if (onPrefix) {
+          const lineStart = this.doc.lastIndexOf('\n', at - 1) + 1
+          const lineEnd = this.doc.indexOf('\n', at)
+          const end = lineEnd === -1 ? this.doc.length : lineEnd
+          this.commit(this.doc.slice(0, lineStart - 1) + this.doc.slice(end), lineStart - 1)
         } else {
-          this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+          // A CONTENT placeholder — the right half a mid-line Enter split off —
+          // undoes the split: delete the two newlines it added (`甲\n\n乙` →
+          // `甲乙`), the caret lands on the join point. A soft placeholder is
+          // always a blank line, so it takes the cuts below.
+          const placeholderBlock = this.blocks[this.blockAt(at)]
+          if (!onSoft && placeholderBlock?.raw !== '') {
+            this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
+          } else if (at >= this.doc.length) {
+            // The placeholder sits at EOF (the document's trailing blank, or a
+            // trailing soft line): there is no placeholder character after it to
+            // delete — the `at + 1` cut would slice nothing and the keystroke
+            // would spin. Delete the newline in front of it instead, which is
+            // exactly what the in-between path's cut amounts to.
+            this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
+          } else {
+            this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
+          }
         }
         return
       }
