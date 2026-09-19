@@ -849,6 +849,14 @@ body {
   margin-bottom: 4px;
 }
 
+/* The Enter placeholder block renders its separator rows (they must exist in
+   the DOM for the read-back) but only the FIRST row is the break Enter just
+   opened — the rest are the pre-existing paragraph separator, hidden so one
+   Enter shows exactly one new line (`.scratch/paragraph-spacing/01`). */
+.blk[data-placeholder] .vl-blank:not(:first-child) {
+  display: none;
+}
+
 /* One source line. One line box tall, whatever the browser would do with its
    content: a line whose text is collapsed (a `---`, a fence marker, an empty list
    item) still owns its row on the page, which is what keeps the vertical position

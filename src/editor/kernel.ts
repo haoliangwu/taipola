@@ -426,18 +426,38 @@ export class EditorKernel {
     const isEnterSpot =
       (this.pendingEnterLine >= 0 && want === this.pendingEnterLine) ||
       (this.pendingSoftLine >= 0 && want === this.pendingSoftLine)
+    // A placeholder spot never walks: in-between blanks walk back to the
+    // block above's end, but the placeholder's OWN rendered row is the anchor
+    // (trailing: `want === offsets[index] && !isEnterSpot` used to carry the
+    // exception; the Enter-just-opened middle blank needs it too now that its
+    // row renders — otherwise the caret fell back onto the paragraph and the
+    // next keystroke joined the paragraph instead of opening the new one).
     while (
+      !isEnterSpot &&
       index > 0 &&
       this.blocks[index] !== undefined &&
       this.blocks[index]!.raw === '' &&
       this.lineStates[this.blocks[index]!.startLine]?.kind === 'blank' &&
-      (index < this.blocks.length - 1 || (want === this.offsets[index] && !isEnterSpot))
+      (index < this.blocks.length - 1 || want === this.offsets[index])
     ) {
       index -= 1
     }
     const view = this.views[index]
     if (!view) return
-    if (applyCaret(host, index, view, this.offsets[index], want)) {
+    // An IN-BETWEEN Enter placeholder spot anchors on the block's FIRST row — its
+    // visible one. Anchoring on the wanted offset directly lands on a hidden
+    // separator row (the placeholder block renders all its rows for the
+    // read-back; CSS hides all but the first), and the browser then parks the
+    // selection elsewhere — measured: a second Enter stranded the caret at the
+    // document end's trailing blank. A TRAILING placeholder shows every row,
+    // so its wanted offset anchors directly (as before); the soft one keeps
+    // the wanted offset too.
+    const enterSpot =
+      this.pendingEnterLine >= 0 &&
+      want === this.pendingEnterLine &&
+      index < this.blocks.length - 1
+    const anchor = enterSpot ? this.offsets[index] : want
+    if (applyCaret(host, index, view, this.offsets[index], anchor)) {
       this.placedByUs = true
       return
     }
@@ -445,7 +465,7 @@ export class EditorKernel {
     // block's very end, or on the blank line that follows it): the browser
     // would keep the previous, stale caret instead. One step back lands inside
     // the last run — the document-end caret that keeps typing appended.
-    if (want > 0 && applyCaret(host, index, view, this.offsets[index], want - 1)) {
+    if (anchor > 0 && applyCaret(host, index, view, this.offsets[index], anchor - 1)) {
       this.placedByUs = true
     }
   }
@@ -1198,11 +1218,22 @@ private reportLine(): void {
           // Blank line: one more blank line — the blank block's span grows by
           // a line (box-model migration 3d), same source as the string path,
           // caret on the newly added line.
+          //
+          // The Enter MARK survives this key: an Enter on the placeholder (a
+          // repeated Enter) is still "about to write the new paragraph", so
+          // the next keystroke re-homes onto the SAME placeholder row and the
+          // grown block only adds invisible separator rows (`甲` Enter Enter
+          // X → `甲\n\nX…`, X lands where the first Enter put it).
+          const pendingAt = this.pendingEnterLine
+          const keepPlaceholder =
+            pendingAt >= 0 && this.blockAt(pendingAt) < this.blocks.length - 1
           const blankIndex = this.blockAt(live)
           const grownBlank = enterBlankLine(this.doc, blankIndex)
           if (grownBlank !== null) {
             this.pushUndo({ value: this.doc, caret: this.caret })
-            this.commit(grownBlank.source, live + grownBlank.caretDelta)
+            const keep = keepPlaceholder ? pendingAt : live + grownBlank.caretDelta
+            this.commit(grownBlank.source, keep)
+            this.markEnterPlaceholder(keep)
             return
           }
           const at = lineEnd < this.doc.length ? lineEnd + 1 : this.doc.length

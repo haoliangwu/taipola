@@ -366,6 +366,7 @@ function blockElement(
   lineStates: LineState[],
   start: number,
   gap = 0,
+  placeholder = false,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
   // The `blk` class is a CSS contract, not decoration: every block-level rule is
@@ -377,6 +378,14 @@ function blockElement(
   setAttr(el, 'data-src-start', String(start))
   setAttr(el, 'data-gap', String(gap))
   setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
+  // A PLACEHOLDER blank draws ALL of its rows — the separator rows must stay
+  // in the DOM or the read-back silently drops them — but only the FIRST one
+  // is the fresh line Enter opened, so the rest are hidden by CSS
+  // (`[data-placeholder] .vl-blank:not(:first-child)`): one Enter renders one
+  // visible break, the pre-existing separator stays invisible as its margin
+  // does (user: "one Enter should be one line").
+  if (placeholder) setAttr(el, 'data-placeholder', '')
+  else el.removeAttribute('data-placeholder')
   syncChildren(el, view.lines.length, (index, current) => {
     const line = view.lines[index]
     const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
@@ -482,7 +491,18 @@ export function renderDocument(
           Math.max(0, views[prev.index].lines.length - prev.raw.split('\n').length)
         : 0
     const gap = prev !== null ? srcStart - prevEnd : srcStart
-    return blockElement(current, block, views[block.index], lineStates, srcStart, gap)
+    return blockElement(
+      current,
+      block,
+      views[block.index],
+      lineStates,
+      srcStart,
+      gap,
+      // Only an IN-BETWEEN placeholder hides its extra separator rows; a
+      // TRAILING one (the document's last block) shows every row — repeated
+      // Enters at the document end are visible blank lines, as in Typora.
+      i === placeholderBlock && i !== lastIndex,
+    )
   })
 }
 

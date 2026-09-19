@@ -61,10 +61,10 @@ describe('标题（block 级标记）', () => {
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    // 行尾 Enter = 硬换行（块级）：标题下开新空块。标题 14 字，回车后光标
-    // 吸附在标题行尾（新空行是中间空白，不渲染行盒，十一审）。
+    // 行尾 Enter = 硬换行（块级）：标题下开新空块。标题 14 字；Enter 开出的
+    // 占位空行渲染自己的行盒、光标停在该行（段落间距=原空行仍不可见）。
     expect(doc).toMatch(/^# 欢迎使用 taipola\n\n\n/)
-    expect(caretFromDom()).toBe(14)
+    expect(caretFromDom()).toBe(15)
     await assertDomMatchesSource(r)
   })
 
@@ -74,8 +74,8 @@ describe('标题（block 级标记）', () => {
     await pressEnter(p)
     await flush()
     expect(p.getDoc()).toBe('一段文字\n\n\n第二段\n')
-    // 段落 4 字：Enter 开的新空行是中间空白（不渲染），光标吸附在段尾（偏移 4）。
-    expect(caretFromDom()).toBe(4)
+    // 段落 4 字：Enter 开出的占位空行渲染行盒，光标停在该行（偏移 5）。
+    expect(caretFromDom()).toBe(5)
     await assertDomMatchesSource(p)
   })
 
@@ -470,14 +470,14 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     // 行尾 Enter = 硬换行（九审块级：段落下方开一个新空块占位，源只多这一个
     // 换行——`/10` 反向后：一次退格还原，见 12 号票）。
     expect(r.getDoc()).toBe('第一段文字\n\n\n第二段\n')
-    // 中间空白不渲染行盒，光标吸附在段尾（十一审）。
-    expect(caretFromDom()).toBe(5)
+    // Enter 开出的占位空行渲染行盒，光标停在该行（偏移 6）。
+    expect(caretFromDom()).toBe(6)
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('第一段文字\n\n\n\n第二段\n')
-    // 第二个新空行同样是中间空白：光标仍吸附在段尾（第二个 Enter 的占位
-    // 标记会把下一次键入归位成新段落）。
-    expect(caretFromDom()).toBe(5)
+    // 第二次 Enter 在占位空行上（空行分支）：占位块又长一行（视觉只多一个
+    // 空行），光标留在占位行，Enter 标记保持——打字仍归位成新段落。
+    expect(caretFromDom()).toBe(6)
     // 键盘输入，不用 typeText：user.type 会先点一次容器，光标会被点走。
     await r.user.keyboard('X')
     await flush()
@@ -1064,9 +1064,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     expect(r.getDoc()).toBe('# 标题\n\n正文\n')
     // 行尾 Enter 只多这一个换行（占位空块，`/10` 九审反转后），一次退格恰好
-    // 还原，光标回到回车前的偏移（4 → 5 → 4，落在被删换行的原位上）。空行上的退格
-    // 规则（`09`）不变：删掉的是光标前面那个换行，光标留在剩下的空行上。
-    expect(caretFromDom()).toBe(4)
+    // 还原；光标落在被删占位行的原对齐位置（6 = 回车前后面第一个空行的位置）。
+    expect(caretFromDom()).toBe(6)
     await assertDomMatchesSource(r)
   })
 
@@ -1708,11 +1707,11 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     await pressEnter(r)
     await flush()
-    // 行尾 Enter = 硬换行：块后开新空块（源里多一个空行）；中间空白块不渲染，
-    // 光标吸附在段尾（`paragraph-spacing/01` 十一审），下一次键入经 Enter 标记
+    // 行尾 Enter = 硬换行：块后开新空块（源里多一个空行）；Enter 开出的占位
+    // 空行渲染自己的行盒、光标停在该行（偏移 2），下一次键入经 Enter 标记
     // 归位成新段落。
     expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(1)
+    expect(caretFromDom()).toBe(2)
 
     await r.user.keyboard('x')
     await flush()
@@ -2194,8 +2193,8 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    // Enter 开的新空块是中间空白（不渲染行盒），光标吸附在段尾（十一审）。
-    expect(caretFromDom()).toBe(1)
+    // Enter 开出的占位空行渲染行盒，光标停在该行（偏移 2）。
+    expect(caretFromDom()).toBe(2)
     await assertDomMatchesSource(r)
 
     // 同一位置走 Shift+Enter：源同样多一个换行（结果相同），但那是块内的
