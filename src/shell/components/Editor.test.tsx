@@ -1675,6 +1675,8 @@ describe('空行上打字只插一个字符', () => {
     await r.user.keyboard('x')
     await flush()
     // 打字续进右段（光标落在乙首——中间空白块无行盒，`paragraph-spacing/01` 十一审）。
+    // 这条锁定行为取代了该票十审的示例（曾写 x 拆成独立段 `甲\n\nx\n\n乙\n`）：
+    // 光标裁决让拆块后的首次键入归右段，x 不产生第三段。
     expect(r.getDoc()).toBe('甲\n\nx乙\n')
     expect(contentRows(r).texts).toEqual(['甲', 'x乙'])
     expect(contentRows(r).tops.size).toBe(2)
