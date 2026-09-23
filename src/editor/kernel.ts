@@ -166,24 +166,6 @@ export class EditorKernel {
   private composeStart = 0
   private composeLength = 0
   private pendingCaret: number | null = null
-  /**
-   * Where the placeholder blank's PRE-EXISTING separator row sits, which row
-   * the placeholder rendering must hide (`data-ph-sep` hides the LAST row,
-   * `data-ph-sep-after` the FIRST):
-   *
-   * - `sep-last` (default): a LINE-END break stacks its fresh rows BEFORE the
-   *   separator (the insert point is the paragraph's end, ahead of the blank),
-   *   so the separator ends up last and is hidden by the plain rule.
-   * - `sep-first`: a LINE-START break stacks fresh rows AFTER the separator
-   *   (the insert point is the caret's line start, past the blank) — mirror
-   *   image, hide the FIRST row instead.
-   * - `none`: the break created the blank out of thin air (no separator
-   *   existed near the insert point) — every row is fresh, show them all.
-   *
-   * Set when a break opens a blank, inherited by the repeated Enter/Shift+Enter
-   * on the blank itself (each keeps stacking the same way), reset by commit.
-   */
-  private phDirection: 'sep-last' | 'sep-first' | 'none' = 'sep-last'
 
   /**
    * The ONE break the last Enter/Shift+Enter opened, as a single object rather
@@ -204,12 +186,25 @@ export class EditorKernel {
    *   break point; without the mark, Backspace un-marks the row and leaves a
    *   stray blank line (measured: `> 甲` Enter Backspace → `> 甲\n` + blank).
    *
-   * The three were once three separate `pending*Line` flags that every site
-   * had to clear in sync — that is where the repeated Enter/Backspace/IME
-   * regressions came from. One object is set by the break and consumed by the
-   * next edit, whole.
+   * `sep` is where the placeholder blank's PRE-EXISTING separator row sits,
+   * which row the placeholder rendering hides (`data-ph-sep` hides the LAST
+   * row, `data-ph-sep-after` the FIRST); `null` is the default:
+   * - `null`/sep-last: a LINE-END break stacks its fresh rows BEFORE the
+   *   separator (insert point = paragraph's end, ahead of the blank).
+   * - `sep-first`: a LINE-START break stacks fresh rows AFTER the separator
+   *   (insert point = the caret's line start, past the blank) — hide the
+   *   FIRST row instead.
+   * - `none`: the break created the blank out of thin air (no separator near
+   *   the insert point) — every row is fresh, show them all.
+   *
+   * Rides the same lifetime as the mark: reset by every commit, set by the
+   * break site, inherited by a repeated break on the same blank.
    */
-  private pendingBreak: { at: number; kind: 'enter' | 'soft' | 'prefix' } | null = null
+  private pendingBreak: {
+    at: number
+    kind: 'enter' | 'soft' | 'prefix'
+    sep: 'sep-first' | 'none' | null
+  } | null = null
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
@@ -602,24 +597,21 @@ export class EditorKernel {
     this.hooks.onChange(next)
     // The Enter placeholder is single-shot, and it must SURVIVE this commit's
     // own `placeCaret` (the Enter that just carried it consults it again), so
-    // it is consumed here at the very end.
+    // it is consumed here at the very end — `sep` rides away with it.
     this.pendingBreak = null
-    // Same lifetime for the placeholder's separator direction: the break sites
-    // re-set it before marking (`phDirection`), inheriting it only across a
-    // repeated Enter on the same blank (the blank branch saves and restores).
-    this.phDirection = 'sep-last'
   }
 
-  /**
-   * Marks `at` as the Enter placeholder — the break the LAST Enter made —
-   * and re-anchors the caret with the mark visible: WITHOUT the re-anchor,
-   * the commit's own `placeCaret` walked the caret back to the paragraph
-   * end (an in-between placeholder renders no line box). Single-shot:
-   * every commit clears the mark, and Shift+Enter's break sets its own
-   * sibling mark instead (the two are mutually exclusive).
-   */
-  private markEnterPlaceholder(at: number): void {
-    this.setPendingBreak(at, 'enter', false)
+  /** Marks `at` as the Enter placeholder — the break the LAST Enter made —
+    with the break's separator direction (`sep`, default: fresh rows BEFORE
+    the separator, the line-end shape) — and re-anchors the caret with the
+    mark visible: WITHOUT the re-anchor, the commit's own `placeCaret` walked
+    the caret back to the paragraph end (an in-between placeholder renders no
+    line box). Single-shot: every commit clears the mark, and Shift+Enter's
+    break sets its own sibling mark instead (the two are mutually exclusive).
+    `sep` is usually inherited from the break site or from the pending break a
+    repeated break rides. */
+  private markEnterPlaceholder(at: number, sep: 'sep-first' | 'none' | null = null): void {
+    this.setPendingBreak(at, 'enter', false, sep)
     // The mark changes WHAT renders (its blank block gains a row) without
     // changing the markup signature, so the just-finished commit's own render
     // cannot have drawn it — render again, now with the placeholder visible,
@@ -632,9 +624,15 @@ export class EditorKernel {
       and caret anchoring are the caller's: the enter placeholder re-renders
       (the just-finished commit's render cannot have drawn it) and re-anchors,
       while the soft one only re-anchors and the prefix row needs neither (its
-      commit already rendered and anchored both). */
-  private setPendingBreak(at: number, kind: 'enter' | 'soft' | 'prefix', anchor: boolean): void {
-    this.pendingBreak = { at, kind }
+      commit already rendered and anchored both). `sep` records where the
+      placeholder's separator row sits (see `pendingBreak.sep`). */
+  private setPendingBreak(
+    at: number,
+    kind: 'enter' | 'soft' | 'prefix',
+    anchor: boolean,
+    sep: 'sep-first' | 'none' | null = null,
+  ): void {
+    this.pendingBreak = { at, kind, sep }
     if (anchor) this.placeCaret(at)
   }
 
@@ -652,19 +650,57 @@ export class EditorKernel {
       placeholderBlock,
     )
     // The placeholder's separator row sits FIRST or LAST depending on how the
-    // break stacked its fresh rows (`phDirection`): flip the hide rule on the
-    // rendered block accordingly. `sep-last` (the render's own default) and
-    // a TRAILING placeholder keep what the render set — only the line-start
-    // shapes change it (`sep-first` hides the separator's first row,
-    // `none` shows every row).
-    if (this.phDirection !== 'sep-last') {
+    // break stacked its fresh rows (`pendingBreak.sep`): flip the hide rule on
+    // the rendered block accordingly. The `null`/sep-last default (the
+    // render's own `data-ph-sep`) and a TRAILING placeholder keep what the
+    // render set — only the line-start shapes change it (`sep-first` hides
+    // the separator's first row, `none` shows every row).
+    if (this.pendingBreak?.sep === 'sep-first' || this.pendingBreak?.sep === 'none') {
       const ph = this.host.querySelector('.blk[data-placeholder]')
       if (ph) {
         ph.removeAttribute('data-ph-sep')
         ph.removeAttribute('data-ph-sep-after')
-        if (this.phDirection === 'sep-first') ph.setAttribute('data-ph-sep-after', '')
+        if (this.pendingBreak.sep === 'sep-first') ph.setAttribute('data-ph-sep-after', '')
       }
     }
+  }
+
+  /**
+   * The separator direction for a break whose insert point is a line's START
+   * — shared by the hard and soft line-start branches. Every offset is read
+   * BEFORE the break's insert (the insert's commit rebuilds the blocks):
+   *
+   * - the blank directly above the caret is the one the PENDING break itself
+   *   opened (a repeated line-start Enter — the pending `at` falls inside the
+   *   previous line's span): INHERIT its direction, so stacking Enters keep
+   *   showing rows the same way;
+   * - otherwise a blank above is a PRE-EXISTING paragraph separator: hide it
+   *   (`sep-first`), or every Enter would visibly add a stray row (measured:
+   *   line-start Enter, then click onto a later paragraph's line start and
+   *   Enter — the separator between two blocks showed as an extra blank);
+   * - no blank above: every row is fresh — show them all (`none`).
+   *
+   * The previous line is located in RAW offsets — `[lastIndexOf('\n', at-2)+1,
+   * at-1]`. NOT `lineBounds(at-1)`: at at-1 == 0 that helper returns an
+   * inverted `{start:1,end:0}` span and the same-chain test silently fails
+   * (measured: `甲乙` line-start Enter twice — the second Enter hid the
+   * caret's row). `lineOfOffset`/`lineToBlock` have the same off-by-one on
+   * consecutive newlines; raw offsets do not.
+   */
+  private lineStartSeparatorDirection(at: number): 'sep-first' | 'none' {
+    if (at <= 0) return 'none'
+    const prevStart = this.doc.lastIndexOf('\n', at - 2) + 1
+    const aboveBlank = this.doc.slice(prevStart, at - 1) === ''
+    const pending = this.pendingBreak
+    if (
+      pending !== null &&
+      aboveBlank &&
+      pending.at >= prevStart &&
+      pending.at <= at - 1
+    ) {
+      return pending.sep === 'sep-first' ? 'sep-first' : 'none'
+    }
+    return aboveBlank ? 'sep-first' : 'none'
   }
 
 private reportLine(): void {
@@ -1257,26 +1293,11 @@ private reportLine(): void {
         const prefix = parseLine(currentLine).prefix
         const insert = prefix.includes('>') ? `\n${prefix}` : '\n'
         const fresh = at + insert.length
-        // Direction + chain judgement for the line-start marking below is
-        // read BEFORE the commit (the commit rebuilds the blocks): see the
-        // hard-break sibling for the rule.
+        // Separator direction read BEFORE the commit (the commit rebuilds the
+        // blocks): the line-start marking below uses it, the line-end one
+        // keeps the default.
         const atLineStart = at === lineStart
-        const car =
-          at > 0
-            ? {
-                start: this.doc.lastIndexOf('\n', at - 2) + 1,
-                end: at - 1,
-                text: this.doc.slice(this.doc.lastIndexOf('\n', at - 2) + 1, at - 1),
-              }
-            : null
-        const aboveBlankLine = car !== null && car.text === ''
-        const pending = atLineStart ? this.pendingBreak : null
-        const sameChain =
-          pending !== null &&
-          aboveBlankLine &&
-          pending.at >= car!.start &&
-          pending.at <= car!.end
-        const chainDirection = sameChain ? 'none' : aboveBlankLine ? 'sep-first' : 'none'
+        const chainSep = atLineStart ? this.lineStartSeparatorDirection(at) : 'none'
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
           this.setPendingBreak(fresh, 'soft', true)
@@ -1300,8 +1321,7 @@ private reportLine(): void {
             freshIndex < this.blocks.length - 1 &&
             this.lineStates[freshBlock.startLine]?.kind === 'blank'
           ) {
-            this.phDirection = chainDirection
-            this.setPendingBreak(at, 'soft', false)
+            this.setPendingBreak(at, 'soft', false, chainSep)
             this.renderWithPlaceholder()
             this.placeCaret(at + 1)
           }
@@ -1395,11 +1415,10 @@ private reportLine(): void {
           this.pushUndo({ value: this.doc, caret: this.caret })
           // A repeated Enter on the blank keeps stacking the same way the
           // first one did — inherit the block's placeholder direction across
-          // this commit (the commit resets `phDirection`).
-          const direction = this.phDirection
+          // this commit (the commit clears the pending break, `sep` rides it).
+          const sep = this.pendingBreak?.sep ?? null
           this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), rowEnd + 1)
-          this.phDirection = direction
-          this.markEnterPlaceholder(rowEnd + 1)
+          this.markEnterPlaceholder(rowEnd + 1, sep)
           return
         }
         const enterLine = lineOfOffset(this.doc, live)
@@ -1474,52 +1493,15 @@ private reportLine(): void {
       // placeholder blank draws its rows, so the line the Enter just opened
       // becomes visible.
       if (live === lineStart) {
-        // The fresh line is a blank SEPARATOR (no line box by default) — mark
-        // it as the Enter placeholder so the line the Enter just opened shows.
-        //
-        // Which rows the placeholder hides (phDirection) depends on what sits
-        // ABOVE the caret. The check reads the model BEFORE the insert (the
-        // commit inside insertNewlines would rebuild the blocks):
-        // - the blank directly above belongs to the CURRENT placeholder chain
-        //   (a repeated line-start Enter — the pending break's block IS that
-        //   blank): inherit the direction, so stacking Enters keep showing
-        //   every fresh row;
-        // - otherwise a blank above is a PRE-EXISTING paragraph separator:
-        //   hide it (`sep-first` — the fresh rows stack AFTER it) instead of
-        //   revealing it, or every Enter would visibly add a stray row
-        //   (measured: line-start Enter, then click onto a later paragraph's
-        //   line start and Enter — the separator between two blocks showed as
-        //   an extra blank);
-        // - no blank above: every row is fresh, show them all (`none`).
-        const pending = this.pendingBreak
-        // The line ABOVE the caret's line start, located in raw offsets
-        // (lastIndexOf before the caret's own leading newline). NOT
-        // `lineBounds(live - 1)` — at live-1 == 0 that helper turns the
-        // document's leading `\n` into an inverted `{start:1,end:0}` span
-        // and the same-chain test silently fails (measured: `甲乙` line-start
-        // Enter twice — second Enter took sep-first and hid the caret's row).
-        // `lineOfOffset`/`lineToBlock` line-number crossing has the same
-        // off-by-one on consecutive newlines; raw offsets do not.
-        const car =
-          live > 0
-            ? {
-                start: this.doc.lastIndexOf('\n', live - 2) + 1,
-                end: live - 1,
-                text: this.doc.slice(this.doc.lastIndexOf('\n', live - 2) + 1, live - 1),
-              }
-            : null
-        const aboveBlankLine = car !== null && car.text === ''
-        // 同链 = 上方空行就是 pendingBreak 打开的占位块（其 at 落在这行
-        // 区间里）。mid-split 的内容占位 at 落在右段上，不在空行区间——
-        // 不算同链。
-        const sameChain =
-          pending !== null &&
-          aboveBlankLine &&
-          pending.at >= car!.start &&
-          pending.at <= car!.end
-        let direction: 'sep-first' | 'none'
-        if (sameChain) direction = 'none'
-        else direction = aboveBlankLine ? 'sep-first' : 'none'
+        // The fresh line is a blank SEPARATOR (no line box by default — the
+        // paragraph-gap model, `paragraph-spacing/01`), so without a mark the
+        // Enter would look dead: the model gained the newline but the page
+        // did not (measured: mid-split caret parked on the second half's
+        // start, second Enter — source grew `\n\n\n` while the render still
+        // showed two paragraphs). Mark the fresh blank as the Enter
+        // placeholder so the line Enter just opened becomes visible; which
+        // rows show rides the separator direction (`lineStartSeparatorDirection`).
+        const sep = this.lineStartSeparatorDirection(live)
         this.insertNewlines(live, 1, live + 1)
         const freshIndex = this.blockAt(live)
         const freshBlock = this.blocks[freshIndex]
@@ -1529,11 +1511,10 @@ private reportLine(): void {
           freshIndex < this.blocks.length - 1 &&
           this.lineStates[freshBlock.startLine]?.kind === 'blank'
         ) {
-          this.phDirection = direction
           // The mark rides the blank's own start; the caret stays where the
           // insert put it (one past the newline — `Editor.test.tsx` "句首
           // Enter" locks `\n甲乙` with caret 1).
-          this.setPendingBreak(live, 'enter', false)
+          this.setPendingBreak(live, 'enter', false, sep)
           this.renderWithPlaceholder()
           this.placeCaret(live + 1)
         }

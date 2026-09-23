@@ -49,7 +49,6 @@ describe('IME 组合提交后 Enter（空文档丢字竞态）', () => {
     expect(model.includes('一些文字')).toBe(true)
     const dom = readDocumentSource(doc)
     expect(dom.includes('一些文字')).toBe(true)
-    r.container.ownerDocument?.body
   })
 
   it('组合提交正常伴随 input 时（原路径）：行为不变', async () => {
@@ -84,6 +83,5 @@ describe('IME 组合提交后 Enter（空文档丢字竞态）', () => {
 
     expect(r.getDoc().includes('一些文字')).toBe(true)
     expect(readDocumentSource(doc).includes('一些文字')).toBe(true)
-    r.container.ownerDocument?.body
   })
 })

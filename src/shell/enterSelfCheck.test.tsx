@@ -28,22 +28,18 @@ const visibleRows = (r: Rendering): number =>
     (el) => getComputedStyle(el).display !== 'none',
   ).length
 
-/** 返回 caret 所在行的 DOM 行元素是否可见。 */
+/** 返回 caret 所在行的 DOM 行元素是否可见（最后一行 src≤caret 的 vline）。 */
 function caretRowVisible(r: Rendering): boolean {
   const caret = caretFromDom()
   if (caret === null) return true // 块外（附加到末尾）不算隐藏
-  const run = [...r.container.querySelectorAll<HTMLElement>('[data-run], [data-vline]')].find(
-    (el) => {
-      const block = el.closest<HTMLElement>('[data-block]')
-      if (!block) return false
-      const srcStart = Number(block.dataset.srcStart)
-      const within =
-        el.hasAttribute('data-vline') ? Number(el.dataset.src) : Number(el.dataset.src)
-      return srcStart + within <= caret
-    },
-  )
-  const vline = run?.closest<HTMLElement>('[data-vline]')
-  return vline ? getComputedStyle(vline).display !== 'none' : true
+  let target: HTMLElement | null = null
+  for (const v of r.container.querySelectorAll<HTMLElement>('[data-vline]')) {
+    const block = v.closest<HTMLElement>('[data-block]')
+    if (!block) continue
+    const srcStart = Number(block.dataset.srcStart)
+    if (srcStart + Number(v.dataset.src || 0) <= caret) target = v
+  }
+  return target ? getComputedStyle(target).display !== 'none' : true
 }
 
 /** 操作后统一断言：DOM-model 一致 + 光标所在行可见。 */
@@ -294,13 +290,11 @@ describe('Enter 扩展矩阵（undo/点击/IME/结构保护）', () => {
     if (!blankVline) throw new Error('no placeholder vline')
     placeCaretAt(blankVline, 0)
     await flush()
-    const caret = caretFromDom()
     await typeText(r, 'X')
     await check(r, 'K2 打字')
     // X 必进 doc；甲乙丙不丢
     expect(r.getDoc()).toContain('X')
     expect(r.getDoc()).toContain('甲乙丙')
-    void caret
   })
 
   it('L1 IME 组合输入后行首 Enter：段落保留（竞态复用）', async () => {
