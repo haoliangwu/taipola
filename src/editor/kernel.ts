@@ -967,7 +967,15 @@ private reportLine(): void {
     }
     const userEdit = this.userEditPending
     this.userEditPending = false
-    if (!userEdit) return
+    // A composition's COMMIT input does not reliably carry a `beforeinput`:
+    // real input methods can fire the final `input` (the one that lands the
+    // composed text in the DOM and model) with `userEditPending` still false
+    // (`compositionend` set `composed` expecting exactly this input). The
+    // `userEdit` gate must let THAT input through — dropping it left the model
+    // without the committed text and `composed` hanging, so the next Backspace
+    // misread the caret (measured: empty document, type one CJK char, Backspace
+    // — the char never left the model and the caret was off by one).
+    if (!userEdit && !this.composed) return
 
     // The browser sometimes injects ELEMENTS of its own into the editable tree
     // (native contenteditable Enter, rich-text paste). Strip them while we are
