@@ -1065,7 +1065,10 @@ describe('侧栏打开文件夹', () => {
 
       // 模拟 Finder 外部新建：目录里多出一个 .md，下次 list 就带上。
       stubs.list.mockImplementation(async (_root, path) => {
-        const entries = path === '章节' ? [{ name: '一.md', path: '章节/一.md', kind: 'file', handle: {} }] : [...ROOT_ENTRIES, { name: '新文件.md', path: '新文件.md', kind: 'file', handle: {} }]
+        const entries: FolderEntry[] =
+          path === '章节'
+            ? [{ name: '一.md', path: '章节/一.md', kind: 'file', handle: {} }]
+            : [...ROOT_ENTRIES, { name: '新文件.md', path: '新文件.md', kind: 'file', handle: {} }]
         return entries
       })
 
