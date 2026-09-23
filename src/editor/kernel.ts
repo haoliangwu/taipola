@@ -167,38 +167,30 @@ export class EditorKernel {
   private composeLength = 0
   private pendingCaret: number | null = null
   /**
-   * Model offset of the blank line a just-pressed Enter opened as a NEW
-   * paragraph placeholder. In-between blanks render no line box
-   * (`paragraph-spacing/01` 十一审), so the caret anchors on the nearest
-   * rendered text and the next keystroke lands THERE — this mark lets that
-   * keystroke be re-homed into the placeholder: the character becomes the new
-   * paragraph's first character, exactly as if it had been typed on the blank.
-   * Single-shot: cleared by every commit.
+   * The ONE break the last Enter/Shift+Enter opened, as a single object rather
+   * than three sibling flags. Kinds:
+   *
+   * - `enter`: the blank line a just-pressed Enter opened as a NEW paragraph
+   *   placeholder. In-between blanks render no line box (`paragraph-spacing/01`
+   *   十一审), so the caret anchors on the nearest rendered text and the next
+   *   keystroke lands THERE — this mark lets that keystroke be re-homed into
+   *   the placeholder: the character becomes the new paragraph's first
+   *   character, exactly as if it had been typed on the blank.
+   * - `soft`: the line Shift+Enter opened at a LINE END. Unlike the enter
+   *   placeholder, the next keystroke CONTINUES the block — no
+   *   paragraphization, so `甲` + Shift+Enter + `x` is `甲\nx`, one paragraph.
+   * - `prefix`: the fresh row a line-end Enter COPIED (list item / quote /
+   *   task marker): `\n` + the repeated prefix. This row is a real content
+   *   line, so one Backspace deletes the WHOLE row and lands back at the
+   *   break point; without the mark, Backspace un-marks the row and leaves a
+   *   stray blank line (measured: `> 甲` Enter Backspace → `> 甲\n` + blank).
+   *
+   * The three were once three separate `pending*Line` flags that every site
+   * had to clear in sync — that is where the repeated Enter/Backspace/IME
+   * regressions came from. One object is set by the break and consumed by the
+   * next edit, whole.
    */
-  private pendingEnterLine = -1
-
-  /**
-   * The line Shift+Enter opened at a LINE END (a paragraph's last line, or a
-   * soft-broken line inside one): the fresh line after it. Unlike the Enter
-   * placeholder, the next keystroke CONTINUES the block — no paragraphization,
-   * so `甲` + Shift+Enter + `x` is `甲\nx`, one paragraph, matching Typora's
-   * soft break. The caret rides on it the same way (`placeCaret` keeps the
-   * trailing blank visible, walks in-between ones back), and one Backspace
-   * undoes the break exactly like the Enter placeholder's.
-   * Single-shot: cleared by every commit.
-   */
-  private pendingSoftLine = -1
-
-  /**
-   * The fresh row a line-end Enter COPIED (list item / quote / task marker):
-   * `\n` + the repeated prefix (`- `, `> `, `> - `, `[ ] `, …). Unlike the
-   * blank placeholders, this row is a real content line, so one Backspace
-   * deletes the WHOLE row and lands back at the break point — without the
-   * mark, Backspace un-marks the row and leaves a stray blank line behind
-   * (measured: `> 甲` Enter Backspace → `> 甲\n` + a trailing blank `<br>`).
-   * Single-shot: cleared by every commit.
-   */
-  private pendingPrefixLine = -1
+  private pendingBreak: { at: number; kind: 'enter' | 'soft' | 'prefix' } | null = null
 
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
@@ -424,8 +416,7 @@ export class EditorKernel {
     // (measured: the third Backspace of `甲` Enter Enter Enter Backspace
     // Backspace Backspace deleted 甲 instead of the last blank row).
     const isEnterSpot =
-      (this.pendingEnterLine >= 0 && want === this.pendingEnterLine) ||
-      (this.pendingSoftLine >= 0 && want === this.pendingSoftLine)
+      this.pendingBreak !== null && want === this.pendingBreak.at
     while (
       !isEnterSpot &&
       index > 0 &&
@@ -495,7 +486,15 @@ export class EditorKernel {
         // the placeholder either way.
         const diffStart = sharedPrefix(this.doc, next)
         const placed = next.slice(diffStart, diffStart + inserted)
-        const placeholder = this.pendingEnterLine
+        // The one outstanding break, by kind: `enter` re-homes a typed
+        // character into the new paragraph's blank (with ±1 tolerance because
+        // the browser's caret is usually one position SHORT of the inserted
+        // text — the caret sits on the placeholder line box's start, before
+        // its `<br>`); `soft` re-homes into the soft-break line; `prefix`
+        // rows are real content the browser edits directly and need none.
+        const pending = this.pendingBreak
+        const placeholder = pending?.kind === 'enter' ? pending.at : -1
+        const softLine = pending?.kind === 'soft' ? pending.at : -1
         // The re-home needs the ±1 tolerance because the browser's caret is
         // usually one position SHORT of the inserted text (the caret sits on
         // the placeholder line box's start, before its `<br>`): tolerated
@@ -519,7 +518,6 @@ export class EditorKernel {
         // (`甲` + Shift+Enter + `x` → `甲\nx`, one paragraph — Typora's soft
         // break), so there is no paragraphization here, only the same
         // re-home from the diff when the character landed beside the line.
-        const softLine = this.pendingSoftLine
         const nearSoft = softLine >= 0 && insertStart >= softLine - 1 && insertStart <= softLine
         if (nearEnter && inserted === 1) {
           // Enter's placeholder blank renders no line box, so the keystroke
@@ -586,9 +584,7 @@ export class EditorKernel {
     // The Enter placeholder is single-shot, and it must SURVIVE this commit's
     // own `placeCaret` (the Enter that just carried it consults it again), so
     // it is consumed here at the very end.
-    this.pendingEnterLine = -1
-    this.pendingSoftLine = -1
-    this.pendingPrefixLine = -1
+    this.pendingBreak = null
   }
 
   /**
@@ -600,9 +596,7 @@ export class EditorKernel {
    * sibling mark instead (the two are mutually exclusive).
    */
   private markEnterPlaceholder(at: number): void {
-    this.pendingEnterLine = at
-    this.pendingSoftLine = -1
-    this.pendingPrefixLine = -1
+    this.setPendingBreak(at, 'enter', false)
     // The mark changes WHAT renders (its blank block gains a row) without
     // changing the markup signature, so the just-finished commit's own render
     // cannot have drawn it — render again, now with the placeholder visible,
@@ -611,11 +605,21 @@ export class EditorKernel {
     this.placeCaret(at)
   }
 
+  /** Sets the one outstanding break; the kinds are mutually exclusive. Rendering
+      and caret anchoring are the caller's: the enter placeholder re-renders
+      (the just-finished commit's render cannot have drawn it) and re-anchors,
+      while the soft one only re-anchors and the prefix row needs neither (its
+      commit already rendered and anchored both). */
+  private setPendingBreak(at: number, kind: 'enter' | 'soft' | 'prefix', anchor: boolean): void {
+    this.pendingBreak = { at, kind }
+    if (anchor) this.placeCaret(at)
+  }
+
   /** Re-renders with the Enter placeholder's block drawn as a row (see
-      `renderDocument`): must run AFTER `pendingEnterLine` is set. */
+      `renderDocument`): must run AFTER `pendingBreak` is set. */
   private renderWithPlaceholder(): void {
     if (!this.host || this.composing) return
-    const placeholderBlock = this.pendingEnterLine >= 0 ? this.blockAt(this.pendingEnterLine) : -1
+    const placeholderBlock = this.pendingBreak !== null ? this.blockAt(this.pendingBreak.at) : -1
     renderDocument(
       this.host,
       this.blocks,
@@ -1055,13 +1059,13 @@ private reportLine(): void {
     const absorbedLineKind = this.lineStates[lineOfOffset(this.doc, absorbedStart) - 1]?.kind
     const onBlankLine = absorbedLineKind === 'blank' || absorbedLineKind === undefined
     const nearEnter =
-      this.pendingEnterLine >= 0 &&
-      absorbedStart >= this.pendingEnterLine - 1 &&
-      absorbedStart <= this.pendingEnterLine
+      this.pendingBreak?.kind === 'enter' &&
+      absorbedStart >= this.pendingBreak.at - 1 &&
+      absorbedStart <= this.pendingBreak.at
     const nearSoft =
-      this.pendingSoftLine >= 0 &&
-      absorbedStart >= this.pendingSoftLine - 1 &&
-      absorbedStart <= this.pendingSoftLine
+      this.pendingBreak?.kind === 'soft' &&
+      absorbedStart >= this.pendingBreak.at - 1 &&
+      absorbedStart <= this.pendingBreak.at
     if (absorbedDelta > 0 && (onBlankLine || nearEnter || nearSoft)) return
 
     this.doc = next
@@ -1178,10 +1182,7 @@ private reportLine(): void {
         const fresh = at + insert.length
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
-          this.pendingEnterLine = -1
-          this.pendingPrefixLine = -1
-          this.pendingSoftLine = fresh
-          this.placeCaret(fresh)
+          this.setPendingBreak(fresh, 'soft', true)
         }
         return
       }
@@ -1233,10 +1234,9 @@ private reportLine(): void {
         // (`1 2 3` + Enter on 2 used to give `1 2 3 3`).
         this.commit(renumberLists(edited), live + insert.length)
         // Mark the copied row as the Enter placeholder: one Backspace deletes
-        // the whole fresh row and lands back at the break point.
-        this.pendingEnterLine = -1
-        this.pendingSoftLine = -1
-        this.pendingPrefixLine = live + insert.length
+        // the whole fresh row and lands back at the break point. The commit
+        // already anchored the caret on the fresh row, so no re-anchor.
+        this.setPendingBreak(live + insert.length, 'prefix', false)
         return
       }
       // A plain TEXT line, caret at its very END: Enter is a HARD break — the
@@ -1436,23 +1436,15 @@ private reportLine(): void {
       // blank line. The caret sits at the placeholder line or one position
       // before it (the placeholder renders no line box, `paragraph-spacing/01`
       // 十一审, so the visual anchor sits on the paragraph end).
-      const onEnter =
-        this.pendingEnterLine >= 0 &&
-        (live === this.pendingEnterLine || live === this.pendingEnterLine - 1)
-      const onSoft =
-        this.pendingSoftLine >= 0 &&
-        (live === this.pendingSoftLine || live === this.pendingSoftLine - 1)
-      const onPrefix =
-        this.pendingPrefixLine >= 0 &&
-        (live === this.pendingPrefixLine || live === this.pendingPrefixLine - 1)
+      const pending = this.pendingBreak
+      const onBreak = pending !== null && (live === pending.at || live === pending.at - 1)
+      const onEnter = onBreak && pending.kind === 'enter'
+      const onSoft = onBreak && pending.kind === 'soft'
+      const onPrefix = onBreak && pending.kind === 'prefix'
+      const at = onBreak ? pending.at : -1
       if (onEnter || onSoft || onPrefix) {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
-        const at = onEnter
-          ? this.pendingEnterLine
-          : onSoft
-            ? this.pendingSoftLine
-            : this.pendingPrefixLine
         // The copied marker row a prefix-line Enter opened (`- `, `> `, …):
         // delete the WHOLE row — the newline before it plus the marker — and
         // land back at the break point, one stroke per Enter. The blank and
