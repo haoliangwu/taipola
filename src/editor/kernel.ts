@@ -960,6 +960,37 @@ private reportLine(): void {
     }
   }
 
+  /**
+   * Absorbs the pending composition commit into the model — the `composed`
+   * flag `compositionend` set, waiting for the commit input that lands the
+   * composed text. Not every input method fires that final `input`: some land
+   * the text in the DOM and finish with `compositionend` alone, hanging
+   * `composed` until the NEXT edit. That edit is usually a KEY PRESS, and it
+   * must run on a model that already holds the text — otherwise
+   * (`absorbComposedCommit` missing) Enter ran against an empty model,
+   * re-rendered the DOM from it, and the composed paragraph vanished; the
+   * later commit input then read the emptied DOM back and the text was gone
+   * for good (measured: empty doc → IME text → Enter: model became `\n`).
+   *
+   * Shared behaviour with the commit input: same-content commits only
+   * normalize the DOM and re-anchor the caret; real diffs commit with the
+   * diff-derived caret (`insertedEnd`).
+   */
+  private absorbComposedCommit(): void {
+    const host = this.host
+    if (!host || !this.composed) return
+    this.composed = false
+    const next = readDocumentSource(host) + readLooseText(host)
+    if (next === this.doc) {
+      if (this.render()) this.placeCaret(this.composeStart + this.composeLength)
+      return
+    }
+    const prefix = sharedPrefix(this.doc, next)
+    const insertedEnd = next.length - sharedSuffix(this.doc, next, prefix)
+    this.pushUndo({ value: this.doc, caret: this.caret })
+    this.commit(next, insertedEnd <= prefix ? prefix : insertedEnd)
+  }
+
   private handleInput = (event: Event): void => {
     const host = this.host
     if (!host || this.readOnly) return
@@ -1114,6 +1145,15 @@ private reportLine(): void {
       }
     }
     if (mod || this.composing || this.readOnly) return
+
+    // A composition can finish with its text ONLY in the DOM — some input
+    // methods fire no final `input`, so the `composed` flag `compositionend`
+    // set just hangs until the next edit. That edit is this key press; absorb
+    // the commit FIRST so Enter/Backspace run on a model that holds the text.
+    // Without this, Enter ran against the still-empty model, re-rendered the
+    // composed text away, and the DOM read-back lost the paragraph
+    // (measured: empty doc → IME text → Enter → model `\n`).
+    this.absorbComposedCommit()
 
     // Keyed edits derive the caret from the DOM: a click or a selection the
     // browser moved may not have reached us yet, and acting on a stale caret
