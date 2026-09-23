@@ -1257,20 +1257,41 @@ private reportLine(): void {
         const prefix = parseLine(currentLine).prefix
         const insert = prefix.includes('>') ? `\n${prefix}` : '\n'
         const fresh = at + insert.length
+        // Direction + chain judgement for the line-start marking below is
+        // read BEFORE the commit (the commit rebuilds the blocks): see the
+        // hard-break sibling for the rule.
+        const atLineStart = at === lineStart
+        const car =
+          at > 0
+            ? {
+                start: this.doc.lastIndexOf('\n', at - 2) + 1,
+                end: at - 1,
+                text: this.doc.slice(this.doc.lastIndexOf('\n', at - 2) + 1, at - 1),
+              }
+            : null
+        const aboveBlankLine = car !== null && car.text === ''
+        const pending = atLineStart ? this.pendingBreak : null
+        const sameChain =
+          pending !== null &&
+          aboveBlankLine &&
+          pending.at >= car!.start &&
+          pending.at <= car!.end
+        const chainDirection = sameChain ? 'none' : aboveBlankLine ? 'sep-first' : 'none'
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
           this.setPendingBreak(fresh, 'soft', true)
-        } else if (at === lineStart) {
+        } else if (atLineStart && prefix === '') {
           // A soft break at a line's START opens the blank line ABOVE. Like
           // the hard-break sibling, that blank is a separator (no line box),
           // so the break would be invisible; mark it as a placeholder so its
           // rows render (measured: `第一段文\n字在这`, caret on 字, Shift+Enter
           // twice — the model gained the blank, the page did not). The mark
           // rides `at` (the blank's own start), NOT `fresh`: `fresh` is one
-          // char past the break and falls inside the next block. Same
-          // phDirection rule as the hard-break sibling.
-          // Same fresh-all-rows treatment as the hard-break sibling: every row of a
-          // line-start blank is fresh to the user, show them all (`none`).
+          // char past the break and falls inside the next block. Skipped on
+          // PREFIXED lines (quote/list/task): their fresh row carries the
+          // repeated marker and needs no blank row (and re-placing the caret
+          // there displaced it onto the fresh marker — measured: `> 甲`,
+          // caret 0, Shift+Enter → `\n> > 甲`).
           const freshIndex = this.blockAt(at)
           const freshBlock = this.blocks[freshIndex]
           if (
@@ -1279,7 +1300,7 @@ private reportLine(): void {
             freshIndex < this.blocks.length - 1 &&
             this.lineStates[freshBlock.startLine]?.kind === 'blank'
           ) {
-            this.phDirection = 'none'
+            this.phDirection = chainDirection
             this.setPendingBreak(at, 'soft', false)
             this.renderWithPlaceholder()
             this.placeCaret(at + 1)
@@ -1454,18 +1475,51 @@ private reportLine(): void {
       // becomes visible.
       if (live === lineStart) {
         // The fresh line is a blank SEPARATOR (no line box by default) — mark
-        // it as the Enter placeholder so the line Enter just opened shows.
-        // How the placeholder rows hide (phDirection): a line-start break
-        // stacks fresh rows AFTER any separator blank that already sits above
-        // the caret (insert point = the caret's line start, past the blank),
-        // so the separator ends up FIRST in the block — hide it with
-        // `data-ph-sep-after`; when NO blank preceded the caret, every row is
-        // fresh and all of them show (`none`). Without a sensible direction
-        // the placeholder hid the fresh row the caret landed on and repeated
-        // line-start Enters grew the model while the page never moved
-        // (measured: mid-split caret on the second half's start, second Enter
-        // — source grew `\n\n\n`, render still two paragraphs). Every row of
-        // a line-start blank is fresh to the user — show them all (`none`).
+        // it as the Enter placeholder so the line the Enter just opened shows.
+        //
+        // Which rows the placeholder hides (phDirection) depends on what sits
+        // ABOVE the caret. The check reads the model BEFORE the insert (the
+        // commit inside insertNewlines would rebuild the blocks):
+        // - the blank directly above belongs to the CURRENT placeholder chain
+        //   (a repeated line-start Enter — the pending break's block IS that
+        //   blank): inherit the direction, so stacking Enters keep showing
+        //   every fresh row;
+        // - otherwise a blank above is a PRE-EXISTING paragraph separator:
+        //   hide it (`sep-first` — the fresh rows stack AFTER it) instead of
+        //   revealing it, or every Enter would visibly add a stray row
+        //   (measured: line-start Enter, then click onto a later paragraph's
+        //   line start and Enter — the separator between two blocks showed as
+        //   an extra blank);
+        // - no blank above: every row is fresh, show them all (`none`).
+        const pending = this.pendingBreak
+        // The line ABOVE the caret's line start, located in raw offsets
+        // (lastIndexOf before the caret's own leading newline). NOT
+        // `lineBounds(live - 1)` — at live-1 == 0 that helper turns the
+        // document's leading `\n` into an inverted `{start:1,end:0}` span
+        // and the same-chain test silently fails (measured: `甲乙` line-start
+        // Enter twice — second Enter took sep-first and hid the caret's row).
+        // `lineOfOffset`/`lineToBlock` line-number crossing has the same
+        // off-by-one on consecutive newlines; raw offsets do not.
+        const car =
+          live > 0
+            ? {
+                start: this.doc.lastIndexOf('\n', live - 2) + 1,
+                end: live - 1,
+                text: this.doc.slice(this.doc.lastIndexOf('\n', live - 2) + 1, live - 1),
+              }
+            : null
+        const aboveBlankLine = car !== null && car.text === ''
+        // 同链 = 上方空行就是 pendingBreak 打开的占位块（其 at 落在这行
+        // 区间里）。mid-split 的内容占位 at 落在右段上，不在空行区间——
+        // 不算同链。
+        const sameChain =
+          pending !== null &&
+          aboveBlankLine &&
+          pending.at >= car!.start &&
+          pending.at <= car!.end
+        let direction: 'sep-first' | 'none'
+        if (sameChain) direction = 'none'
+        else direction = aboveBlankLine ? 'sep-first' : 'none'
         this.insertNewlines(live, 1, live + 1)
         const freshIndex = this.blockAt(live)
         const freshBlock = this.blocks[freshIndex]
@@ -1475,7 +1529,7 @@ private reportLine(): void {
           freshIndex < this.blocks.length - 1 &&
           this.lineStates[freshBlock.startLine]?.kind === 'blank'
         ) {
-          this.phDirection = 'none'
+          this.phDirection = direction
           // The mark rides the blank's own start; the caret stays where the
           // insert put it (one past the newline — `Editor.test.tsx` "句首
           // Enter" locks `\n甲乙` with caret 1).
