@@ -1055,6 +1055,30 @@ describe('侧栏打开文件夹', () => {
     }
   })
 
+  it('文件夹里外部新建的 .md：刷新后出现（Finder 里建的会跟在树里一样显示）', async () => {
+    const stubs = stubFolders()
+    const view = render(<App />)
+    const user = userEvent.setup({ delay: null })
+    try {
+      await openFolder(view)
+      expect(rows(view)).toEqual(['空目录', '章节', '笔记.md'])
+
+      // 模拟 Finder 外部新建：目录里多出一个 .md，下次 list 就带上。
+      stubs.list.mockImplementation(async (_root, path) => {
+        const entries = path === '章节' ? [{ name: '一.md', path: '章节/一.md', kind: 'file', handle: {} }] : [...ROOT_ENTRIES, { name: '新文件.md', path: '新文件.md', kind: 'file', handle: {} }]
+        return entries
+      })
+
+      await user.click(sidebarAction(view, '刷新')!)
+      await act(async () => {})
+
+      expect(rows(view)).toContain('新文件.md')
+    } finally {
+      vi.restoreAllMocks()
+      view.unmount()
+    }
+  })
+
   it('刷新读不动时，树保留原来那些行，只提示一次', async () => {
     const stubs = stubFolders()
     const view = render(<App />)
