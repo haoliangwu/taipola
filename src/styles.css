@@ -860,6 +860,17 @@ body {
   display: none;
 }
 
+/* A LINE-START Enter/Shift+Enter stacks its fresh rows AFTER the pre-existing
+   separator blank (the insert point is the caret's line start, past the
+   blank), so the fresh line ends up LAST — the mirror image of the line-end
+   break above. `data-ph-sep-after` hides the separator's FIRST row instead
+   and shows every fresh row (kernel flips the attribute on the placeholder
+   block: repeated line-start Enters kept growing the model while the page
+   never showed a new row). */
+.blk[data-ph-sep-after] .vl-blank:first-child {
+  display: none;
+}
+
 /* One source line. One line box tall, whatever the browser would do with its
    content: a line whose text is collapsed (a `---`, a fence marker, an empty list
    item) still owns its row on the page, which is what keeps the vertical position
