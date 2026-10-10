@@ -1990,8 +1990,9 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressShiftEnter(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n\n乙\n')
-    // 中间软占位（无行盒）：光标吸附在段尾。
-    expect(caretFromDom()).toBe(1)
+    // 软占位渲染自己的行盒（typora-parity P5 soft stack）：光标停在新行
+    //（偏移 2），与 Enter 的占位同款。
+    expect(caretFromDom()).toBe(2)
     await r.user.keyboard('x')
     await flush()
     // x 被 re-home 进 Shift+Enter 的新行：`甲\nx` 一段 + 空行 + 乙。
@@ -2201,7 +2202,8 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
 
     // 同一位置走 Shift+Enter：源同样多一个换行（结果相同），但那是块内的
-    // 软换行插值而非新块占位；光标同样吸附在段尾。
+    // 软换行插值而非新块占位；软占位行盒同样渲染、光标停在同一偏移
+    //（typora-parity P5 soft stack：行尾软断 = 一行可见空行）。
     const s = renderEditor('甲\n\n乙\n')
     await flush()
     await clickInRun(s, 0, 0, 0, 'end')
@@ -2209,7 +2211,7 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressShiftEnter(s)
     await flush()
     expect(s.getDoc()).toBe('甲\n\n\n乙\n')
-    expect(caretFromDom()).toBe(1)
+    expect(caretFromDom()).toBe(2)
     await assertDomMatchesSource(s)
   })
 

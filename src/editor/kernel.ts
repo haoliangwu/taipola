@@ -155,6 +155,9 @@ export class EditorKernel {
   private signature = ''
   private reportedLine = 0
 
+  /** The placeholder block the last SOFT render drew, for the flip check in `render`. */
+  private softRenderedPlaceholder = -1
+
   /** True while the DOM selection is one WE placed; see the class comment. */
   private placedByUs = false
   /** Set by `beforeinput`, consumed by `input`. */
@@ -432,18 +435,58 @@ export class EditorKernel {
     // the committed characters land beside the pinyin instead of replacing it —
     // typing `w` then committing 我 left `w我` in the document.
     if (this.composing) return false
+    // A pending SOFT stack's rows are placeholder rendering: they show while the
+    // caret is inside the stack and drop when it leaves (requirement: moving
+    // away stops the pending rows). The placeholder is not part of the markup
+    // signature, so the flip is decided by comparing the last rendered SOFT
+    // placeholder, not the signature. An ENTER placeholder's rows are drawn by
+    // `renderWithPlaceholder` only and persist until a source change — a caret
+    // move must not redraw (the browser's selection is mid-flight).
+    const placeholder = this.activeSoftPlaceholder()
     const signature = markupSignature(this.blocks, this.views, this.lineStates, this.offsets)
-    if (signature === this.signature) return false
-    // The Enter placeholder's row is drawn by `renderWithPlaceholder` only:
-    // an ordinary render here must NOT resolve the still-pending mark against
-    // the new blocks — one commit after the mark was consumed (a keystroke
-    // re-homed into the placeholder) would then point at whatever block now
-    // sits at that offset and render an in-between blank that belongs to the
-    // separator, not to Enter (measured: typing into the placeholder left
-    // two rendered blank rows).
-    renderDocument(host, this.blocks, this.views, this.lineStates, this.offsets)
+    if (signature === this.signature && placeholder === this.softRenderedPlaceholder) return false
+    renderDocument(host, this.blocks, this.views, this.lineStates, this.offsets, placeholder)
+    this.applyPlaceholderSep(placeholder)
     this.signature = signature
+    this.softRenderedPlaceholder = placeholder
     return true
+  }
+
+  /**
+   * The blank block a pending SOFT stack renders, while the caret is inside
+   * it — every pending blank line shows a row, caret on the newest (Typora:
+   * each Shift+Enter adds one visible empty line). Moving the caret out of
+   * the stack returns -1, and the rows stop rendering: they are a gesture
+   * chain's view, and the source truth — bare `\n` separators between
+   * paragraphs — takes over again.
+   */
+  private activeSoftPlaceholder(): number {
+    const pending = this.pendingBreak
+    if (!pending || pending.kind !== 'soft') return -1
+    const index = this.blockAt(pending.at)
+    const block = this.blocks[index]
+    if (!block || block.raw !== '' || this.lineStates[block.startLine]?.kind !== 'blank') return -1
+    const start = this.offsets[index]
+    const end = start + (block.endLine - block.startLine)
+    return this.caret >= start && this.caret <= end ? index : -1
+  }
+
+  /**
+   * True when `want` sits inside the pending break's blank block — a row of a
+   * soft stack, or the Enter placeholder's own blank. Those rows RENDER (the
+   * placeholder), so the caret must anchor on the wanted row instead of
+   * walking back to the previous paragraph's end: the walk exists for
+   * invisible separator blanks only.
+   */
+  private inPendingBlank(want: number): boolean {
+    const pending = this.pendingBreak
+    if (!pending) return false
+    if (this.blockAt(want) !== this.blockAt(pending.at)) return false
+    const block = this.blocks[this.blockAt(want)]
+    if (!block || block.raw !== '' || this.lineStates[block.startLine]?.kind !== 'blank') return false
+    const start = this.offsets[block.index]
+    const end = start + (block.endLine - block.startLine)
+    return want >= start && want <= end
   }
 
   private placeCaret(want: number): void {
@@ -460,8 +503,7 @@ export class EditorKernel {
     // paragraph's end and the next keystroke would edit the wrong line
     // (measured: the third Backspace of `甲` Enter Enter Enter Backspace
     // Backspace Backspace deleted 甲 instead of the last blank row).
-    const isEnterSpot =
-      this.pendingBreak !== null && want === this.pendingBreak.at
+    const isEnterSpot = this.pendingBreak !== null && this.inPendingBlank(want)
     while (
       !isEnterSpot &&
       index > 0 &&
@@ -563,7 +605,20 @@ export class EditorKernel {
         // (`甲` + Shift+Enter + `x` → `甲\nx`, one paragraph — Typora's soft
         // break), so there is no paragraphization here, only the same
         // re-home from the diff when the character landed beside the line.
-        const nearSoft = softLine >= 0 && insertStart >= softLine - 1 && insertStart <= softLine
+        // The insert-LINE equality keeps the ±1 tolerance honest: a character
+        // typed into a DIFFERENT row of the stack (a click into a middle row)
+        // must take the generic paragraphize path, not be stolen up to the
+        // newest row.
+        const nearSoft =
+          softLine >= 0 &&
+          insertStart >= softLine - 1 &&
+          insertStart <= softLine + 1 &&
+          // THE READ-BACK's insert line vs the placeholder line: the re-home is
+          // "the keystroke was meant for the placeholder row". The trailing
+          // row bounces one position past the last newline (`甲乙\n` Shift+Enter
+          // 丙 types at `+1`, the very end), the caret rides the pending row,
+          // so the insert sits on the row's own line or the one below it.
+          Math.abs(lineOfOffset(next, insertStart) - lineOfOffset(this.doc, softLine)) <= 1
         if (nearEnter && inserted === 1) {
           // Enter's placeholder blank renders no line box, so the keystroke
           // that was meant for it landed on the nearest rendered text (the
@@ -603,7 +658,23 @@ export class EditorKernel {
           const diffKind = this.lineStates[diffLine - 1]?.kind
           const plainTyping = !placed.includes('\n')
           const blank = (k: string | undefined): boolean => k === 'blank' || k === undefined
-          if (plainTyping && (blank(kind) || blank(diffKind))) {
+          // A character typed at the END of a content line can be dragged by
+          // the browser across the line's newline: the caret sits at the last
+          // text node's edge, and the key lands the character in the blank (or
+          // the next line) that follows the caret's line instead of at the
+          // caret — the diff then reads "a blank was filled" while the user
+          // was typing at the content line's end (`甲\n` caret at 1, type 乙 —
+          // the keystroke landed on the trailing blank and the paragraphizer
+          // fenced it into `甲\n\n乙`; the caret never left 甲). The user's
+          // caret is the character's true destination: re-home it there.
+          const caretKind =
+            this.caret <= this.doc.length
+              ? this.lineStates[lineOfOffset(this.doc, this.caret) - 1]?.kind
+              : undefined
+          if (plainTyping && diffStart > this.caret && caretKind !== undefined && !blank(caretKind)) {
+            next = `${this.doc.slice(0, this.caret)}${placed}${this.doc.slice(this.caret)}`
+            caretNext = this.caret + placed.length
+          } else if (plainTyping && (blank(kind) || blank(diffKind))) {
             // The paragraphizer computes its own insert point from the caret:
             // the caret must be the end of the inserted text — the diff's end,
             // never the lagging DOM caret.
@@ -680,20 +751,26 @@ export class EditorKernel {
       this.offsets,
       placeholderBlock,
     )
-    // The placeholder's separator row sits FIRST or LAST depending on how the
-    // break stacked its fresh rows (`pendingBreak.sep`): flip the hide rule on
-    // the rendered block accordingly. The `null`/sep-last default (the
-    // render's own `data-ph-sep`) and a TRAILING placeholder keep what the
-    // render set — only the line-start shapes change it (`sep-first` hides
-    // the separator's first row, `none` shows every row).
-    if (this.pendingBreak?.sep === 'sep-first' || this.pendingBreak?.sep === 'none') {
-      const ph = this.host.querySelector('.blk[data-placeholder]')
-      if (ph) {
-        ph.removeAttribute('data-ph-sep')
-        ph.removeAttribute('data-ph-sep-after')
-        if (this.pendingBreak.sep === 'sep-first') ph.setAttribute('data-ph-sep-after', '')
-      }
-    }
+    this.applyPlaceholderSep(placeholderBlock)
+    // Only a SOFT render owns the flip state; the enter placeholder's rows are
+    // not redrawn by caret moves (see `render`).
+    if (this.pendingBreak?.kind === 'soft') this.softRenderedPlaceholder = placeholderBlock
+  }
+
+  /**
+   * The placeholder render's separator adjustments: `sep-first`/`none` flip
+   * which row of the placeholder block stays hidden. The `null`/sep-last
+   * default (the render's own `data-ph-sep`) and a TRAILING placeholder keep
+   * what the render set.
+   */
+  private applyPlaceholderSep(placeholderBlock: number): void {
+    if (this.pendingBreak?.sep !== 'sep-first' && this.pendingBreak?.sep !== 'none') return
+    if (placeholderBlock < 0 || !this.host) return
+    const ph = this.host.querySelector(`.blk[data-block="${placeholderBlock}"]`)
+    if (!ph) return
+    ph.removeAttribute('data-ph-sep')
+    ph.removeAttribute('data-ph-sep-after')
+    if (this.pendingBreak.sep === 'sep-first') ph.setAttribute('data-ph-sep-after', '')
   }
 
   /**
@@ -702,9 +779,10 @@ export class EditorKernel {
    * BEFORE the break's insert (the insert's commit rebuilds the blocks):
    *
    * - the blank directly above the caret is the one the PENDING break itself
-   *   opened (a repeated line-start Enter — the pending `at` falls inside the
-   *   previous line's span): INHERIT its direction, so stacking Enters keep
-   *   showing rows the same way;
+   *   opened (a repeated line-start Enter, or the caret sitting ON a pending
+   *   blank row of a soft stack — the pending's `at` can be the caret's own
+   *   line, so the inherit window reaches `at`): INHERIT its direction, so
+   *   stacking breaks keep showing rows the same way;
    * - otherwise a blank above is a PRE-EXISTING paragraph separator: hide it
    *   (`sep-first`), or every Enter would visibly add a stray row (measured:
    *   line-start Enter, then click onto a later paragraph's line start and
@@ -727,11 +805,30 @@ export class EditorKernel {
       pending !== null &&
       aboveBlank &&
       pending.at >= prevStart &&
-      pending.at <= at - 1
+      pending.at <= at
     ) {
       return pending.sep === 'sep-first' ? 'sep-first' : 'none'
     }
     return aboveBlank ? 'sep-first' : 'none'
+  }
+
+  /**
+   * The placeholder separator direction for a LINE-END soft break at `at` —
+   * the line-end sibling of `lineStartSeparatorDirection`. A chain (a pending
+   * soft break already open) inherits its own direction, so repeated
+   * Shift+Enter keep showing every stack row; otherwise a PRE-EXISTING blank
+   * below the caret keeps the render's default (`data-ph-sep` hides the last
+   * row — the separator that predates the break, fresh rows before it show);
+   * a break on a run with no blank below (`甲\n乙`, caret at 甲的 end) created
+   * the row out of thin air: every row is fresh — show them all.
+   */
+  private softStackSeparator(at: number): 'sep-first' | 'none' | null {
+    const pending = this.pendingBreak
+    if (pending?.kind === 'soft') return pending.sep ?? null
+    if (at >= this.doc.length) return 'none'
+    const belowEnd = this.doc.indexOf('\n', at + 1)
+    const below = this.doc.slice(at + 1, belowEnd === -1 ? undefined : belowEnd)
+    return below === '' ? null : 'none'
   }
 
 private reportLine(): void {
@@ -848,6 +945,17 @@ private reportLine(): void {
     const safe = this.offRuleRow(source)
     this.caret = safe
     this.recompute()
+    // The pending soft stack RIDES the caret: a click into a row of the stack
+    // makes that row the "newest" — typing lands there (the re-home attaches
+    // the character at `pending.at`), and Backspace pops from there. Moving
+    // OUT of the stack clears the mark, so the pending rows stop rendering —
+    // the gesture chain's view ends where the caret leaves it.
+    const pending = this.pendingBreak
+    if (pending?.kind === 'soft') {
+      const inside = this.inPendingBlank(safe)
+      if (inside) this.pendingBreak = { ...pending, at: safe }
+      else this.pendingBreak = null
+    }
     // Revealing or collapsing markers around the new caret rewrites the DOM,
     // which would leave the browser's selection on a detached text node — so the
     // caret is re-applied in the same frame. A REDIRECTED caret is re-applied even
@@ -1141,13 +1249,6 @@ private reportLine(): void {
     // browser had already touched several blocks' DOM.
     const next = readDocumentSource(host) + readLooseText(host)
     if (next === this.doc) {
-      // Backstop for a commit input that arrives after a same-content
-      // `compositionend`: the model has nothing to absorb, but the DOM may still
-      // hold the composition's provisional shape — a bare text node inside the
-      // line box, not a run. Skipping entirely would leave that shape for the
-      // NEXT edit to misread (`.scratch/enter-backspace-smoke/issues/11`), so
-      // normalize the DOM and re-anchor the caret by the same computed offset
-      // `compositionend` would have used.
       if (this.composed) {
         this.composed = false
         if (this.render()) this.placeCaret(this.composeStart + this.composeLength)
@@ -1362,9 +1463,30 @@ private reportLine(): void {
         // keeps the default.
         const atLineStart = at === lineStart
         const chainSep = atLineStart ? this.lineStartSeparatorDirection(at) : 'none'
+        // Read BEFORE the commit (the commit clears the pending break): caret
+        // on a row of the pending soft stack — the repeated break stacks one
+        // more row below and the mark rides the FRESH row.
+        const onStackRow =
+          atLineStart && this.pendingBreak?.kind === 'soft' && this.inPendingBlank(at)
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
-          this.setPendingBreak(fresh, 'soft', true)
+          if (prefix === '') {
+            // A PLAIN line's line-end break marks the fresh row AND renders it
+            // with the placeholder machinery — the blank line Shift+Enter just
+            // opened shows on screen, and the caret anchors ON it (`softStack`:
+            // every pending blank line renders, caret on the newest; before
+            // this, a repeated Shift+Enter stacked invisible blanks, the caret
+            // rounded on the paragraph end, and the second Backspace ate the
+            // paragraph's text — the original bug). Prefixed lines keep the
+            // single-shot mark: their fresh row is real content and renders
+            // by itself.
+            const sep = this.softStackSeparator(at)
+            this.setPendingBreak(fresh, 'soft', false, sep)
+            this.renderWithPlaceholder()
+            this.placeCaret(fresh)
+          } else {
+            this.setPendingBreak(fresh, 'soft', true)
+          }
         } else if (atLineStart && prefix === '') {
           // A soft break at a line's START opens the blank line ABOVE. Like
           // the hard-break sibling, that blank is a separator (no line box),
@@ -1385,9 +1507,16 @@ private reportLine(): void {
             freshIndex < this.blocks.length - 1 &&
             this.lineStates[freshBlock.startLine]?.kind === 'blank'
           ) {
-            this.setPendingBreak(at, 'soft', false, chainSep)
+            // Caret ON a pending soft row: the repeated break stacks ONE more
+            // row below — mark the FRESH row so the stack keeps rendering and
+            // the caret rides the newest one. A soft break on any other blank
+            // (no pending) is a fresh stack starting at this row: its mark
+            // rides `at` as above.
+            const mark = onStackRow ? fresh : at
+            const caret = onStackRow ? fresh : at + 1
+            this.setPendingBreak(mark, 'soft', false, chainSep)
             this.renderWithPlaceholder()
-            this.placeCaret(at + 1)
+            this.placeCaret(caret)
           }
         }
         return
@@ -1715,6 +1844,20 @@ private reportLine(): void {
             this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
           }
         }
+        if (onSoft) {
+          // The soft STACK pops ONE row: keep the mark on the row above, so the
+          // next Backspace pops the next row instead of falling off the stack
+          // and eating the paragraph's text (the original bug: the caret
+          // rounded on the paragraph end, so Backspace #2 deleted 甲). When no
+          // blank row remains above, the stack is done and normal Backspace
+          // semantics resume.
+          const chainSep = pending.sep ?? null
+          if (at > 1 && this.doc[at - 2] === '\n') {
+            this.setPendingBreak(at - 1, 'soft', false, chainSep)
+            this.renderWithPlaceholder()
+            this.placeCaret(at - 1)
+          }
+        }
         return
       }
       const sel = window.getSelection()
@@ -1729,6 +1872,20 @@ private reportLine(): void {
         // exactly like the other guarded no-ops, so Cmd+Z never dead-steps.
         if (blocksTableBackspace(this.doc, live)) {
           event.preventDefault()
+          return
+        }
+        // A `<br …>` TOKEN at the caret's left edge is one soft break, not six
+        // characters: Backspace removes the whole token and lands where it
+        // began (the P4 skips over it as one unit everywhere else — the caret
+        // arithmetic and the arrow keys treat it as a single marker; deleting
+        // it one char at a time would leave `br /`-style fragments in the
+        // cell source, measured: `格内软断后 Backspace` ate only the `>`).
+        const brBefore = this.doc.slice(0, live).match(/<br\s*\/?>$/)
+        if (brBefore && inTable(this.doc, live)) {
+          event.preventDefault()
+          this.pushUndo({ value: this.doc, caret: this.caret })
+          const from = live - brBefore[0].length
+          this.commit(this.doc.slice(0, from) + this.doc.slice(live), from)
           return
         }
         const left = this.leavingEmptyItem(live) ?? backspaceAtContentStart(this.doc, live)
