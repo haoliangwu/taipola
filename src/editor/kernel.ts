@@ -1820,6 +1820,13 @@ private reportLine(): void {
       const onPrefix = onBreak && pending.kind === 'prefix'
       const at = onBreak ? pending.at : -1
       if (onEnter || onSoft || onPrefix) {
+        // The soft pop is a plain backward char-delete: it only applies while
+        // the character behind the caret is a chain newline. Otherwise (the
+        // caret merely grazed the pending window) fall through to the normal
+        // Backspace path below.
+        if (onSoft && (live - 1 < 0 || this.doc[live - 1] !== '\n')) {
+          // not a chain newline behind the caret — the normal path handles it
+        } else {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
         // The copied marker row a prefix-line Enter opened (`- `, `> `, …):
@@ -1831,62 +1838,48 @@ private reportLine(): void {
           const lineEnd = this.doc.indexOf('\n', at)
           const end = lineEnd === -1 ? this.doc.length : lineEnd
           this.commit(this.doc.slice(0, lineStart - 1) + this.doc.slice(end), lineStart - 1)
+        } else if (onSoft) {
+          // Typora parity: Backspace on a soft chain is a PLAIN single-
+          // character delete — the `\n` immediately BEHIND the caret — and
+          // the caret lands at the deleted character's offset. No "row above"
+          // walk: while the caret sits on the following text line the chain
+          // collapses from above and the caret stays on that line (measured:
+          // `aa|ab` SE×5 — the pops land 6,5,4,3, then the join at 2); on a
+          // blank row the same rule deletes the newline behind it — the
+          // bug-E paragraph-end landing. The pending mark drives RENDERING
+          // only: re-marked while chain rows remain so the shrink stays
+          // visible, dropped when the chain is gone. (The commit's own render
+          // runs first; the placeholder render that follows rebuilds the DOM,
+          // so the caret is anchored AGAIN, at the deleted offset.)
+          const cut = live - 1
+          this.commit(this.doc.slice(0, cut) + this.doc.slice(cut + 1), cut)
+          const chainSep = pending.sep ?? null
+          if (cut > 1 && this.doc[cut - 2] === '\n') {
+            this.setPendingBreak(cut - 1, 'soft', false, chainSep)
+            this.renderWithPlaceholder()
+            this.placeCaret(cut)
+          } else {
+            this.pendingBreak = null
+          }
         } else {
           // A CONTENT placeholder — the right half a mid-line Enter split off —
           // undoes the split: delete the two newlines it added (`甲\n\n乙` →
-          // `甲乙`), the caret lands on the join point. A soft placeholder is
-          // always a blank line, so it takes the cuts below.
+          // `甲乙`), the caret lands on the join point.
           const placeholderBlock = this.blocks[this.blockAt(at)]
-          if (!onSoft && placeholderBlock?.raw !== '') {
+          if (placeholderBlock?.raw !== '') {
             this.commit(this.doc.slice(0, at - 2) + this.doc.slice(at), at - 2)
           } else if (at >= this.doc.length) {
-            // The placeholder sits at EOF (the document's trailing blank, or a
-            // trailing soft line): there is no placeholder character after it to
-            // delete — the `at + 1` cut would slice nothing and the keystroke
-            // would spin. Delete the newline in front of it instead, which is
-            // exactly what the in-between path's cut amounts to.
+            // The placeholder sits at EOF (the document's trailing blank):
+            // there is no placeholder character after it to delete — the
+            // `at + 1` cut would slice nothing and the keystroke would spin.
+            // Delete the newline in front of it instead.
             this.commit(this.doc.slice(0, at - 1) + this.doc.slice(at), at - 1)
           } else {
             this.commit(this.doc.slice(0, at) + this.doc.slice(at + 1), at)
           }
         }
-        if (onSoft) {
-          // The soft STACK pops ONE row: keep the mark on the row above, so the
-          // next Backspace pops the next row instead of falling off the stack
-          // and eating the paragraph's text (the original bug: the caret
-          // rounded on the paragraph end, so Backspace #2 deleted 甲). When no
-          // blank row remains above, the stack is done: the caret belongs at
-          // the BREAK POINT — the end of the last visible content line above
-          // the stack (the paragraph end, `at - 1`), never on the separator
-          // blank that renders no row (measured: in `甲乙\n\n丙\n` the pop
-          // stranded the caret on the blank DIV at offset 3, so the next
-          // Backspace joined the paragraph below instead of deleting '乙').
-          // The expired pending is dropped FIRST so the caret's anchor walks
-          // back to the paragraph instead of treating the (no longer pending)
-          // blank as an Enter spot.
-          const chainSep = pending.sep ?? null
-          if (at > 1 && this.doc[at - 2] === '\n') {
-            this.setPendingBreak(at - 1, 'soft', false, chainSep)
-            this.renderWithPlaceholder()
-            this.placeCaret(at - 1)
-          } else {
-            // STACK DONE — the break point's own landscape decides the caret:
-            // - another newline (or EOF) follows the deleted break → an
-            //   invisible separator / the document tail; the caret belongs at
-            //   the paragraph end (`at - 1`), never on the separator that
-            //   renders no row (bug E: `甲乙\n\n丙` stranded the caret on the
-            //   blank DIV at the next Backspace joined paragraphs and ate
-            //   '丙' instead of '乙');
-            // - SOFT CONTENT follows (a mid-line break's own continuation line
-            //   — `aa` ⏎ `ab` of the same paragraph) → the caret rides the
-            //   join point (`at`, the line start below), so the next Backspace
-            //   joins the two lines the way the pre-stack text had them.
-            const after = this.doc[at]
-            this.pendingBreak = null
-            this.placeCaret(after === '\n' || at >= this.doc.length ? Math.max(0, at - 1) : at)
-          }
-        }
         return
+        }
       }
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {

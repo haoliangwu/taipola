@@ -49,15 +49,18 @@ describe('软断链视图（typora-parity）', () => {
     expect(r.getDoc()).toBe('aa\n\n\n\n\nab\n')
     // 4 行可见（5 个空行里 4 个是链行）。
     expect(stackRows(r).length).toBe(4)
-    // 逐个弹：每一弹 doc 少一个 `\n`、可见行少一行。
-    for (let i = 4; i >= 1; i--) {
+    // 逐个弹：每一弹 doc 少一个 `\n`、可见行少一行；光标停在被删 \n 的
+    // 偏移（= 下移的 ab 文本位置，Typora 规则：删除点即落点）。
+    for (let i = 1; i <= 4; i++) {
       await pressBackspace(r)
       await flush()
-      expect(stackRows(r).length).toBe(i - 1)
-      expect(r.getDoc()).toBe(`aa\n${'\n'.repeat(i - 1)}ab\n`)
+      expect(stackRows(r).length).toBe(4 - i)
+      expect(r.getDoc()).toBe(`aa\n${'\n'.repeat(4 - i)}ab\n`)
+      expect(caretFromDom()).toBe(7 - i)
     }
     // 链清空后只剩软接续：下一次 Backspace 合并两行。
     expect(r.getDoc()).toBe('aa\nab\n')
+    expect(caretFromDom()).toBe(3)
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('aaab\n')
@@ -65,7 +68,7 @@ describe('软断链视图（typora-parity）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('line-end：SE×3 链 + 逐弹；弹完后接续/或字符删除', async () => {
+  it('line-end：SE×3 链 + 逐弹，光标停在删除点偏移', async () => {
     const r = renderEditor('甲\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
@@ -76,15 +79,17 @@ describe('软断链视图（typora-parity）', () => {
     }
     expect(r.getDoc()).toBe('甲\n\n\n\n乙\n')
     expect(stackRows(r).length).toBe(3)
-    for (let i = 3; i >= 1; i--) {
+    // 弹：doc 少一个换行、可见行少一行、光标停在被删 \n 的偏移
+    // （Typora 纯字符删除：行内链时光标骑在链上随弹下降）。
+    for (let i = 1; i <= 3; i++) {
       await pressBackspace(r)
       await flush()
-      expect(r.getDoc()).toBe(`甲\n${'\n'.repeat(i - 1)}乙\n`)
+      expect(r.getDoc()).toBe(`甲\n${'\n'.repeat(3 - i)}乙\n`)
+      expect(caretFromDom()).toBe(4 - i)
     }
-    await pressBackspace(r)
-    await flush()
-    // 最后一个弹清空链后回到段末（断点），这一弹仍在链语义里：合并到 甲。
-    expect(r.getDoc()).toBe('甲乙\n')
+    // 链清空：光标在 甲 行末（= 被删 \n 的位置）；下一次 Backspace 是普通删除。
+    expect(r.getDoc()).toBe('甲\n乙\n')
+    expect(caretFromDom()).toBe(1)
     await assertDomMatchesSource(r)
   })
 
