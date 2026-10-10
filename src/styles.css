@@ -45,6 +45,16 @@
   --code-bg: light-dark(#f4f4f1, #212227);
   --mark-bg: light-dark(#fff2a8, #4d4416);
   --selection: light-dark(rgba(47, 111, 94, 0.2), rgba(108, 196, 168, 0.24));
+  /* Inline comments and alert blockquotes (`.scratch/typora-parity` P2), the
+     Typora palette adapted per theme: light values are Typora's own base.css,
+     dark values its night theme where it overrides them, GitHub's dark alert
+     colours where it doesn't (tip/caution). */
+  --comment: light-dark(#a27f03, #5a95e3);
+  --alert-note: light-dark(#0969da, #2f81f7);
+  --alert-important: light-dark(#8250df, #a371f7);
+  --alert-warning: light-dark(#9a6700, #d29922);
+  --alert-tip: light-dark(#1f883d, #3fb950);
+  --alert-caution: light-dark(#cf222e, #f85149);
   /* `light-dark()` only takes COLOURS, so the shadow's two layers keep the same
      geometry in both themes and differ in tint only. The dark side used to
      spread its ambient layer a little wider (0 12x32px); 0 8x 24px with the
@@ -939,6 +949,15 @@ body {
   color: color-mix(in srgb, var(--text) 88%, var(--accent));
 }
 
+/* An HTML comment (`<!-- … -->`), Typora's `.md-comment`: the whole span —
+   markers and content — reads as one dimmed monospace phrase. No lowercase
+   opacity split per theme: the dark colour is already brightened enough. */
+.rn-comment {
+  color: var(--comment);
+  opacity: 0.6;
+  font-family: var(--font-mono);
+}
+
 .rn-link {
   color: var(--accent);
   text-decoration: none;
@@ -1163,16 +1182,92 @@ body {
   padding-left: 0.6em;
 }
 
-/* A line inside a NESTED quote indents one step per extra level and draws
-   ITS OWN bar at that depth — the block's bar is level 1 (continuous over
-   the whole quote); the inner bars are per-line, exactly where the nested
-   content sits (Typora draws one bar per `> ` level). Revealed lines show
-   the dim `> > ` source instead, so the bars only exist in the rendered
-   state (`blockquote/03`). */
-.vl-quote:not(.revealed)[data-nest] {
-  margin-left: calc((var(--vl-lvl, 2) - 1) * 0.9em);
-  border-left: 3px solid var(--border-strong);
+/* Alert blockquote (`> [!NOTE] …`): the bar takes the variant's colour, and
+   the first line draws its title — the type, capitalized — before the line's
+   own text (Typora's `.md-alert-text-container::after{content:attr(data-text);
+   text-transform:capitalize}`). Everything derives from the STATE-supplied
+   `data-alert`, the same attribute both the block and its first line carry. */
+.blk[data-kind='quote'][data-alert='note'] {
+  border-left-color: var(--alert-note);
 }
+.blk[data-kind='quote'][data-alert='important'] {
+  border-left-color: var(--alert-important);
+}
+.blk[data-kind='quote'][data-alert='warning'] {
+  border-left-color: var(--alert-warning);
+}
+.blk[data-kind='quote'][data-alert='tip'] {
+  border-left-color: var(--alert-tip);
+}
+.blk[data-kind='quote'][data-alert='caution'] {
+  border-left-color: var(--alert-caution);
+}
+
+.vl-quote[data-alert]::before {
+  content: attr(data-alert);
+  text-transform: capitalize;
+  font-size: 0.9em;
+  font-weight: 700;
+  margin-right: 1ch;
+}
+.vl-quote[data-alert='note']::before {
+  color: var(--alert-note);
+}
+.vl-quote[data-alert='important']::before {
+  color: var(--alert-important);
+}
+.vl-quote[data-alert='warning']::before {
+  color: var(--alert-warning);
+}
+.vl-quote[data-alert='tip']::before {
+  color: var(--alert-tip);
+}
+.vl-quote[data-alert='caution']::before {
+  color: var(--alert-caution);
+}
+
+/* Revealed (caret inside the block), the dim `> [!NOTE]` SOURCE shows instead
+   of the drawn title — one truth at a time, like every other marker. */
+.vl-quote.revealed[data-alert]::before {
+  content: none;
+}
+
+/* A `$$…$$` math block (typora-parity P3): while the caret is outside, the
+   body lines are collapsed source and the block draws its KaTeX display —
+   absolutely centred over the (empty) line boxes, so the block's height is
+   the same in both states and the caret model never shifts. A formula KaTeX
+   refuses shows its RAW body instead, never blank. */
+.blk[data-kind='math-block'] {
+  position: relative;
+}
+
+.blk[data-kind='math-block'] .math-render {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.blk[data-kind='math-block'] .math-render .katex-display {
+  margin: 0;
+}
+
+.blk[data-kind='math-block'] .math-render.math-fallback {
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  justify-content: flex-start;
+  padding: 0 0.5em;
+}
+
+/* Nested quotes draw ONE bar, whatever the `> > ` depth (Typora parity,
+   `.scratch/typora-parity` P2 #3): a blockquote is first-level only, so the
+   nested marker text is just content — no extra indent, no inner bars. The
+   `data-nest`/`--vl-lvl` attributes stay in the DOM (they are the readback
+   contract for `> > ` source); they simply no longer draw anything. */
 
 /* ==========================================================================
    List decorations (rendered state)

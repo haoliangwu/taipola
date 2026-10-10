@@ -32,6 +32,7 @@ import {
   enterEndOfLine,
 } from '../core/blockEdit'
 import type { EditBuffers } from '../core/editCommands'
+import { indentRange } from '../core/editCommands'
 import {
   backspaceAtContentStart,
   flipTaskCheckboxAt,
@@ -47,7 +48,7 @@ import {
   sanitizeDom,
 } from './render'
 import { isBlankLine, lineOfOffset, offsetForLine } from '../core/lines'
-import { blocksTableBackspace, inTable, moveTableCell, pasteTableCell, tableAt, type TableContext } from '../core/tables'
+import { blocksTableBackspace, inTable, moveCellBelow, moveTableCell, pasteTableCell, tableAt, type TableContext } from '../core/tables'
 import { applyCaret, domToLocal, sourceOffsetAtPoint } from './position'
 
 const UNDO_LIMIT = 300
@@ -109,6 +110,14 @@ export interface EditorKernelHooks {
 export interface EditorKernelOptions extends EditorKernelHooks {
   value?: string
   readOnly?: boolean
+  /**
+   * Renders a markdown slice to the sanitized HTML the clipboard carries beside
+   * the source (`text/html`, Typora's rich ⌘C). Injected by the shell — the
+   * kernel must not import `platform/` (ADR-0001's dependency split), and the
+   * renderer is the export's own `renderDocumentHtml`. Optional: absent or
+   * failing, copy stays plain-source-only.
+   */
+  renderClipboardHtml?: (markdown: string) => string | undefined
 }
 
 function clamp(value: number, low: number, high: number): number {
@@ -137,6 +146,7 @@ export class EditorKernel {
 
   private doc: string
   private caret = 0
+  private readonly renderClipboardHtml: ((markdown: string) => string | undefined) | null
 
   private blocks: Block[] = []
   private offsets: number[] = []
@@ -213,6 +223,7 @@ export class EditorKernel {
     this.hooks = { onChange: options.onChange, onCaretLineChange: options.onCaretLineChange }
     this.doc = options.value ?? ''
     this.readOnly = options.readOnly ?? false
+    this.renderClipboardHtml = options.renderClipboardHtml ?? null
     this.reportedLine = lineOfOffset(this.doc, 0)
     this.recompute()
   }
@@ -362,6 +373,26 @@ export class EditorKernel {
     if (!result) return
     this.pushUndo({ value: this.doc, caret: this.caret })
     this.commit(result.doc, result.caret)
+  }
+
+  /**
+   * ⌘]/⌘[: the shell dispatches both keys here (`indent`/`outdent` in the
+   * shortcut table). The ROUTING is the kernel's because only it can see the
+   * DOM selection: a list item takes the Tab/Shift+Tab rules
+   * (`core/editCommands.indentRange`), ⌘[ additionally strips one leading tab
+   * or 1-2 spaces from every paragraph/heading block the selection covers, and
+   * everything else — including ⌘] on a plain paragraph/heading — is a silent
+   * no-op (Typora parity, `.scratch/typora-parity/spec.md` §3.4). A no-op
+   * takes no undo snapshot, so Cmd+Z never dead-steps.
+   */
+  applyIndent(direction: 'in' | 'out'): void {
+    const start = this.caretFromDom()
+    const end = this.caretEndFromDom()
+    if (start === null || end === null) return
+    const edited = indentRange(this.doc, Math.min(start, end), Math.max(start, end), direction)
+    if (!edited) return
+    this.pushUndo({ value: this.doc, caret: this.caret })
+    this.commit(edited.doc, edited.caret)
   }
 
   /* ---------------------------------------------------------------------- */
@@ -867,7 +898,21 @@ private reportLine(): void {
     if (from === to) return
     const data = event.clipboardData
     if (!data) return
-    data.setData('text/plain', this.doc.slice(from, to))
+    const slice = this.doc.slice(from, to)
+    data.setData('text/plain', slice)
+    // Typora's ⌘C puts the RENDERED HTML of the same slice beside the source
+    // (`.scratch/typora-parity/spec.md` P1). The renderer is the export's
+    // sanitized one, injected by the shell — `platform/html.ts` is out of the
+    // kernel's reach by design. HTML must never break a copy: absent or
+    // failing, the clipboard keeps the plain-source-only payload.
+    if (this.renderClipboardHtml) {
+      try {
+        const html = this.renderClipboardHtml(slice)
+        if (html) data.setData('text/html', html)
+      } catch {
+        // fall through with text/plain only
+      }
+    }
     // The browser's own copy default action CLEARS the data store and replaces
     // it with the selection's serialization — a handler-set text/plain survives
     // only when the default is canceled (`handleCopy` in a real Chromium read
@@ -1255,17 +1300,36 @@ private reportLine(): void {
       const lineNumber = lineOfOffset(this.doc, lineStart)
       const kind = this.lineStates[lineNumber - 1]?.kind
       // A table ROW cannot take a bare newline: it would split the row into two
-      // lines that no longer read as a table row, and the table falls apart.
-      // There is no in-cell soft break to offer instead — the editor renders
-      // inline HTML as text and the table model is one source line per row, so
-      // a `<br>` would show as literal text and still not grow the cell — so
-      // Enter (and its soft sibling Shift+Enter) do NOTHING inside a row or on
-      // the `| --- |` rule line rather than corrupt the structure
-      // (`.scratch/enter-backspace-smoke/issues/06`, decision recorded there).
-      // A no-op takes no undo snapshot, exactly like the other guarded no-ops
-      // (Backspace on a fence's first line): the stack stays a list of real
-      // edits, so Cmd+Z never dead-steps.
-      if (kind === 'table' || kind === 'table-delim') return
+      // lines that no longer read as a table row, and the table falls apart
+      // (`.scratch/enter-backspace-smoke/issues/06`). The Enter family gets
+      // Typora's own meanings instead (tableEdit.keydownHandler, typora-parity
+      // P4):
+      //   Enter        — same column, one row below (adding a row on the last),
+      //                  `moveCellBelow`; the rule row has no cells and stays
+      //                  a no-op;
+      //   Shift+Enter  — the literal source `<br />` inserted at the caret —
+      //                  the cell renders it as a real break (view.ts `br`
+      //                  token) and the readback re-emits the exact text.
+      // A no-op takes no undo snapshot, exactly like the other guarded no-ops.
+      if (kind === 'table' || kind === 'table-delim') {
+        if (kind === 'table') {
+          if (event.shiftKey) {
+            event.preventDefault()
+            this.pushUndo({ value: this.doc, caret: this.caret })
+            const at = live
+            this.commit(`${this.doc.slice(0, at)}<br />${this.doc.slice(at)}`, at + 6)
+            return
+          }
+          const moved = moveCellBelow(this.doc, live)
+          if (moved) {
+            // A move inside the existing rows returns the document UNCHANGED;
+            // only a row added is an edit worth an undo snapshot (Tab's rule).
+            if (moved.doc !== this.doc) this.pushUndo({ value: this.doc, caret: this.caret })
+            this.commit(moved.doc, moved.caret)
+          }
+        }
+        return
+      }
       this.pushUndo({ value: this.doc, caret: this.caret })
       if (event.shiftKey) {
         // Shift+Enter is the SOFT break: one newline, wherever the caret is.

@@ -2295,7 +2295,7 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('表格行上 Enter 是 no-op，行语法保持（不再插裸换行）', async () => {
+  it('表格行上 Enter 不插段落边界：移到下一行同列（typora-parity P4）', async () => {
     const r = renderEditor('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
     await flush()
     await clickInRun(r, 0, 2, 0, 'start')
@@ -2303,11 +2303,11 @@ describe('Enter 硬换行 / Shift+Enter 软换行', () => {
     await pressEnter(r)
     await flush()
     const doc = r.getDoc()
-    // 表格行没有段落可拆，这个编辑器也没有单元格内换行的表达：Enter 在行内
-    // 是 no-op，绝不出 `\n\n`，也绝不在行中间留裸 `\n`（enter-backspace-smoke/06）。
+    // Enter 绝不产生段落/裸换行（enter-backspace-smoke/06），也不破坏规则行：
+    // 光标移到下一行同列；末行这步先加一行，于是行数 +1（typora-parity P4）。
     expect(doc).not.toContain('\n\n')
-    expect(doc).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n')
-    expect(doc.split('\n').length).toBe(4) // 行数不变
+    expect(doc).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n|  |  |\n')
+    expect(doc.split('\n').length).toBe(5)
     await assertDomMatchesSource(r)
   })
 
@@ -2720,33 +2720,29 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
 })
 
 /**
- * `enter-backspace-smoke/06`：表格单元格内 Enter 绝不破坏表格行。这个编辑器没有
- * 单元格内换行的表达（内联 HTML 一律按文本渲染、表格一行 = 一条源码行），所以
- * Enter / Shift+Enter 在行内是 no-op —— 源码一字不动，选中的「至少不允许破坏
- * 表格行的语法结构」。决策记录在票的 Comments 里。
+ * `enter-backspace-smoke/06` 的表格保护要求（Enter 绝不拆散表格行），
+ * typora-parity P4 把它升级成 Typora 的按键语义：Enter = 同列下一行（末行
+ * 先加行），Shift+Enter = 插入字面 `<br />`（格内软换行，读出原样还原）。
+ * 表格行的语法结构仍然永不因按键而破坏。
  */
-describe('表格单元格内 Enter：不破坏表格（enter-backspace-smoke/06）', () => {
+describe('表格单元格内 Enter：Typora 语义、结构不破（enter-backspace-smoke/06 + typora-parity P4）', () => {
   const TABLE = '| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n'
 
-  it('单元格末尾 Enter：源码一字不动，光标原地', async () => {
+  it('单元格末尾 Enter：加一行，光标进下方同一列，打字落在新行', async () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 2, 0, 'end')
     await flush()
-    // 光标在 `1` 之后（源码偏移 26 + 1），图钉此刻的位置。
-    expect(caretFromDom()).toBe(27)
     await pressEnter(r)
     await flush()
-    expect(r.getDoc()).toBe(TABLE)
-    expect(caretFromDom()).toBe(27)
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n|  |  |\n')
     await r.user.keyboard('x')
     await flush()
-    // 打字仍然落在同一个单元格里：表格一行未曾被拆散。
-    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1x | 2 |\n')
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1 | 2 |\n| x |  |\n')
     await assertDomMatchesSource(r)
   })
 
-  it('单元格中间 Enter 同样 no-op，表格行不拆散', async () => {
+  it('单元格中间 Enter：移到下一行同一列，行不拆散', async () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 0, 1, 'middle')
@@ -2758,14 +2754,14 @@ describe('表格单元格内 Enter：不破坏表格（enter-backspace-smoke/06�
     await assertDomMatchesSource(r)
   })
 
-  it('单元格内 Shift+Enter 同样 no-op，不落裸换行', async () => {
+  it('单元格内 Shift+Enter：插入字面 `<br />`，不是裸换行', async () => {
     const r = renderEditor(TABLE)
     await flush()
     await clickInRun(r, 0, 2, 0, 'end')
     await flush()
     await pressShiftEnter(r)
     await flush()
-    expect(r.getDoc()).toBe(TABLE)
+    expect(r.getDoc()).toBe('| 甲 | 乙 |\n| --- | --- |\n| 1<br /> | 2 |\n')
     await assertDomMatchesSource(r)
   })
 })

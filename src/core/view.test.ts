@@ -29,6 +29,8 @@ function runs(v: BlockView, line = 0) {
     ...(run.mark.hl ? { hl: run.mark.hl } : {}),
     ...(run.mark.footnoteRef ? { footnoteRef: run.mark.footnoteRef } : {}),
     ...(run.mark.img ? { img: run.mark.img.src } : {}),
+    ...(run.mark.comment ? { comment: true } : {}),
+    ...(run.mark.br ? { br: run.mark.br } : {}),
   }))
 }
 
@@ -647,5 +649,135 @@ describe('代码块高亮', () => {
     expect(code.map((r) => r.text).join('')).toBe('const a = **x**')
     expect(code.some((r) => r.bold)).toBe(false)
     expect(code.every((r) => r.marker === false)).toBe(true)
+  })
+})
+
+describe('HTML 注释（typora-parity P2）', () => {
+  it('注释整体可见、复合 `comment` 标记；内部语法不再解析', () => {
+    const v = view('前 <!-- 藏 **字** --> 后')
+    expect(reconstruct(v)).toBe('前 <!-- 藏 **字** --> 后')
+    const runsOf = runs(v, 0)
+    expect(runsOf.filter((r) => r.comment).map((r) => r.text).join('')).toBe(
+      '<!-- 藏 **字** -->',
+    )
+    // 标记与正文一样带 comment 标记（整个 span 一个样式）。
+    expect(runsOf.filter((r) => r.comment)).toHaveLength(3)
+    // `**字**` 是字面量：没有 bold run。
+    expect(runsOf.some((r) => r.bold)).toBe(false)
+    // 注释之外不受影响。
+    expect(runsOf[0]).toMatchObject({ text: '前 ', marker: false })
+    expect(runsOf[0].comment).toBeUndefined()
+  })
+
+  it('悬空的 `<!--` 没有闭合：纯文字，不建 comment 标记', () => {
+    const v = view('a <!-- b')
+    expect(reconstruct(v)).toBe('a <!-- b')
+    expect(runs(v, 0).some((r) => r.comment)).toBe(false)
+  })
+})
+
+describe('引用 alert 标记的折叠（typora-parity P2）', () => {
+  it('折叠态：`> [!NOTE]` 连同 `> ` 一起消失，只有正文可见', () => {
+    const v = view('> [!NOTE] 保持')
+    expect(reconstruct(v)).toBe('> [!NOTE] 保持')
+    const line = v.lines[0]
+    expect(line.runs[0]).toMatchObject({ text: '> [!NOTE] ', marker: true })
+    expect(line.text).toBe('保持')
+  })
+
+  it('揭示态：`> [!NOTE]` 作为暗色源码 run 出现', () => {
+    const v = view('> [!NOTE] 保持', [2])
+    const runsOf = runs(v, 0)
+    expect(runsOf[0]).toEqual({ text: '> [!NOTE] ', marker: false, dim: true })
+    expect(runsOf[1]).toMatchObject({ text: '保持', marker: false })
+    expect(runsOf[1].dim).toBe(false)
+  })
+
+  it('非首行的 `[!NOTE]` 不是 alert：标记保持可见、不折叠', () => {
+    const v = view('> 甲\n> [!NOTE] 乙')
+    const second = v.lines[1]
+    expect(second.runs[0]).toMatchObject({ text: '> ', marker: true })
+    expect(second.runs[1]).toMatchObject({ text: '[!NOTE] 乙', marker: false })
+    // 折叠后整行仍然可读：`[!NOTE]` 是普通文字的组成部分。
+    expect(second.text).toBe('[!NOTE] 乙')
+  })
+
+  it('未知类型不是 alert：`> [!FOO]` 折叠后仍可见', () => {
+    const v = view('> [!FOO] 甲')
+    expect(v.lines[0].text).toBe('[!FOO] 甲')
+  })
+})
+
+describe('$$ 数学块视图（typora-parity P3）', () => {
+  it('折叠态：三行全部进 marker run，正文不可见，源码可拼回', () => {
+    const v = view('$$\nx = 1\n$$')
+    expect(reconstruct(v)).toBe('$$\nx = 1\n$$')
+    expect(runs(v, 0)).toEqual([{ text: '$$', marker: true, dim: false }])
+    expect(runs(v, 1)).toEqual([{ text: 'x = 1', marker: true, dim: false }])
+    expect(runs(v, 2)).toEqual([{ text: '$$', marker: true, dim: false }])
+    expect(v.lines[1].text).toBe('')
+  })
+
+  it('揭示态：`$$` 行暗色，正文普通可见', () => {
+    const v = view('$$\nx = 1\n$$', [3])
+    expect(runs(v, 0)).toEqual([{ text: '$$', marker: false, dim: true }])
+    expect(runs(v, 1)).toEqual([{ text: 'x = 1', marker: false, dim: false }])
+    expect(runs(v, 2)).toEqual([{ text: '$$', marker: false, dim: true }])
+  })
+
+  it('单行 `$$ x $$`：整行折叠/揭示', () => {
+    const collapsed = view('$$ x $$')
+    expect(runs(collapsed, 0)).toEqual([{ text: '$$ x $$', marker: true, dim: false }])
+    const revealed = view('$$ x $$', [1])
+    expect(runs(revealed, 0)).toEqual([{ text: '$$ x $$', marker: false, dim: true }])
+    expect(reconstruct(revealed)).toBe('$$ x $$')
+  })
+
+  it('未闭合的 `$$` 是普通段落：不折叠、不隐藏、无 marker run', () => {
+    const v = view('$$\nx = 1')
+    expect(reconstruct(v)).toBe('$$\nx = 1')
+    expect(runs(v, 0)[0].marker).toBe(false)
+    expect(runs(v, 1)[0].marker).toBe(false)
+    expect(v.lines[0].text).toBe('$$')
+  })
+
+  it('正文里的 Markdown 语法是字面量（行内 `$…$` 不拆显示区域）', () => {
+    const v = view('$$\n$a$ + **b**\n$$')
+    const body = runs(v, 1)
+    expect(body.map((r) => r.text).join('')).toBe('$a$ + **b**')
+    expect(body.some((r) => r.math || r.bold)).toBe(false)
+  })
+})
+
+describe('表格格内的 `<br …>` 软换行（typora-parity P4）', () => {
+  it('折起的变体是零宽 marker run，携带原样源码', () => {
+    const v = view('| a <br /> b |')
+    expect(runs(v, 0)).toEqual([
+      { text: 'a ', marker: false, dim: false },
+      { text: '<br />', marker: true, dim: false, br: '<br />' },
+      { text: ' b', marker: false, dim: false },
+    ])
+    // 零宽：它在行的排版文本里不占字符。
+    expect(v.lines[0].text).toBe('a  b')
+  })
+
+  it.each(['<br>', '<br/>', '<BR />', '<Br>'])('%j 变体都识别', (variant) => {
+    const v = view(`| 前 ${variant} 后 |`)
+    const br = runs(v, 0).find((r) => r.br !== undefined)
+    expect(br).toEqual({ text: variant, marker: true, dim: false, br: variant })
+  })
+
+  it('光标在/贴着标记：变暗的源码文本，占真实宽度', () => {
+    // `| a <br /> b |`：`<br />` 从本地偏移 4 开始；光标落在标记内或两端。
+    for (const at of [4, 5, 10]) {
+      const v = view('| a <br /> b |', [at])
+      const br = runs(v, 0).find((r) => r.br !== undefined)!
+      expect(br).toEqual({ text: '<br />', marker: false, dim: true, br: '<br />' })
+    }
+  })
+
+  it('段落里的 `<br />` 不是标记（Shift+Enter 的段落语义不冲突）', () => {
+    const v = view('a <br /> b')
+    expect(runs(v, 0).some((r) => r.br !== undefined)).toBe(false)
   })
 })

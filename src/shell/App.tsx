@@ -44,6 +44,7 @@ import { createAutosave, draftSlotKey } from '../core/autosave'
 import { createWriteBack, type WriteBack, type WriteBackStopReason } from '../core/writeBack'
 import { shortcutFor, type ShellCommand } from '../core/shortcuts'
 import { documents, type OpenDocument } from '../platform/documents'
+import { renderDocumentHtml } from '../platform/html'
 import { folders, type FolderEntry } from '../platform/folder'
 import type { FolderPlacement } from '../core/fileTree'
 import { childPath, parentOf } from '../core/fileTree'
@@ -55,7 +56,6 @@ import {
   changeHeadingLevel,
   clearFormat,
   deleteLine,
-  indentSelection,
   insertFootnote,
   insertHr,
   insertLink,
@@ -698,6 +698,15 @@ export default function App() {
   )
 
   /**
+   * ⌘]/⌘[: the indent/outdent commands reach the kernel through this handle —
+   * the routing (list item vs paragraph vs no-op) needs the DOM selection,
+   * which only the kernel can see.
+   */
+  const applyIndent = useCallback((direction: 'in' | 'out') => {
+    editorRef.current?.applyIndent(direction)
+  }, [])
+
+  /**
    * The table menu: opened by a right-click inside a table, closed by a click
    * anywhere else or by running one of its commands.
    */
@@ -817,14 +826,14 @@ export default function App() {
       clearFormat: () => applyEdit((b) => clearFormat(b)),
       headingIncrease: () => applyEdit((b) => changeHeadingLevel(b, -1)),
       headingDecrease: () => applyEdit((b) => changeHeadingLevel(b, 1)),
-      indent: () => applyEdit((b) => indentSelection(b, 'in')),
-      outdent: () => applyEdit((b) => indentSelection(b, 'out')),
+      indent: () => applyIndent('in'),
+      outdent: () => applyIndent('out'),
       footnotes: () => applyEdit((b) => insertFootnote(b)),
       linkReference: () => applyEdit((b) => insertLinkReference(b)),
       hr: () => applyEdit((b) => insertHr(b)),
       inlineMath: () => applyEdit((b) => toggleInlineMath(b)),
     }),
-    [applyEdit],
+    [applyEdit, applyIndent],
   )
 
   // Put the welcome document back after it has been overwritten by whatever you
@@ -1250,6 +1259,7 @@ export default function App() {
             onChange={setValue}
             onCaretLineChange={setCaretLine}
             onTableMenu={setTableMenu}
+            renderClipboardHtml={renderDocumentHtml}
           />
         </main>
       </div>

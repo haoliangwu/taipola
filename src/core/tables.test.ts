@@ -15,6 +15,7 @@ import {
   deleteTableRow,
   insertTableColumn,
   insertTableRow,
+  moveCellBelow,
   moveTableCell,
   pasteTableCell,
   tableAt,
@@ -302,5 +303,35 @@ describe('Tab 走格子', () => {
     const rule = at(TABLE, '| --- | --- |') + 4
     expect(caretAt(TABLE, moveTableCell(TABLE, rule, 'next')!.caret)).toEqual({ line: 2, cell: 0 })
     expect(caretAt(TABLE, moveTableCell(TABLE, rule, 'prev')!.caret)).toEqual({ line: 0, cell: 1 })
+  })
+})
+
+describe('Enter 走格子（moveCellBelow，typora-parity P4）', () => {
+  it('同一列、下一行', () => {
+    const edit = moveCellBelow(TABLE, at(TABLE, '| a | b |') + 2)!
+    expect(edit.doc).toBe(TABLE)
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 3, cell: 0 })
+  })
+
+  it('第二列保持列位', () => {
+    const edit = moveCellBelow(TABLE, at(TABLE, '| a | b |') + 6)!
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 3, cell: 1 })
+  })
+
+  it('表头行 Enter：越过分隔行进第一行正文', () => {
+    const edit = moveCellBelow(TABLE, at(TABLE, '| 列 1 | 列 2 |') + 2)!
+    expect(edit.doc).toBe(TABLE)
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 2, cell: 0 })
+  })
+
+  it('最后一行 Enter：先加一行，光标进新行的同一列', () => {
+    const edit = moveCellBelow(TABLE, at(TABLE, '| c | d |') + 6)!
+    expect(edit.doc).not.toBe(TABLE)
+    expect(cellsAt(edit.doc)[4]).toBe('|')
+    expect(caretAt(edit.doc, edit.caret)).toEqual({ line: 4, cell: 1 })
+  })
+
+  it('分隔行没有格子：拒绝', () => {
+    expect(moveCellBelow(TABLE, at(TABLE, '| --- | --- |') + 4)).toBeNull()
   })
 })

@@ -15,3 +15,13 @@ import 'katex/dist/katex.min.css'
 export function mathHtml(tex: string): string {
   return katex.renderToString(tex, { throwOnError: false, displayMode: false })
 }
+
+/**
+ * Display TeX for a `$$…$$` math BLOCK — KaTeX display mode, and
+ * `throwOnError: true` on purpose: the caller wants to distinguish a good
+ * formula from a broken one, because a broken `$$…$$` block falls back to
+ * showing its RAW source text (never KaTeX's red error glyphs, never blank).
+ */
+export function mathBlockHtml(tex: string): string {
+  return katex.renderToString(tex, { throwOnError: true, displayMode: true })
+}

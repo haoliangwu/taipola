@@ -28,8 +28,9 @@
 import type { Block } from '../core/markdown'
 import type { BlockView, ImageMark, ViewRun } from '../core/view'
 import type { LineState } from '../core/inline'
+import { MATH_BOTH_RE } from '../core/inline'
 import { isBlankLine } from '../core/lines'
-import { mathHtml } from './math'
+import { mathBlockHtml, mathHtml } from './math'
 
 /* -------------------------------------------------------------------------- */
 /* building                                                                   */
@@ -39,6 +40,8 @@ function lineClass(state: LineState | undefined): string {
   if (!state) return 'vl'
   const cls = ['vl', `vl-${state.kind}`]
   if (state.level) cls.push(`vl-h${state.level}`)
+  // Alert blockquote: the type names the drawn title and the bar's colour.
+  if (state.alert) cls.push('vl-alert', `vl-alert-${state.alert}`)
   // One class per nesting level: the rendered numbering is counted per level, so
   // a nested list restarts at 1 instead of continuing the outer list.
   if (state.listLevel !== undefined) cls.push(`vl-l${Math.min(state.listLevel, 5)}`)
@@ -61,6 +64,7 @@ function runClass(run: ViewRun, state: LineState | undefined): string {
   if (run.mark.superscript) cls.push('rn-sup')
   if (run.mark.subscript) cls.push('rn-sub')
   if (run.mark.code) cls.push('rn-code')
+  if (run.mark.comment) cls.push('rn-comment')
   if (run.mark.link !== undefined) cls.push('rn-link')
   if (run.mark.footnoteRef !== undefined) cls.push('rn-footnote-ref')
   if (run.mark.math !== undefined) cls.push('rn-math')
@@ -77,10 +81,15 @@ function runElement(
   index: number,
   state: LineState | undefined,
 ): HTMLElement {
+  if (run.mark.br && run.marker) return breakElement(existing, run, index)
   if (run.mark.img) return imageElement(existing, run, index, state)
   if (run.mark.math !== undefined && !run.dim) return mathElement(existing, run, index, state)
 
   const span = existing && existing.hasAttribute('data-run') ? existing : document.createElement('span')
+  // An element reused from a RENDERED break (the caret flipped the token back
+  // to source) keeps its `data-br-src` — shed it, or the readback would emit
+  // the source twice (attribute + text).
+  if (span.hasAttribute('data-br-src')) span.removeAttribute('data-br-src')
   // An element rebuilt as a plain text run (the caret moved into the image) must
   // shed the picture markup, or the stale <img> would linger in the line.
   if (span.querySelector(':scope > img')) span.replaceChildren()
@@ -99,6 +108,84 @@ function runElement(
   // anchoring (`span.firstChild`) from clamping to the first node's length.
   if (span.textContent !== run.text || span.childNodes.length > 1) {
     span.textContent = run.text
+  }
+  return span
+}
+
+/**
+ * A block-level display-math element: the KaTeX output for the `$$…$$` block's
+ * body, absolutely centred over the block's (hidden) source lines. The body
+ * travels along in `data-tex`, exactly like an inline math run's `.rn-src` —
+ * the DOM read never touches this element, it is decoration only.
+ *
+ * A broken formula (`mathBlockHtml` throws) falls back to the RAW body text,
+ * so a bad `$$…$$` is readable and editable, never blank.
+ */
+function mathBlockElement(
+  existing: HTMLElement | null,
+  tex: string,
+): HTMLElement {
+  const usable = existing && existing.hasAttribute('data-math-render')
+  const div = usable ? (existing as HTMLElement) : document.createElement('div')
+  setAttr(div, 'data-math-render', '')
+  if (div.className !== 'math-render') div.className = 'math-render'
+  if (div.dataset.tex !== tex) {
+    div.dataset.tex = tex
+    try {
+      div.innerHTML = mathBlockHtml(tex)
+      div.classList.remove('math-fallback')
+    } catch {
+      div.textContent = tex
+      div.classList.add('math-fallback')
+    }
+  }
+  return div
+}
+
+/**
+ * The body source of a `$$…$$` math block: everything between the delimiter
+ * lines, newlines preserved (a display formula may span lines). The single-
+ * line `$$ x $$` form reads its body from the regex, not from slicing (the
+ * trailing `$$` is not the last two characters when spaces follow it).
+ */
+function mathBodySource(block: Block, view: BlockView): string {
+  const lines = view.lines
+  if (lines.length === 1) return MATH_BOTH_RE.exec(block.raw)?.[1] ?? ''
+  const parts: string[] = []
+  for (let li = 1; li < lines.length - 1; li++) {
+    const line = lines[li]
+    parts.push(block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length))
+  }
+  return parts.join('\n')
+}
+
+/**
+ * A table cell's literal soft break: the run is replaced by a REAL `<br>` —
+ * Typora's Shift+Enter effect in a cell. `data-br-src` keeps the exact source
+ * (`<br>`, `<BR />`, …) so the readback re-emits the variant the user typed;
+ * the element contributes no textContent, and the caret mapping counts its
+ * source length through `data-br-src` (`offsetInBox`).
+ */
+function breakElement(
+  existing: HTMLElement | null,
+  run: ViewRun,
+  index: number,
+): HTMLElement {
+  const usable =
+    existing &&
+    existing.hasAttribute('data-run') &&
+    existing.querySelector(':scope > br[data-brsrc]') !== null
+  const span = usable ? (existing as HTMLElement) : document.createElement('span')
+  setAttr(span, 'data-run', String(index))
+  setAttr(span, 'data-src', String(run.src))
+  setAttr(span, 'data-br-src', run.text)
+  const className = 'rn rn-break'
+  if (span.className !== className) span.className = className
+  let br = span.querySelector<HTMLElement>(':scope > br[data-brsrc]')
+  if (!br) {
+    br = document.createElement('br')
+    br.setAttribute('data-brsrc', '')
+    span.appendChild(br)
   }
   return span
 }
@@ -257,6 +344,11 @@ function lineElement(
   if (label !== '') setAttr(el, 'data-footnote', label)
   else if (el.hasAttribute('data-footnote')) el.removeAttribute('data-footnote')
 
+  // The alert type this quote line draws as its title (`.vl-alert::before`).
+  const alert = state?.alert ?? ''
+  if (alert !== '') setAttr(el, 'data-alert', alert)
+  else if (el.hasAttribute('data-alert')) el.removeAttribute('data-alert')
+
   const indent = String(state?.indent ?? 0)
   if (el.style.getPropertyValue('--vl-indent') !== indent) {
     el.style.setProperty('--vl-indent', indent)
@@ -385,7 +477,25 @@ function blockElement(
   setAttr(el, 'data-block', String(block.index))
   setAttr(el, 'data-src-start', String(start))
   setAttr(el, 'data-gap', String(gap))
-  setAttr(el, 'data-kind', lineStates[block.startLine]?.kind ?? 'text')
+  // A COMPLETE `$$…$$` region inside this block makes it a math block: it
+  // opens on the first line (or opens+closes on one line) and closes on the
+  // last. The view already hides the region's lines for that case (`blockMath`
+  // in `buildBlockView`); the block kind here is what the KaTeX overlay and
+  // its CSS contract attach to.
+  const firstState = lineStates[block.startLine]
+  const lastState = lineStates[block.startLine + view.lines.length - 1]
+  const isMathBlock =
+    firstState?.kind === 'math-fence' &&
+    (view.lines.length === 1
+      ? firstState.mathDelim === 'both'
+      : firstState.mathDelim === 'open' && lastState?.mathDelim === 'close')
+  const mathRevealed = view.lines.some((line) => line.runs.some((run) => run.dim))
+  setAttr(el, 'data-kind', isMathBlock ? 'math-block' : (firstState?.kind ?? 'text'))
+  // Alert type of the block's first line, for the per-type bar colour. The
+  // line itself carries the same attribute for its drawn title (`vl-alert`).
+  const blockAlert = lineStates[block.startLine]?.alert ?? ''
+  if (blockAlert !== '') setAttr(el, 'data-alert', blockAlert)
+  else el.removeAttribute('data-alert')
   // A PLACEHOLDER blank draws ALL of its rows — the separator rows must stay
   // in the DOM or the read-back silently drops them. Which rows are VISIBLE
   // depends on the block's place in the document:
@@ -400,7 +510,14 @@ function blockElement(
   else el.removeAttribute('data-placeholder')
   if (placeholder === 'in-between') setAttr(el, 'data-ph-sep', '')
   else el.removeAttribute('data-ph-sep')
-  syncChildren(el, view.lines.length, (index, current) => {
+  // While the caret is OUTSIDE a math block, one extra child renders the
+  // KaTeX display over the hidden source lines; focused, the child is gone
+  // and the lines show their raw source.
+  const mathChild = isMathBlock && !mathRevealed ? 1 : 0
+  syncChildren(el, view.lines.length + mathChild, (index, current) => {
+    if (index === view.lines.length) {
+      return mathBlockElement(current, mathBodySource(block, view))
+    }
     const line = view.lines[index]
     const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
     return lineElement(
@@ -555,6 +672,8 @@ export function markupSignature(
         const flags =
           `${run.marker ? 'm' : ''}${run.dim ? 'd' : ''}${run.mark.bold ? 'b' : ''}` +
           `${run.mark.italic ? 'i' : ''}${run.mark.strike ? 's' : ''}${run.mark.code ? 'c' : ''}` +
+          `${run.mark.comment ? 'C' : ''}` +
+          `${run.mark.br !== undefined ? `B${run.mark.br}` : ''}` +
           `${run.mark.highlight ? 'h' : ''}${run.mark.superscript ? 'p' : ''}${run.mark.subscript ? 'q' : ''}` +
           `${run.mark.link !== undefined ? `l${run.mark.link}` : ''}` +
           `${run.mark.math !== undefined ? `M${run.mark.math}` : ''}` +
@@ -632,6 +751,10 @@ export function readLooseText(root: HTMLElement): string {
  * span exists it is the run's truth; the picture and the formula are decoration.
  */
 function runSource(run: HTMLElement): string {
+  // A rendered soft break holds no text of its own; its source rides in
+  // `data-br-src` and is the only byte-true record of the variant typed.
+  const br = run.getAttribute('data-br-src')
+  if (br !== null) return br
   const hidden = run.querySelector<HTMLElement>(':scope > .rn-src')
   return (hidden ?? run).textContent ?? ''
 }

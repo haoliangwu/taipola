@@ -59,7 +59,9 @@ function offsetInBox(box: Element, node: Node, offset: number, base: number): nu
     if (child === node) return base + seen + offset
     if (child.nodeType === Node.TEXT_NODE) seen += child.textContent?.length ?? 0
     else if (child instanceof HTMLElement && child.hasAttribute('data-run')) {
-      seen += child.textContent?.length ?? 0
+      // A rendered soft break has no text of its own — its SOURCE length is
+      // what positions the caret on either side of it.
+      seen += child.getAttribute('data-br-src')?.length ?? child.textContent?.length ?? 0
     }
   }
   return null

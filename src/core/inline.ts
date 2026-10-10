@@ -221,6 +221,8 @@ export interface LineState {
     | 'table'
     | 'table-delim'
     | 'footnote'
+    | 'math'
+    | 'math-fence'
   /** Heading depth (1-6) for `kind === 'heading'`, so the six levels can differ. */
   level?: number
   /**
@@ -243,6 +245,194 @@ export interface LineState {
    * why this is present on the first line and absent on the rest.
    */
   footnoteLabel?: string
+  /**
+   * The alert variant of a blockquote line (`> [!NOTE] …`), present only on a
+   * quote's FIRST line. The renderer colours the quote's bar and draws the
+   * capitalized type as a title from this; the source's `[!TYPE]` marker
+   * collapses in the view exactly like the `> ` prefix beside it.
+   */
+  alert?: AlertType
+  /**
+   * Kind for the lines of a `$$…$$` math block: `'math'` is a body line,
+   * `'math-fence'` an opening or closing delimiter line. The delimiter lines
+   * additionally carry `mathDelim` so the renderer can tell which side (or,
+   * for the `$$ x $$` single-line form, that one line is BOTH).
+   */
+  mathDelim?: 'open' | 'close' | 'both'
+}
+
+/**
+ * The alert blockquote variants, Typora's set per its base.css (note /
+ * important / warning / tip / caution) plus GFM's `INFO`, which aliases note.
+ */
+export type AlertType = 'note' | 'important' | 'warning' | 'tip' | 'caution'
+
+const ALERT_TYPES = new Set<string>(['note', 'important', 'warning', 'tip', 'caution'])
+const ALERT_MARK_RE = /^\[!([A-Za-z]+)\]/
+
+/** One alert marker at the content start of a QUOTE line, or null.
+ *
+ * Only a line whose own `>` prefix is the first thing on it can be an alert —
+ * a plain paragraph `[!NOTE] …` is ordinary text, and so is `> - [!NOTE]`,
+ * whose `>` belongs to a list item. The marker is matched case-insensitively
+ * (`[!info]` and `[!INFO]` are the same alert) and `INFO` normalizes to `note`.
+ */
+export function alertMarkOf(raw: string): { type: AlertType; markerLen: number } | null {
+  if (!/^\s*>/.test(raw)) return null
+  const rest = raw.replace(/^\s*>\s?/, '')
+  const mark = ALERT_MARK_RE.exec(rest)
+  if (!mark) return null
+  const name = mark[1].toLowerCase()
+  const type = name === 'info' ? 'note' : name
+  if (!ALERT_TYPES.has(type)) return null
+  // The marker collapses WITH the single space that follows it — the title the
+  // renderer draws brings its own gap, so the source space must not show twice.
+  const after = rest.slice(mark[0].length)
+  const trailing = /^[ \t]/.test(after) ? 1 : 0
+  return { type: type as AlertType, markerLen: mark[0].length + trailing }
+}
+
+/**
+ * Which lines are the FIRST line of a blockquote — the only place an alert
+ * marker counts.
+ *
+ * A quote's first line is the first line that opens the quote AND the line
+ * before it belongs to no quote. The line-before test is the subtle one: a
+ * lazy continuation (`> 甲\n续行`) is still quote content, so `> [!NOTE]`
+ * after it is a SECOND quote line, not an alert; a blank line ends the quote
+ * region, so the next `> [!NOTE]` starts a fresh quote and IS an alert.
+ * Shared by `computeLineStates` (the `LineState.alert`) and `view.ts` (which
+ * collapses the `[!TYPE]` marker with the same rule) so the two cannot drift.
+ */
+export function firstQuoteLines(lines: string[]): boolean[] {
+  const out: boolean[] = []
+  /** True while a quoted line has been seen and no blank has ended the quote. */
+  let openQuote = false
+  /** True when the immediately previous line is part of a quote block. */
+  let prevLineInQuote = false
+  for (const raw of lines) {
+    out.push(!prevLineInQuote)
+    if (raw.trim() === '') {
+      openQuote = false
+      prevLineInQuote = false
+      continue
+    }
+    const quoted = /^\s*>/.test(raw)
+    const lazy = quoted ? false : openQuote
+    if (quoted) openQuote = true
+    prevLineInQuote = quoted || lazy
+  }
+  return out
+}
+
+/** A complete HTML comment span, markers and content.
+ *
+ * One source of truth for the inline scanner (`view.ts`, which claims the
+ * whole span so nothing inside parses) and for Clear Format (`editCommands.ts`,
+ * which masks the span so its bytes survive the strip — Typora's
+ * `md-comment` is outside Clear Format's range).
+ */
+export const COMMENT_RE = /<!--[\s\S]*?-->/
+
+/* -------------------------------------------------------------------------- */
+/* $$…$$ display math block                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A line that is a complete single-line math block: `$$ x $$`. The open and
+ * close delimiters must be separated from the body by whitespace — a bare
+ * `$$x$$` stays what it always was here (literal `$` + inline math `x` +
+ * literal `$`, IM02), and `$$$$` is the empty block. Group 1 is the body.
+ * Matched before the plain "open" test, so `$$ x $$` is a whole block and not
+ * an unterminated opener.
+ */
+export const MATH_BOTH_RE = /^\$\$(?:([ \t].*?[ \t])|)\$\$\s*$/
+
+/**
+ * A line that may sit INSIDE a `$$…$$` region as math body: a plain paragraph
+ * line. Anything that starts another block construct — a heading, a list, a
+ * quote, a fence, a table row, a rule, a footnote definition — ends the region
+ * instead, and so does a blank line: Typora's math_block is one node and one
+ * paragraph, and taipola's BLOCKS (from markdown-it) split at exactly these
+ * lines, so refusing them here is what keeps every math region inside ONE
+ * block (the renderer's block-level display needs that).
+ */
+function isMathBodyLine(raw: string): boolean {
+  if (FOOTNOTE_DEFINITION.test(raw)) return false
+  if (HEADING_RE.test(raw)) return false
+  const parts = parseLine(raw)
+  return (
+    parts.prefix === '' &&
+    !parts.isFence &&
+    !parts.isRule &&
+    !parts.isTableRow &&
+    raw.trim() !== ''
+  )
+}
+
+/**
+ * Which lines belong to a `$$…$$` math block — `'body'`, middle lines,
+ * `'open'`/`'close'`/`'both'` for the delimiter lines, null for everything
+ * else. Shared by `computeLineStates` (the line kinds) and `view.ts` (which
+ * hides the block behind the KaTeX display), so the two cannot drift.
+ *
+ * A region opens at a line that starts with `$$` (optionally with body on the
+ * same line) and closes at the first following line that is exactly `$$`. An
+ * unterminated opener leaves EVERY line plain — no region, no hiding, and the
+ * paragraph the user typed just renders as text. `$$$$` is a valid empty
+ * block; a body that touches any non-paragraph line (a heading, a blank line,
+ * a fence…) abandons the whole region so the pathological spans can never be
+ * rendered invisible.
+ */
+export function mathLineKinds(lines: string[]): Array<'open' | 'close' | 'both' | 'body' | null> {
+  const out: Array<'open' | 'close' | 'both' | 'body' | null> = Array(lines.length).fill(null)
+  let openFence: string | null = null
+  let inMath = -1
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+
+    if (inMath >= 0) {
+      if (/^\$\$\s*$/.test(raw)) {
+        out[inMath] = 'open'
+        out[i] = 'close'
+        inMath = -1
+        continue
+      }
+      if (!isMathBodyLine(raw)) {
+        // A line that cannot be math body ends the region WITHOUT one: the
+        // tentative opener (and any body already marked) goes back to being
+        // plain paragraphs.
+        for (let k = inMath; k < i; k++) out[k] = null
+        inMath = -1
+      } else {
+        out[i] = 'body'
+        continue
+      }
+    }
+
+    // Fence structure first: a `$$` inside a fenced code block is code.
+    const parts = parseLine(raw)
+    if (openFence !== null) {
+      if (parts.fenceMarker === openFence) openFence = null
+      continue
+    }
+    if (parts.isFence) {
+      openFence = parts.fenceMarker ?? null
+      continue
+    }
+
+    if (MATH_BOTH_RE.test(raw)) {
+      out[i] = 'both'
+    } else if (/^\$\$/.test(raw)) {
+      inMath = i
+    }
+  }
+  // An opener that never closed: every marked line goes back to plain.
+  if (inMath >= 0) {
+    for (let k = inMath; k < lines.length; k++) out[k] = null
+  }
+  return out
 }
 
 /**
@@ -265,8 +455,11 @@ export function computeLineStates(lines: string[]): LineState[] {
   let inFootnote = false
   /** True while a blockquote is open, including its lazy continuations. */
   let openQuote = false
+  const firstQuote = firstQuoteLines(lines)
+  const mathKinds = mathLineKinds(lines)
 
-  for (const raw of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li]
     const parts = parseLine(raw)
     const base: LineState = {
       kind: 'text',
@@ -288,6 +481,19 @@ export function computeLineStates(lines: string[]): LineState[] {
     if (parts.isFence) {
       openFence = parts.fenceMarker ?? null
       states.push({ ...base, kind: 'fence' })
+      continue
+    }
+
+    // A `$$…$$` math block: the delimiter and body lines are their own kinds.
+    // The region scan already aligned with the fence structure above, so a `$$`
+    // inside a code fence never reaches here.
+    const mathKind = mathKinds[li]
+    if (mathKind) {
+      states.push({
+        ...base,
+        kind: mathKind === 'body' ? 'math' : 'math-fence',
+        ...(mathKind === 'body' ? {} : { mathDelim: mathKind }),
+      })
       continue
     }
 
@@ -366,7 +572,12 @@ export function computeLineStates(lines: string[]): LineState[] {
     indents.length = 0
 
     if (/^\s*>/.test(raw)) {
-      states.push({ ...base, kind: 'quote' })
+      const mark = firstQuote[li] ? alertMarkOf(raw) : null
+      states.push({
+        ...base,
+        kind: 'quote',
+        ...(mark ? { alert: mark.type } : {}),
+      })
       continue
     }
 

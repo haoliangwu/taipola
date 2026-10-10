@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMMENT_RE,
+  alertMarkOf,
   computeLineStates,
+  firstQuoteLines,
   isTableDelimiterRow,
   isTableRow,
+  mathLineKinds,
   parseLine,
   stripInline,
   visibleToSourceIndex,
@@ -241,6 +245,112 @@ describe('脚注定义行', () => {
   it('围栏里的定义写法是代码内容', () => {
     const states = computeLineStates(['```', '[^1]: 不是定义', '```'])
     expect(states[1].kind).toBe('code')
+  })
+
+  it('引用行首的 [!NOTE] 是 alert 变体，其他行不是', () => {
+    const states = computeLineStates(['> [!NOTE] 甲', '> 乙', '> [!TIP] 丙'])
+    expect(states[0]).toMatchObject({ kind: 'quote', alert: 'note' })
+    expect(states[1].alert).toBeUndefined()
+    // 第三行跟着两行引用：不是引用的首行，`[!TIP]` 只是普通文字。
+    expect(states[2].alert).toBeUndefined()
+  })
+
+  it('alert 变体：空行打断的引用重新算首行；懒续行不算', () => {
+    expect(computeLineStates(['> [!WARNING] x', '', '> [!INFO] y'])[2]).toMatchObject({
+      kind: 'quote',
+      alert: 'note', // INFO 别名到 note
+    })
+    // `> 甲\n续行` 的续行仍是引用块的一部分，紧跟其后的 [!NOTE] 不是首行。
+    const lazy = computeLineStates(['> 甲', '续行', '> [!CAUTION] z'])
+    expect(lazy[2].alert).toBeUndefined()
+  })
+})
+
+describe('alertMarkOf / firstQuoteLines（typora-parity P2）', () => {
+  it('五种类型 + INFO 别名，大小写不敏感', () => {
+    expect(alertMarkOf('> [!NOTE] 甲')).toEqual({ type: 'note', markerLen: 8 })
+    expect(alertMarkOf('> [!NOTE]')).toEqual({ type: 'note', markerLen: 7 })
+    expect(alertMarkOf('> [!IMPORTANT] 甲')?.type).toBe('important')
+    expect(alertMarkOf('> [!WARNING] 甲')?.type).toBe('warning')
+    expect(alertMarkOf('> [!TIP] 甲')?.type).toBe('tip')
+    expect(alertMarkOf('> [!CAUTION] 甲')?.type).toBe('caution')
+    expect(alertMarkOf('> [!info] 甲')?.type).toBe('note')
+    expect(alertMarkOf('> [!INFO] 甲')?.type).toBe('note')
+    expect(alertMarkOf('> [!nOte] 甲')?.type).toBe('note')
+  })
+
+  it('不是引用行、未知类型、嵌套引用都不是 alert', () => {
+    expect(alertMarkOf('[!NOTE] 甲')).toBeNull()
+    expect(alertMarkOf('- > [!NOTE] 甲')).toBeNull()
+    expect(alertMarkOf('> [!FOO] 甲')).toBeNull()
+    expect(alertMarkOf('> > [!NOTE] 甲')).toBeNull()
+  })
+
+  it('firstQuoteLines：只有引用块的首行是 true', () => {
+    expect(firstQuoteLines(['> a', '> > b', '> c'])).toEqual([true, false, false])
+    expect(firstQuoteLines(['> [!NOTE]', '', '> [!TIP]'])).toEqual([true, false, true])
+    expect(firstQuoteLines(['> 甲', '续行', '> [!NOTE]'])).toEqual([true, false, false])
+    expect(firstQuoteLines(['文本', '> [!NOTE]'])).toEqual([true, true])
+  })
+})
+
+describe('COMMENT_RE（typora-parity P2）', () => {
+  it('完整注释匹配，悬空的 `<!--` 不匹配', () => {
+    expect(COMMENT_RE.exec('<!-- a -->')?.[0]).toBe('<!-- a -->')
+    expect(COMMENT_RE.exec('前 <!-- a --> 后')?.[0]).toBe('<!-- a -->')
+    expect(COMMENT_RE.exec('<!-- a -- b --> x')?.length ?? 0).toBeGreaterThan(0)
+    expect(COMMENT_RE.exec('<!-- 没有闭合')).toBeNull()
+  })
+})
+
+describe('mathLineKinds（typora-parity P3）', () => {
+  it('分行形式：`$$` 开、正文、`$$` 收', () => {
+    expect(mathLineKinds(['$$', 'E=mc^2', '$$'])).toEqual(['open', 'body', 'close'])
+  })
+
+  it('单行形式 `$$ x $$` 与空的 `$$$$` 都是完整块', () => {
+    expect(mathLineKinds(['$$ x $$'])).toEqual(['both'])
+    expect(mathLineKinds(['$$$$'])).toEqual(['both'])
+    // 裸 `$$x$$` 保持行内语义：不是块（IM02 契约）。
+    expect(mathLineKinds(['$$x$$'])).toEqual([null])
+    expect(mathLineKinds(['$$ '])).toEqual([null])
+  })
+
+  it('未闭合的 `$$` 整段退回普通段落', () => {
+    expect(mathLineKinds(['$$', 'x = 1'])).toEqual([null, null])
+    expect(mathLineKinds(['$$', '', '$$'])).toEqual([null, null, null])
+  })
+
+  it('正文行不能是别的块构造：标题、围栏、空行都终止区域', () => {
+    expect(mathLineKinds(['$$', '# 标题', '$$'])).toEqual([null, null, null])
+    expect(mathLineKinds(['```', '$$', '$$', '```'])).toEqual([null, null, null, null])
+    expect(mathLineKinds(['$$', '- 列表', '$$'])).toEqual([null, null, null])
+  })
+
+  it('区域与围栏不互相打扰：代码里的 `$$` 是代码', () => {
+    expect(mathLineKinds(['```', '$$x$$', '```', '$$', 'y', '$$'])).toEqual([
+      null, null, null, 'open', 'body', 'close',
+    ])
+  })
+})
+
+describe('computeLineStates：$$ 数学块的行 kind（typora-parity P3）', () => {
+  it('开/收行是 math-fence，正文是 math', () => {
+    const states = computeLineStates(['$$', 'E=mc^2', '$$'])
+    expect(states.map((s) => s.kind)).toEqual(['math-fence', 'math', 'math-fence'])
+    expect(states[0].mathDelim).toBe('open')
+    expect(states[2].mathDelim).toBe('close')
+    expect(states[1].mathDelim).toBeUndefined()
+  })
+
+  it('单行形式：一行同时是开与收', () => {
+    const [first] = computeLineStates(['$$ x $$'])
+    expect(first.kind).toBe('math-fence')
+    expect(first.mathDelim).toBe('both')
+  })
+
+  it('未闭合：全是普通段落', () => {
+    expect(computeLineStates(['$$', 'x']).map((s) => s.kind)).toEqual(['text', 'text'])
   })
 })
 

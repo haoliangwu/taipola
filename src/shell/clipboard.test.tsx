@@ -4,6 +4,7 @@ import { readDocumentSource } from '../editor/render'
 import { placeCaretAt } from '../test/editorTestUtils'
 import { stubSavedFolder } from '../test/platformStubs'
 import { WELCOME_DOC } from '../core/welcome'
+import { renderDocumentHtml } from '../platform/html'
 
 /**
  * 剪贴板票据 01：复制把「选区对应的 markdown 源码」写进剪贴板，粘贴只认
@@ -54,6 +55,13 @@ function copyLikeTheBrowser(doc: HTMLElement): string {
   const transfer = new DataTransfer()
   doc.dispatchEvent(new ClipboardEvent('copy', { clipboardData: transfer, bubbles: true, cancelable: true }))
   return transfer.getData('text/plain')
+}
+
+/** 同上，但取 `text/html`（Typora 富文本 ⌘C 的第二半）。 */
+function copyHtmlLikeTheBrowser(doc: HTMLElement): string {
+  const transfer = new DataTransfer()
+  doc.dispatchEvent(new ClipboardEvent('copy', { clipboardData: transfer, bubbles: true, cancelable: true }))
+  return transfer.getData('text/html')
 }
 
 /** 带上 text/plain 与（可有可无的）text/html 触发内核的粘贴处理。 */
@@ -123,6 +131,25 @@ describe('复制（clipboard/01）', () => {
     const { view, doc } = await renderWithDoc('甲\n\n乙\n')
     selectLineText(doc, 0, 0)
     expect(copyLikeTheBrowser(doc)).toBe('甲')
+    view.unmount()
+  })
+
+  it('复制的 text/html 是同一源码切片的净化渲染（Typora 富文本 ⌘C，P1）', async () => {
+    const { view, doc } = await renderWithDoc('# 标题甲\n\n第二行内容\n')
+    // 块 0 是标题、块 1 是空行、块 2 才是段落。
+    selectLineText(doc, 2, 0)
+    // 剪贴板同时带 text/plain（源码切片）与 text/html（该切片的渲染结果）。
+    expect(copyLikeTheBrowser(doc)).toBe('第二行内容')
+    expect(copyHtmlLikeTheBrowser(doc)).toBe(renderDocumentHtml('第二行内容'))
+    view.unmount()
+  })
+
+  it('全选复制的 text/html 是整篇源码的净化渲染', async () => {
+    const { view, doc } = await renderWithDoc(WELCOME_DOC)
+    selectAll(doc)
+    // 任务勾选框的 id 每次渲染随机生成（platform/html 的 checkbox id），比对时归零。
+    const stable = (html: string) => html.replace(/task-item-\d+/g, 'task-item-0')
+    expect(stable(copyHtmlLikeTheBrowser(doc))).toBe(stable(renderDocumentHtml(WELCOME_DOC)))
     view.unmount()
   })
 })

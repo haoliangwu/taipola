@@ -410,3 +410,30 @@ function appendRowAnd(added: TableEdit | null, line: number): TableEdit | null {
   if (!added) return null
   return { doc: added.doc, caret: caretInCell(added.doc.split('\n'), line, 0) }
 }
+
+/**
+ * Enter inside a cell: the same column, one row down — the rule row is skipped,
+ * and from the header row the first body row comes next (there is no row above
+ * the rule row). On the LAST row a new row is appended first and the caret
+ * moves into it (Typora's moveToBelowCell with isEmptyCommand/addRow).
+ *
+ * Returns the document UNCHANGED (a caret-only move) exactly like
+ * `moveTableCell`, so the caller can tell a move from an edit and skip the
+ * undo snapshot. The rule row has no cells and declines.
+ */
+export function moveCellBelow(doc: string, offset: number): TableEdit | null {
+  const table = tableAt(doc, offset)
+  if (!table) return null
+  if (table.line === table.delimiterLine) return null
+  const lines = doc.split('\n')
+  if (table.line === table.lastLine) {
+    const added = insertTableRow(doc, offset, 'below')
+    if (!added) return null
+    return {
+      doc: added.doc,
+      caret: caretInCell(added.doc.split('\n'), table.lastLine + 1, table.cell),
+    }
+  }
+  const below = table.line === table.headerLine ? table.delimiterLine + 1 : table.line + 1
+  return { doc, caret: caretInCell(lines, below, table.cell) }
+}

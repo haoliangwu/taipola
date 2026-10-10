@@ -12,11 +12,15 @@
  */
 
 import {
+  COMMENT_RE,
   FOOTNOTE_DEFINITION,
   MATH_FORMS,
+  alertMarkOf,
+  firstQuoteLines,
   isTableDelimiterRow,
   isTableRow,
   isThematicBreak,
+  mathLineKinds,
 } from './inline'
 import { readImageSize } from './imageSize'
 import { isBlankLine } from './lines'
@@ -52,6 +56,13 @@ interface Mark {
   code?: boolean
   link?: string
   /**
+   * An HTML comment (`<!-- … -->`): markers AND content render as one styled
+   * span, nothing inside parses, and Clear Format must skip it. Present on
+   * every run of the construct, the markers included, so the whole thing
+   * dresses as `.md-comment`.
+   */
+  comment?: boolean
+  /**
    * A footnote reference. The run is the LABEL (`1` of `[^1]`); its brackets are
    * drawn by CSS, because the source's own `[^` and `]` collapse as markers.
    */
@@ -66,6 +77,12 @@ interface Mark {
   highlight?: boolean
   superscript?: boolean
   subscript?: boolean
+  /**
+   * A literal soft-break marker (`<br …>`) in a table cell. Rendered as a real
+   * break (zero-width run) while the caret is away, and as dim source text
+   * while it is near; the value is the source text, byte-exact.
+   */
+  br?: string
   img?: ImageMark
   /**
    * Code-block token classes (`hljs-keyword`, `hljs-title function_`, …) from
@@ -108,6 +125,15 @@ interface BuildOptions {
   cell?: boolean
   /** True when the PREVIOUS line ended in a soft break (a paragraph continuation). */
   continues?: boolean
+  /** True when this line is a blockquote's FIRST line (an alert marker can sit here). */
+  firstQuoteLine?: boolean
+  /**
+   * This line's role inside a `$$…$$` math block, or null outside one. Body
+   * lines hide behind the block's KaTeX display while the caret is out and
+   * show their source while it is in; delimiter lines behave exactly like
+   * fence lines in both states.
+   */
+  mathLine?: 'open' | 'close' | 'both' | 'body' | null
   /**
    * This code line's share of the block's highlight token stream, already cut to
    * the line by `tokensByLine`. Absent when nothing is highlighted (no language,
@@ -178,6 +204,8 @@ interface Token {
     | 'highlight'
     | 'superscript'
     | 'subscript'
+    | 'comment'
+    | 'br'
   start: number
   end: number
   innerStart: number
@@ -191,6 +219,12 @@ interface Token {
   width?: string
   /** Footnote label, for a `kind: 'footnoteRef'` token. */
   label?: string
+  /**
+   * The EXACT source text of a `kind: 'br'` token (`<br>`, `<BR />`, …). The
+   * renderer emits this verbatim on readback — source-truth demands the
+   * variant the user typed survive round trips.
+   */
+  br?: string
 }
 
 /**
@@ -293,9 +327,18 @@ function mathTokenAt(
  * See `withAutolinks` for why that division is markdown-it's own rule rather than
  * a convenience.
  */
-function findTokens(text: string): Token[] {
-  return withAutolinks(text, findSyntaxTokens(text))
+function findTokens(text: string, cellBr = false): Token[] {
+  return withAutolinks(text, findSyntaxTokens(text, cellBr))
 }
+
+/**
+ * A literal soft-break marker inside a table cell: `<br>`, `<br/>`,
+ * `<br />`, any casing (Typora's Shift+Enter inserts `<br />` verbatim, and
+ * the paste path can bring the other spellings). Only cells scan for it — a
+ * paragraph's `a <br /> b` is ordinary text (paragraph Shift+Enter has its
+ * own semantics and must not collide).
+ */
+const BR_RE = /^<br\s*\/?>/i
 
 /**
  * Finds the inline syntax this editor recognises in one line of source.
@@ -303,7 +346,7 @@ function findTokens(text: string): Token[] {
  * A linear scan with balanced-pair matching, so nesting resolves into separate
  * non-overlapping tokens.
  */
-function findSyntaxTokens(text: string): Token[] {
+function findSyntaxTokens(text: string, cellBr = false): Token[] {
   const tokens: Token[] = []
   // A definition's `[^label]: ` is the LINE's block prefix (see
   // `blockPrefixRange`), not an inline reference, so the scan starts after it.
@@ -313,6 +356,42 @@ function findSyntaxTokens(text: string): Token[] {
 
   while (i < text.length) {
     const rest = text.slice(i)
+
+    // An HTML comment claims its whole span BEFORE everything else: a `<!--`
+    // is unambiguous, and its content is literal — `![a](b)` and `**bold**`
+    // inside one must not parse (Typora: `md-comment` cannot nest inline).
+    // Closed-span only: a dangling `<!--` stays ordinary text.
+    const comment = COMMENT_RE.exec(rest)
+    if (comment) {
+      // `COMMENT_RE` is not anchored (Clear Format reuses it as a global), so
+      // the match can begin mid-`rest`; the scan position `i` only bounds it.
+      const start = i + comment.index
+      tokens.push({
+        kind: 'comment',
+        start,
+        end: start + comment[0].length,
+        innerStart: start + 4,
+        innerEnd: start + comment[0].length - 3,
+      })
+      i = start + comment[0].length
+      continue
+    }
+
+    // A soft-break marker — table cells only (`cellBr`), see `BR_RE`.
+    const br = cellBr ? BR_RE.exec(rest) : null
+    if (br) {
+      const end = i + br[0].length
+      tokens.push({
+        kind: 'br',
+        start: i,
+        end,
+        innerStart: end,
+        innerEnd: end,
+        br: br[0],
+      })
+      i = end
+      continue
+    }
 
     const image = /^!\[([^\]]*)\]\(([^)]*)\)/.exec(rest)
     if (image) {
@@ -873,6 +952,7 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   const revealInBlock = opts.revealInBlock === true
   const inCode = opts.inCode === true
   const isTableCell = opts.cell === true
+  const mathLine = opts.mathLine ?? null
   const isFenceLine = !inCode && !isTableCell && /^\s*(`{3,}|~{3,})/.test(raw)
 
   // A highlighted code line takes the short path. It has to be decided here,
@@ -884,15 +964,21 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   }
 
   // Code content and fence lines are literal: a `**` inside a fence is text,
-  // and a fence opener must not be misread as an inline-code construct.
-  const tokens = inCode || isFenceLine ? [] : findTokens(raw)
+  // and a fence opener must not be misread as an inline-code construct. A
+  // math block's lines are literal the same way (`$…$` inline rules must not
+  // split the display region). Cells additionally scan for `<br …>` markers.
+  const tokens = inCode || isFenceLine || mathLine ? [] : findTokens(raw, isTableCell)
   const markers: MarkerCell[] = []
 
   // A marker shows while the caret is inside its construct.
   const visibleMarker = new Set<number>()
   if (revealFrom !== null) {
     for (const token of tokens) {
-      if (token.innerEnd > token.innerStart && revealFrom >= token.start && revealFrom <= token.end) {
+      // The `innerEnd > innerStart` guard keeps an EMPTY pair (a bare `**`)
+      // from revealing; a `<br …>` has no inner by DESIGN — the whole token is
+      // the marker — so it reveals whenever the caret touches it.
+      const hasInner = token.innerEnd > token.innerStart || token.kind === 'br'
+      if (hasInner && revealFrom >= token.start && revealFrom <= token.end) {
         visibleMarker.add(token.start)
       }
     }
@@ -901,8 +987,22 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   const hidden = new Set<number>()
   /** Collapsed images: their whole range becomes one run that renders as a picture. */
   const renderedImages = new Map<number, Token>()
+  /**
+   * Soft-break markers rendered as breaks: their range becomes one zero-width
+   * run carrying the source (`mark.br`); `render.ts` draws the actual `<br>`.
+   * A marker under the caret is NOT here — it stays a visible dim source run.
+   */
+  const renderedBreaks = new Map<number, Token>()
   for (const token of tokens) {
     if (visibleMarker.has(token.start)) continue
+    // A comment hides NOTHING: markers and content stay visible (Typora's
+    // `md-comment` is one raw span). Only its closing edge must not leak into
+    // an unrelated hidden run — the boundary list below handles that.
+    if (token.kind === 'comment') continue
+    if (token.kind === 'br') {
+      renderedBreaks.set(token.start, token)
+      continue
+    }
     if (token.kind === 'image') {
       // Nothing about it is hidden as syntax — the run replaced by an <img>
       // covers the entire construct, markers included.
@@ -920,13 +1020,25 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
   // revealed as dim source text while the caret is inside this block — a rule
   // shows as `---` again, so the caret always has visible text to anchor to.
   let blockMarker: { start: number; end: number } | null = null
-  if (isFenceLine) {
+  if (mathLine === 'body') {
+    // The body has no prefix of its own: it hides as a whole below, and shows
+    // as plain (not dim) source while the caret is inside the block.
+  } else if (isFenceLine || mathLine) {
     blockMarker = { start: 0, end: raw.length }
   } else if (!inCode && !isTableCell) {
     if (raw.trim() !== '' && isThematicBreak(raw)) {
       blockMarker = { start: 0, end: raw.length }
     } else {
       blockMarker = blockPrefixRange(raw)
+      // An alert quote's `[!TYPE]` marker collapses with the `> ` prefix: the
+      // renderer draws the capitalized type as a title instead, so the source
+      // marker must be invisible while the caret is outside the block — and
+      // dim source while it is inside, like every other block marker. Only the
+      // quote's FIRST line can carry one.
+      if (blockMarker !== null && opts.firstQuoteLine === true) {
+        const alert = alertMarkOf(raw)
+        if (alert) blockMarker = { start: 0, end: blockMarker.end + alert.markerLen }
+      }
       // A soft-continuation line's leading whitespace is container indentation,
       // not content — it must not land in the middle of a line that now flows on
       // from the previous one. Collapsed like any other prefix, so the source
@@ -938,7 +1050,12 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     }
   }
   const markerShown = blockMarker !== null && revealInBlock
-  if (blockMarker !== null && !markerShown) {
+  // A math BODY line hides behind the block's KaTeX display while the caret
+  // is outside the block, and shows its source — PLAIN, not dim: the body is
+  // the content being written, dimming it would read as an unedited delimiter.
+  if (mathLine === 'body' && !revealInBlock) {
+    for (let k = 0; k < raw.length; k++) hidden.add(k)
+  } else if (blockMarker !== null && !markerShown) {
     for (let k = blockMarker.start; k < blockMarker.end; k++) hidden.add(k)
   }
 
@@ -964,6 +1081,21 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
 
   let i = 0
   while (i < raw.length) {
+    const brToken = renderedBreaks.get(i)
+    if (brToken) {
+      // Zero-width by design: the source characters take no laid-out cell (a
+      // rendered break is not text the caret can rest in), and the mapping
+      // treats the whole run like a collapsed marker — arrows jump over it.
+      const text = raw.slice(brToken.start, brToken.end)
+      runs.push({
+        text,
+        src: sourceStart + brToken.start,
+        mark: { br: brToken.br ?? '' },
+        marker: true,
+      })
+      i = brToken.end
+      continue
+    }
     const picture = renderedImages.get(i)
     if (picture) {
       // One run for the whole `![alt](url)`: the DOM renders an <img>, and the
@@ -1032,12 +1164,16 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
     // which broke the caret mapping completely.
     const isMarkerRun =
       markerShown && blockMarker !== null && i === blockMarker.start && end === blockMarker.end
+    const mark = markFor(tokens, i, end, visibleMarker)
     runs.push({
       text: raw.slice(i, end),
       src: sourceStart + i,
-      mark: markFor(tokens, i, end, visibleMarker),
+      mark,
       marker: false,
-      dim: isMarkerRun || undefined,
+      // A revealed `<br …>` marker shows its dim source too — the same "this
+      // is syntax, not content" cue every other marker run gets, and the only
+      // visible-run case where `dim` does not come from a block marker.
+      dim: isMarkerRun || mark.br !== undefined || undefined,
     })
     i = end
   }
@@ -1056,6 +1192,18 @@ function buildInlineLine(raw: string, revealFrom: number | null, sourceStart = 0
 function markFor(tokens: Token[], start: number, end: number, visibleMarker: Set<number>): Mark {
   const mark: Mark = {}
   for (const token of tokens) {
+    if (token.kind === 'comment') {
+      // The whole construct styles as one span — the MARKERS included, which
+      // sit outside `innerStart..innerEnd` and would otherwise miss the dress.
+      if (token.start <= start && token.end >= end) mark.comment = true
+      continue
+    }
+    if (token.kind === 'br') {
+      // A revealed soft-break marker: the run IS the whole token, and it shows
+      // as dim source (`dim` comes from the caller, mark.br just says what).
+      if (token.start <= start && token.end >= end) mark.br = token.br
+      continue
+    }
     if (token.innerStart <= start && token.innerEnd >= end) {
       if (token.kind === 'bold') mark.bold = true
       else if (token.kind === 'italic') mark.italic = true
@@ -1121,6 +1269,18 @@ export function buildBlockView(
   const rawLines = raw === '' ? [] : raw.split('\n')
   const total = Math.max(rawLines.length, lineCount ?? (rawLines.length || 1))
   const lineText = (li: number) => (li < rawLines.length ? rawLines[li] : '')
+  // Which lines start the block's quote — computed from the block's own lines
+  // with the same rule `computeLineStates` applies document-wide, so the
+  // collapsed `[!TYPE]` marker and the `LineState.alert` can never disagree.
+  const firstQuote = firstQuoteLines(Array.from({ length: total }, (_, li) => lineText(li)))
+  // Math regions of the block's lines. A block is a MATH block only when it
+  // OPENS with `$$` and its LAST line closes the region; anything else (an
+  // unterminated opener here, a region that would span several blocks, a
+  // stray second region) renders as plain, visible text — never invisible.
+  const mathLineOf = mathLineKinds(Array.from({ length: total }, (_, li) => lineText(li)))
+  const blockMath =
+    (mathLineOf[0] === 'open' || mathLineOf[0] === 'both') &&
+    (total === 1 ? mathLineOf[0] === 'both' : mathLineOf[total - 1] === 'close')
 
   // Fence structure FIRST, and separately from building the lines. Highlighting
   // has to see a whole code region at once: a block comment, a template literal
@@ -1161,6 +1321,8 @@ export function buildBlockView(
       revealInBlock,
       inCode: inCode[li],
       continues: softBreaks.has(li - 1),
+      firstQuoteLine: firstQuote[li],
+      mathLine: blockMath ? (mathLineOf[li] ?? null) : null,
       codeTokens: codeTokens[li],
     })
     viewLine.continues = softBreaks.has(li - 1)

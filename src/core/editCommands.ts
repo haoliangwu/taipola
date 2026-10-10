@@ -1,6 +1,7 @@
 import { indentListItem, renumberLists } from './lists'
 import { EXTRA_INLINE } from './view'
-import { findMathAt } from './inline'
+import { COMMENT_RE, computeLineStates, findMathAt } from './inline'
+import { lineAt, offsetForLine } from './lines'
 import { inTable } from './tables'
 
 export interface EditBuffers {
@@ -198,17 +199,46 @@ export const TABLE_SNIPPET = `| 列 1 | 列 2 |
 /* Typora paragraph/format parity (typora-menus spec, tickets 01/02)        */
 /* ------------------------------------------------------------------------ */
 
+/** Every comment span in a string, global flavour of the shared `COMMENT_RE`. */
+const COMMENT_ALL = new RegExp(COMMENT_RE.source, 'g')
+/** Opaque placeholder for one masked comment (control chars cannot appear in source). */
+const MASKED_COMMENT = /\u0001C(\d+)\u0001/g
+
+/** Replaces every comment span with an opaque placeholder, keeping the spans. */
+function maskComments(text: string): { text: string; comments: string[] } {
+  const comments: string[] = []
+  const masked = text.replace(COMMENT_ALL, (comment) => {
+    comments.push(comment)
+    return `\u0001C${comments.length - 1}\u0001`
+  })
+  return { text: masked, comments }
+}
+
+function unmaskComments(text: string, comments: string[]): string {
+  return text.replace(MASKED_COMMENT, (_, id: string) => comments[Number(id)] ?? '')
+}
+
 /**
  * Clear Format (⌘\): strip INLINE markers from the selection, keep the text.
  *
  * Inline-only on purpose (spec Q5): block prefixes (`#`, `> `, `- `) are the
  * block-toggle commands' business, and a collapsed caret changes nothing — the
  * command must never eat literal text around the caret.
+ *
+ * Comments are outside its range (Typora's `md-comment`, `<!-- … -->`): the
+ * span is masked before the strip and restored after, so a `**bold**` inside
+ * one survives byte-for-byte — its markers are not "formatting to clear", they
+ * are the comment's own writing.
  */
 export function clearFormat(buffer: EditBuffers): void {
   const { value, start, end } = buffer
   if (start === end) return
   let selected = value.slice(start, end)
+  let masked: { text: string; comments: string[] } | null = null
+  if (COMMENT_RE.test(selected)) {
+    masked = maskComments(selected)
+    selected = masked.text
+  }
   for (let round = 0; round < 8; round++) {
     let next = selected
       // Links keep their text; images survive untouched (the `!` guard).
@@ -234,6 +264,7 @@ export function clearFormat(buffer: EditBuffers): void {
     if (next === selected) break
     selected = next
   }
+  if (masked) selected = unmaskComments(selected, masked.comments)
   buffer.value = value.slice(0, start) + selected + value.slice(end)
   buffer.end = start + selected.length
   // start unchanged: the stripped text begins where the selection began.
@@ -348,12 +379,79 @@ export function toggleBlockPrefix(buffer: EditBuffers, kind: BlockPrefixKind): v
   buffer.end = offsetOf(end)
 }
 
-/** ⌘]/⌘[: the kernel's list indent, exactly the semantics Tab already has. */
-export function indentSelection(buffer: EditBuffers, direction: 'in' | 'out'): void {
-  const result = indentListItem(buffer.value, buffer.start, direction)
-  if (!result) return // fence or impossible move: the key does nothing
-  buffer.value = result.doc
-  buffer.start = buffer.end = result.caret
+/**
+ * ⌘]/⌘[ over a source range `[from, to)` — the kernel's indent/outdent.
+ *
+ * - `'in'` (⌘]): the Tab rule on the range-start line (`indentListItem`). A
+ *   list item nests under the item above it; a fence or a plain
+ *   paragraph/heading changes nothing — Typora's ⌘] on a paragraph is a no-op.
+ * - `'out'` (⌘[): every line the range covers gets the key's own rule — a
+ *   list/task line steps out one level (`indentListItem`, the Shift+Tab rule);
+ *   a paragraph/heading line loses ONE leading tab or 1-2 spaces (Typora's
+ *   `/^\u200b*(\t|( {1,2}))/`; taipola has no \u200b); every other line kind is
+ *   left alone. No leading whitespace on a paragraph/heading → that line is a
+ *   silent no-op. Lines are processed BOTTOM-UP: a list move renumbers, which
+ *   can change the WIDTH of the lines above it, and an outermost outdent
+ *   inserts its blank separators — neither disturbs a line above the one being
+ *   edited, and every line is located afresh in the running document, so the
+ *   original line indexes stay valid throughout.
+ *
+ * The caret lands at the same logical position: a paragraph strip keeps the
+ * caret's column relative to the text (clamped to the line start when it sat
+ * inside the stripped whitespace — the join-point rule Backspace uses), and a
+ * list move takes `indentListItem`'s own caret, which knows the marker widths.
+ *
+ * Returns null when nothing would change, so the caller takes no undo snapshot.
+ */
+export function indentRange(
+  doc: string,
+  from: number,
+  to: number,
+  direction: 'in' | 'out',
+): { doc: string; caret: number } | null {
+  if (direction === 'in') return indentListItem(doc, from, 'in')
+
+  const firstHit = lineAt(doc, from)
+  const first = firstHit.index
+  const last = to > from ? lineAt(doc, to - 1).index : first
+  const caretColumn = from - firstHit.start
+
+  const states = computeLineStates(doc.split('\n'))
+  let next = doc
+  let changed = false
+  // Set when the caret's own line moved as a list item: `indentListItem`'s
+  // caret math (marker widths shift on renumber) is the honest position then.
+  let listCaret: number | null = null
+  // Columns stripped off the caret's own line (a paragraph/heading strip).
+  let stripWidth = 0
+
+  for (let i = last; i >= first; i--) {
+    const kind = states[i].kind
+    const at = offsetForLine(next, i + 1)
+    if (kind === 'list' || kind === 'task') {
+      const anchor = i === first ? at + caretColumn : at
+      const edited = indentListItem(next, anchor, 'out')
+      if (!edited) continue
+      if (i === first) listCaret = edited.caret
+      next = edited.doc
+      changed = true
+    } else if (kind === 'text' || kind === 'heading') {
+      const endRaw = next.indexOf('\n', at)
+      const end = endRaw === -1 ? next.length : endRaw
+      const line = next.slice(at, end)
+      const match = /^\t|^ {1,2}/.exec(line)
+      if (!match) continue
+      const width = match[0].length
+      next = next.slice(0, at) + line.slice(width) + next.slice(end)
+      if (i === first) stripWidth = width
+      changed = true
+    }
+  }
+  if (!changed) return null
+
+  const caret =
+    listCaret ?? offsetForLine(next, first + 1) + Math.max(0, caretColumn - stripWidth)
+  return { doc: next, caret }
 }
 
 /* ------------------------------ inserts ---------------------------------- */

@@ -3,7 +3,7 @@ import {
   changeHeadingLevel,
   clearFormat,
   deleteLine,
-  indentSelection,
+  indentRange,
   insertFootnote,
   insertHr,
   insertLink,
@@ -245,6 +245,18 @@ describe('clearFormat（⌘\：只剥行内标记）', () => {
     expect(result.value).toBe('**粗**')
     expect(result.start).toBe(1)
   })
+
+  it('注释不在清除范围内：`<!-- … -->` 逐字节保留，内部标记不剥（typora-parity P2）', () => {
+    const selected = '**甲** <!-- 藏 **字** 与 `码` --> **丙**'
+    const result = run(selected, 0, selected.length, (b) => clearFormat(b))
+    expect(result.value).toBe('甲 <!-- 藏 **字** 与 `码` --> 丙')
+  })
+
+  it('选区里只有注释：原样返回，end 不动', () => {
+    const selected = '<!-- 原样 -->'
+    const result = run(selected, 0, selected.length, (b) => clearFormat(b))
+    expect(result.value).toBe('<!-- 原样 -->')
+  })
 })
 
 describe('toggleBlockPrefix（⌥⌘Q/U/O/X：块级切换）', () => {
@@ -287,22 +299,53 @@ describe('toggleBlockPrefix（⌥⌘Q/U/O/X：块级切换）', () => {
   })
 })
 
-describe('indentSelection（⌘]/⌘[：镜像 Tab 语义）', () => {
-  it('列表内缩进/反缩进并重排', () => {
-    const inResult = run('- 甲', 4, 4, (b) => indentSelection(b, 'in'))
-    // 无上层项时 Tab 是插普通空格（内核 plainIndent 语义）
-    expect(inResult.value).toBe('- 甲  ')
-    expect(inResult.start).toBe(6)
+describe('indentRange（⌘]/⌘[：列表走 Tab 规则，段落只受 ⌘[ 擦行首空白）', () => {
+  it('⌘] 列表项：嵌套进上一项（复用 Tab 语义）', () => {
+    expect(indentRange('- 甲\n- 乙\n', 6, 6, 'in')).toEqual({
+      doc: '- 甲\n  - 乙\n',
+      caret: 8,
+    })
   })
 
-  it('按 Shift+Tab 语义反缩进最外层项 = 出列表', () => {
-    const result = run('- 甲', 4, 4, (b) => indentSelection(b, 'out'))
-    expect(result.value).toBe('甲')
+  it('⌘] 列表首项：无上层项，按 Tab 语义插两空格', () => {
+    expect(indentRange('- 甲', 4, 4, 'in')).toEqual({ doc: '- 甲  ', caret: 6 })
   })
 
-  it('围栏内无操作', () => {
-    const result = run('```\n- 甲\n```', 9, 9, (b) => indentSelection(b, 'in'))
-    expect(result.value).toBe('```\n- 甲\n```')
+  it('⌘] 围栏内与普通段落：无操作（Typora：段落上 ⌘] 是空操作，不插任何东西）', () => {
+    expect(indentRange('```\n- 甲\n```', 6, 6, 'in')).toBeNull()
+    expect(indentRange('普通段落', 0, 0, 'in')).toBeNull()
+    expect(indentRange('## 标题', 0, 0, 'in')).toBeNull()
+  })
+
+  it('⌘[ 段落：删行首一个 tab 或 1-2 空格', () => {
+    expect(indentRange('  甲', 0, 0, 'out')).toEqual({ doc: '甲', caret: 0 })
+    expect(indentRange(' 甲', 0, 0, 'out')).toEqual({ doc: '甲', caret: 0 })
+    expect(indentRange('\t甲', 0, 0, 'out')).toEqual({ doc: '甲', caret: 0 })
+  })
+
+  it('⌘[ 段落无行首空白：无操作', () => {
+    expect(indentRange('甲', 0, 0, 'out')).toBeNull()
+    expect(indentRange('# 标题', 0, 0, 'out')).toBeNull()
+  })
+
+  it('⌘[ 光标停在文本等价位置：擦掉空白后跟着文字走，站在空白内则贴行首', () => {
+    // 光标在「甲」上（列 2）：擦两空格后仍停在「甲」上（列 0）
+    expect(indentRange('  甲乙', 2, 2, 'out')).toEqual({ doc: '甲乙', caret: 0 })
+    // 光标在「乙」上（列 3）：跟着文本走（列 1）
+    expect(indentRange('  甲乙', 3, 3, 'out')).toEqual({ doc: '甲乙', caret: 1 })
+    // 光标站在空白中间（列 1）：擦完贴行首
+    expect(indentRange('  甲乙', 1, 1, 'out')).toEqual({ doc: '甲乙', caret: 0 })
+  })
+
+  it('⌘[ 多块选区：逐块擦行首空白（含跨空行）', () => {
+    const result = indentRange('  甲\n\n  乙\n', 0, 8, 'out')
+    expect(result).toEqual({ doc: '甲\n\n乙\n', caret: 0 })
+  })
+
+  it('⌘[ 选中多个列表项：逐项反缩进一层；最外层项出列表', () => {
+    const result = indentRange('- 甲\n  - 乙\n', 0, 11, 'out')
+    // 嵌套项先升到外层；最外层项按 Shift+Tab 语义出列表（带空白分隔）
+    expect(result).toEqual({ doc: '甲\n\n- 乙\n', caret: 0 })
   })
 })
 

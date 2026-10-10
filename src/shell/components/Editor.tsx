@@ -25,6 +25,8 @@ export interface EditorHandle {
   applyDocumentEdit: (
     mutate: (doc: string, caret: number) => { doc: string; caret: number } | null,
   ) => void
+  /** ⌘]/⌘[: list indent/outdent plus Typora's paragraph outdent, at the DOM selection. */
+  applyIndent: (direction: 'in' | 'out') => void
   /** Replaces the whole document (opening a file, creating a new one). */
   setDocument: (text: string) => void
 }
@@ -38,18 +40,24 @@ interface EditorProps {
    * "not in a table", and the browser's own menu is left alone.
    */
   onTableMenu?: (state: TableMenuState) => void
+  /**
+   * Renders a markdown slice to the sanitized HTML the clipboard carries as
+   * `text/html` beside the plain markdown (Typora's rich ⌘C). Passed through
+   * to the kernel; omitted, copy stays plain-only.
+   */
+  renderClipboardHtml?: (markdown: string) => string
   readOnly?: boolean
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
-  { value, onChange, onCaretLineChange, onTableMenu, readOnly = false },
+  { value, onChange, onCaretLineChange, onTableMenu, renderClipboardHtml, readOnly = false },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null)
   const kernelRef = useRef<EditorKernel | null>(null)
   // Latest callbacks, read by the kernel without re-mounting it.
-  const hooks = useRef({ onChange, onCaretLineChange, onTableMenu })
-  hooks.current = { onChange, onCaretLineChange, onTableMenu }
+  const hooks = useRef({ onChange, onCaretLineChange, onTableMenu, renderClipboardHtml })
+  hooks.current = { onChange, onCaretLineChange, onTableMenu, renderClipboardHtml }
 
   useEffect(() => {
     const host = hostRef.current
@@ -59,6 +67,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       readOnly,
       onChange: (next) => hooks.current.onChange(next),
       onCaretLineChange: (line) => hooks.current.onCaretLineChange?.(line),
+      renderClipboardHtml: (slice) => hooks.current.renderClipboardHtml?.(slice),
     })
     kernel.mount(host)
     kernelRef.current = kernel
@@ -88,6 +97,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       goToLine: (line) => kernelRef.current?.goToLine(line),
       applyEdit: (mutate) => kernelRef.current?.applyEdit(mutate),
       applyDocumentEdit: (mutate) => kernelRef.current?.applyDocumentEdit(mutate),
+      applyIndent: (direction) => kernelRef.current?.applyIndent(direction),
       setDocument: (text) => kernelRef.current?.setDocument(text),
     }),
     [],
