@@ -1806,9 +1806,15 @@ private reportLine(): void {
       // just made" — one Backspace joins, exactly like Backspace on a rendered
       // blank line. The caret sits at the placeholder line or one position
       // before it (the placeholder renders no line box, `paragraph-spacing/01`
-      // 十一审, so the visual anchor sits on the paragraph end).
+      // 十一审, so the visual anchor sits on the paragraph end) — or, for a
+      // soft STACK whose caret rode past the last blank row onto the following
+      // content line's start, one position AFTER it. The ±1 window keeps the
+      // pop on the kernel's path in all three anchoring states; a miss falls
+      // through to the browser's default delete, which absorbs into a plain
+      // commit and CLEARS the pending, dropping every pending row at once (the
+      // live bug: one Backspace collapsed the whole stack visually).
       const pending = this.pendingBreak
-      const onBreak = pending !== null && (live === pending.at || live === pending.at - 1)
+      const onBreak = pending !== null && live >= pending.at - 1 && live <= pending.at + 1
       const onEnter = onBreak && pending.kind === 'enter'
       const onSoft = onBreak && pending.kind === 'soft'
       const onPrefix = onBreak && pending.kind === 'prefix'
@@ -1864,8 +1870,20 @@ private reportLine(): void {
             this.renderWithPlaceholder()
             this.placeCaret(at - 1)
           } else {
+            // STACK DONE — the break point's own landscape decides the caret:
+            // - another newline (or EOF) follows the deleted break → an
+            //   invisible separator / the document tail; the caret belongs at
+            //   the paragraph end (`at - 1`), never on the separator that
+            //   renders no row (bug E: `甲乙\n\n丙` stranded the caret on the
+            //   blank DIV at the next Backspace joined paragraphs and ate
+            //   '丙' instead of '乙');
+            // - SOFT CONTENT follows (a mid-line break's own continuation line
+            //   — `aa` ⏎ `ab` of the same paragraph) → the caret rides the
+            //   join point (`at`, the line start below), so the next Backspace
+            //   joins the two lines the way the pre-stack text had them.
+            const after = this.doc[at]
             this.pendingBreak = null
-            this.placeCaret(Math.max(0, at - 1))
+            this.placeCaret(after === '\n' || at >= this.doc.length ? Math.max(0, at - 1) : at)
           }
         }
         return
