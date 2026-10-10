@@ -219,6 +219,19 @@ export class EditorKernel {
     sep: 'sep-first' | 'none' | null
   } | null = null
 
+  /**
+   * Session memory of SOFT chains: source offsets into the blank blocks that
+   * Shift+Enter built this session. The bytes cannot tell a blank line typed
+   * via Shift+Enter from a blank line that was in the file, and Typora renders
+   * every soft break always — so a remembered chain KEEPS its line boxes even
+   * after the caret leaves (unlike the pending-anchored view, which covered
+   * only the active gesture). Each entry is the blank block's start offset;
+   * entries are shifted by every commit (`followSoftChains`) and pruned when
+   * they stop resolving to a blank block (the chain was fully popped or
+   * overwritten — ordinary paragraph-separator rendering returns).
+   */
+  private softChains: number[] = []
+
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
 
@@ -436,17 +449,26 @@ export class EditorKernel {
     // typing `w` then committing 我 left `w我` in the document.
     if (this.composing) return false
     // A pending SOFT stack's rows are placeholder rendering: they show while the
-    // caret is inside the stack and drop when it leaves (requirement: moving
-    // away stops the pending rows). The placeholder is not part of the markup
-    // signature, so the flip is decided by comparing the last rendered SOFT
-    // placeholder, not the signature. An ENTER placeholder's rows are drawn by
+    // caret is inside the stack, and a REMEMBERED soft chain (Shift+Enter-created,
+    // session memory) keeps its rows after the caret leaves (Typora shows every
+    // soft break always). The placeholder is not part of the markup signature,
+    // so the flip is decided by comparing the last rendered SOFT placeholder,
+    // not the signature. An ENTER placeholder's rows are drawn by
     // `renderWithPlaceholder` only and persist until a source change — a caret
     // move must not redraw (the browser's selection is mid-flight).
-    const placeholder = this.activeSoftPlaceholder()
+    const placeholder = this.renderPlaceholder()
     const signature = markupSignature(this.blocks, this.views, this.lineStates, this.offsets)
     if (signature === this.signature && placeholder === this.softRenderedPlaceholder) return false
     renderDocument(host, this.blocks, this.views, this.lineStates, this.offsets, placeholder)
     this.applyPlaceholderSep(placeholder)
+    // The persisted path renders the chain 'in-between', whose default hides its
+    // LAST row (`data-ph-sep` — the pre-existing separator). A soft chain's rows
+    // are ALL fresh: show them all.
+    if (placeholder >= 0 && this.activeSoftPlaceholder() < 0 && host) {
+      host
+        .querySelector(`.blk[data-block="${placeholder}"]`)
+        ?.removeAttribute('data-ph-sep')
+    }
     this.signature = signature
     this.softRenderedPlaceholder = placeholder
     return true
@@ -469,6 +491,62 @@ export class EditorKernel {
     const start = this.offsets[index]
     const end = start + (block.endLine - block.startLine)
     return this.caret >= start && this.caret <= end ? index : -1
+  }
+
+  /**
+   * The blank block whose rows render right now: a soft stack the caret sits
+   * in (pending-anchored) or any session-remembered soft chain (Shift+Enter
+   * built it — the rows persist after the caret leaves). Dead anchors are
+   * pruned on the way.
+   */
+  private renderPlaceholder(): number {
+    const caret = this.activeSoftPlaceholder()
+    if (caret >= 0) return caret
+    let found = -1
+    const live: number[] = []
+    for (const anchor of this.softChains) {
+      const index = this.blockAt(anchor)
+      const block = this.blocks[index]
+      if (block && block.raw === '' && this.lineStates[block.startLine]?.kind === 'blank') {
+        live.push(anchor)
+        if (found < 0) found = index
+      }
+    }
+    if (live.length !== this.softChains.length) this.softChains = live
+    return found
+  }
+
+  /** Records a blank region as a Shift+Enter-created soft chain (one entry per
+      block). The session memory that keeps a chain's line boxes visible after
+      the caret leaves. */
+  private rememberSoftChain(offset: number): void {
+    const index = this.blockAt(offset)
+    const block = this.blocks[index]
+    if (!block || block.raw !== '' || this.lineStates[block.startLine]?.kind !== 'blank') return
+    if (this.softChains.some((a) => this.blockAt(a) === index)) return
+    this.softChains.push(this.offsets[index])
+  }
+
+  /** Edit-following for the soft-chain memory: every commit moves the source,
+      so the anchors shift with it (the same delta rule the caret uses). Dead
+      anchors are pruned by `renderPlaceholder` when they stop resolving to a
+      blank block. */
+  private followSoftChains(deleteStart: number, delta: number): void {
+    for (let i = 0; i < this.softChains.length; i++) {
+      if (this.softChains[i] >= deleteStart) {
+        this.softChains[i] = Math.max(deleteStart, this.softChains[i] + delta)
+      }
+    }
+  }
+
+  /** True when `want` sits on a row of a REMEMBERED soft chain — such rows are
+      real line boxes, so a caret there must anchor ON the row instead of
+      walking back to the paragraph end. */
+  private inPersistedChain(want: number): boolean {
+    const index = this.blockAt(want)
+    const block = this.blocks[index]
+    if (!block || block.raw !== '' || this.lineStates[block.startLine]?.kind !== 'blank') return false
+    return this.softChains.some((a) => this.blockAt(a) === index)
   }
 
   /**
@@ -503,7 +581,9 @@ export class EditorKernel {
     // paragraph's end and the next keystroke would edit the wrong line
     // (measured: the third Backspace of `甲` Enter Enter Enter Backspace
     // Backspace Backspace deleted 甲 instead of the last blank row).
-    const isEnterSpot = this.pendingBreak !== null && this.inPendingBlank(want)
+    const isEnterSpot =
+      (this.pendingBreak !== null && this.inPendingBlank(want)) ||
+      this.inPersistedChain(want)
     while (
       !isEnterSpot &&
       index > 0 &&
@@ -542,6 +622,9 @@ export class EditorKernel {
    * kernel: no reconciler can run in between, so no drift can accumulate.
    */
   private commit(next: string, caretNext: number): void {
+    const prevDoc = this.doc
+    const diffStart = sharedPrefix(prevDoc, next)
+    const diffDelta = next.length - prevDoc.length
     // A keystroke that turns a whole blank line into a line of text gives that
     // line a paragraph of its OWN — a blank line on each side — so the
     // paragraph boundary, and the spacing hanging on it, survives the edit
@@ -688,6 +771,7 @@ export class EditorKernel {
       }
     }
     this.doc = next
+    this.followSoftChains(diffStart, diffDelta)
     this.caret = clamp(caretNext, 0, next.length)
     this.pendingCaret = this.caret
     this.recompute()
@@ -955,6 +1039,10 @@ private reportLine(): void {
       const inside = this.inPendingBlank(safe)
       if (inside) this.pendingBreak = { ...pending, at: safe }
       else this.pendingBreak = null
+    } else if (pending === null && this.inPersistedChain(safe)) {
+      // A click back onto a REMEMBERED chain's row makes it a live soft stack
+      // again: typing re-homes into the row, Backspace pops one row per press.
+      this.pendingBreak = { at: safe, kind: 'soft', sep: 'none' }
     }
     // Revealing or collapsing markers around the new caret rewrites the DOM,
     // which would leave the browser's selection on a detached text node — so the
@@ -1482,6 +1570,7 @@ private reportLine(): void {
             // by itself.
             const sep = this.softStackSeparator(at)
             this.setPendingBreak(fresh, 'soft', false, sep)
+            this.rememberSoftChain(fresh)
             this.renderWithPlaceholder()
             this.placeCaret(fresh)
           } else {
@@ -1515,6 +1604,7 @@ private reportLine(): void {
             const mark = onStackRow ? fresh : at
             const caret = onStackRow ? fresh : at + 1
             this.setPendingBreak(mark, 'soft', false, chainSep)
+            this.rememberSoftChain(mark)
             this.renderWithPlaceholder()
             this.placeCaret(caret)
           }

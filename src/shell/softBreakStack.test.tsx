@@ -106,7 +106,7 @@ describe('软换行堆栈（typora-parity P5）', () => {
     await assertDomMatchesSource(r)
   })
 
-  it('光标离开堆栈：空行回到不可见分隔，源码无损', async () => {
+  it('光标离开堆栈：行盒保持渲染（会话记忆的软链），源码无损', async () => {
     const r = renderEditor('甲\n乙\n')
     await flush()
     await clickInRun(r, 0, 0, 0, 'end')
@@ -114,10 +114,11 @@ describe('软换行堆栈（typora-parity P5）', () => {
     await pressShiftEnter(r)
     await flush()
     expect(stackRows(r)).toHaveLength(1)
-    // 点去 乙（block 2）：堆栈行停止渲染。
+    // 点去 乙（block 2）：pending 清除，但 Shift+Enter 创建的软链是会话记忆
+    // （typora-parity：软断随时可见）——行盒保持渲染，不被折叠成段落间隙。
     await clickInRun(r, 2, 0, 0, 'start')
     await flush()
-    expect(stackRows(r)).toHaveLength(0)
+    expect(stackRows(r)).toHaveLength(1)
     expect(r.getDoc()).toBe('甲\n\n乙\n')
     await assertDomMatchesSource(r)
   })
