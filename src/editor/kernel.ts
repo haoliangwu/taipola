@@ -1849,13 +1849,23 @@ private reportLine(): void {
           // next Backspace pops the next row instead of falling off the stack
           // and eating the paragraph's text (the original bug: the caret
           // rounded on the paragraph end, so Backspace #2 deleted 甲). When no
-          // blank row remains above, the stack is done and normal Backspace
-          // semantics resume.
+          // blank row remains above, the stack is done: the caret belongs at
+          // the BREAK POINT — the end of the last visible content line above
+          // the stack (the paragraph end, `at - 1`), never on the separator
+          // blank that renders no row (measured: in `甲乙\n\n丙\n` the pop
+          // stranded the caret on the blank DIV at offset 3, so the next
+          // Backspace joined the paragraph below instead of deleting '乙').
+          // The expired pending is dropped FIRST so the caret's anchor walks
+          // back to the paragraph instead of treating the (no longer pending)
+          // blank as an Enter spot.
           const chainSep = pending.sep ?? null
           if (at > 1 && this.doc[at - 2] === '\n') {
             this.setPendingBreak(at - 1, 'soft', false, chainSep)
             this.renderWithPlaceholder()
             this.placeCaret(at - 1)
+          } else {
+            this.pendingBreak = null
+            this.placeCaret(Math.max(0, at - 1))
           }
         }
         return
