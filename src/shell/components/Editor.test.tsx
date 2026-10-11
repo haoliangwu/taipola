@@ -93,12 +93,18 @@ describe('标题（block 级标记）', () => {
   })
 
   it('空行上打字不丢字', async () => {
-    const p = renderEditor('- 一项\n\n')
-    await clickAtLine(p, 1, 0)
+    // R1: a structural trailing blank renders no row, so it cannot be clicked;
+    // the clickable blank is the SESSION row an Enter opens. Type there.
+    const p = renderEditor('- 一项\n')
+    await flush()
+    await clickInRun(p, 0, 0, 1, 'end')
+    await flush()
+    await pressEnter(p) // opens the next (visible) item row
+    await flush()
     await typeText(p, '补')
     await flush()
-    // 落在文档末尾的空行/幽灵行：字符进入模型，DOM 与模型一致。
-    expect(p.getDoc()).toBe('- 一项\n\n补')
+    // 落在 Enter 开出的空行上：字符进入模型，DOM 与模型一致。
+    expect(p.getDoc()).toBe('- 一项\n- 补\n')
     await assertDomMatchesSource(p)
   })
 
@@ -1048,8 +1054,13 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
   it('空行渲染一个 <br> 作为可编辑落点（真实浏览器的插入点依赖它）', async () => {
     // 合成（untrusted）输入不会走浏览器自己的插入点解析，所以"把光标放在空行上
     // 再打字"在测试里能过、在真实浏览器里会把字插到上一行末尾。这条断言把原因
-    // 钉住：空行必须带一个 <br> 落点。
+    // 钉住：**渲染出来的**空行必须带一个 <br> 落点。R1 下结构性分隔行不渲染，
+    // 故用 Enter 开出一根会话空行来断言。
     const r = renderEditor('甲\n\n乙\n')
+    await flush()
+    await clickInRun(r, 0, 0, 0, 'end')
+    await flush()
+    await pressEnter(r) // 开出一根可见的会话空行（s）
     await flush()
     const emptyLines = [...r.container.querySelectorAll('.vl')].filter(
       (el) => (el.textContent ?? '') === '',
@@ -1070,9 +1081,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('# 标题\n\n正文\n')
-    // 行尾 Enter 只多这一个换行（占位空块，`/10` 九审反转后），一次退格恰好
-    // 还原；光标落在被删占位行的原对齐位置（6 = 回车前后面第一个空行的位置）。
-    expect(caretFromDom()).toBe(6)
+    // 行尾 Enter 只多这一个换行（占位空块），一次退格恰好还原；R4 诚实落点：
+    // 光标 = 被删的 `\n` 偏移（4 = 标题行尾），不再走旧的「原对齐位置」。
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 
@@ -1107,8 +1118,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await flush()
     expect(split.getDoc()).toBe('## 有序列表\n## 列表嵌套\n')
     // 一次回车配一次退格，原样还原：占位空行被退格删掉（十一审的 Enter 标记），
-    // 光标落在合并点 = 下一个标题的行首（原偏移 8）。
-    expect(caretFromDom()).toBe(8)
+    // 光标 = 被删 `\n` 的偏移 7（R4 诚实落点）。
+    expect(caretFromDom()).toBe(7)
 
     // 路径 C2：光标在下一行的行首（源码里的行首，`## ` 之前）。先把光标放进这一行，
     // 让 `## ` 显现成可见源码，再移到行首——这就是真的按两次左箭头会到的地方。
@@ -1196,9 +1207,9 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     await pressBackspace(r)
     await flush()
     expect(r.getDoc()).toBe('> 引用\n\n')
-    // 退出引用后光标落尾空行行首（该行是 Enter 开出的占位行盒、可见）：
-    // 继续键入会开新段落，而不是粘回引用行。
-    expect(caretFromDom()).toBe(5)
+    // 退出引用后光标落在尾空行（该行是 Enter 开出的占位行盒、可见）；
+    // R4 诚实落点：光标 = 被删 `\n` 的偏移 4。继续键入开新段落，不粘回引用行。
+    expect(caretFromDom()).toBe(4)
     await assertDomMatchesSource(r)
   })
 
@@ -2559,18 +2570,9 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     await r.user.keyboard('x')
     await flush()
     expect(r.getDoc()).toBe('甲\n\nx\n\n乙\n')
-    const blanksAfter = [...r.container.querySelectorAll<HTMLElement>('.vl-blank')]
-    // 渲染后 data-block 编号不连续（中间的 separator 被滤掉），尾块是最大编号。
-    const lastBlock = String(
-      Math.max(
-        ...Array.from(r.container.querySelectorAll<HTMLElement>('[data-block]')).map((b) =>
-          Number(b.getAttribute('data-block')),
-        ),
-      ),
-    )
-    for (const b of blanksAfter) {
-      expect(b.closest('[data-block]')?.getAttribute('data-block')).toBe(lastBlock)
-    }
+    // 占位被字取代：会话 s 行没了，placeholder 块随之消失，中间空行回到
+    // 不渲染的结构分隔（R1：无行盒、无 data-placeholder）。
+    expect(r.container.querySelectorAll('.blk[data-placeholder]')).toHaveLength(0)
     await assertDomMatchesSource(r)
   })
 
@@ -2665,14 +2667,14 @@ describe('元素内 Enter / Shift+Enter（标题/列表/引用/围栏矩阵）',
     await pressEnter(r)
     await flush()
     expect(r.getDoc()).toBe('甲\n\n\n\n乙\n')
-    // 占位块的可见行 = 两个 Enter 行；最后一个分隔行保持隐藏。
+    // R1: 占位块的可见行 = 两个 Enter 开出的会话行盒（s）；预存分隔行不产生
+    // 节点，不再有「渲染后用 display:none 隐藏」的第三行。
     const rows = [...r.container.querySelectorAll<HTMLElement>('.blk[data-placeholder]')].flatMap((b) =>
       [...b.querySelectorAll<HTMLElement>('.vl-blank')],
     )
-    expect(rows).toHaveLength(3)
+    expect(rows).toHaveLength(2)
     expect(getComputedStyle(rows[0]!).display).not.toBe('none')
     expect(getComputedStyle(rows[1]!).display).not.toBe('none')
-    expect(getComputedStyle(rows[2]!).display).toBe('none')
     // 打字落最新行，成独立段，两侧各一空行。
     await r.user.keyboard('x')
     await flush()

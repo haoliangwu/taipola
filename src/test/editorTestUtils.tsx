@@ -26,6 +26,8 @@ export interface Rendering {
   user: ReturnType<typeof userEvent.setup>
   /** Read-only session separator identities (ADR-0005 §2.1). */
   getKinds: () => Map<number, BreakKind>
+  /** Model caret offset; the IME cells assert the composition anchor rides clicks. */
+  getCaret: () => number | null
   /** True while an IME composition is open. */
   isComposing: () => boolean
 }
@@ -83,6 +85,7 @@ export function renderEditor(source: string): Rendering {
       ) as HTMLElement | null,
     user: userEvent.setup({ delay: null }),
     getKinds: () => handle.current?.getKinds() ?? new Map(),
+    getCaret: () => handle.current?.getCaret() ?? null,
     isComposing: () => handle.current?.isComposing() ?? false,
   }
 }
@@ -261,7 +264,12 @@ export async function caretInTableCell(
 
 /** Type text at the current caret — a REAL keystroke sequence. */
 export async function typeText(r: Rendering, text: string): Promise<void> {
-  await r.user.type(r.container, text)
+  // Type into the CURRENT selection / focused editor. `user.type(element, …)`
+  // CLICKS the element first, and with R1's structural blank rows no longer
+  // rendering, that click lands below the content and parks the caret at the
+  // document end — an artifact of the harness, not the editor. `keyboard` sends
+  // the same real key events at wherever the caret already is.
+  await r.user.keyboard(text)
 }
 
 /** Press Backspace at the current caret — REAL key. */

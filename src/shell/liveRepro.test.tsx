@@ -28,8 +28,11 @@ describe('线上复现：标题与段落的软断行', () => {
       const lines = [...b.querySelectorAll('[data-vline]')].map((l) => l.textContent)
       return `[${lines.join(' / ')}]`
     })
-    // 空行占位块渲染了一行（`[ / ]` 的第二个块）。
-    expect(rows.some((s) => s === '[ / ]')).toBe(true)
+    // 空行占位块渲染了一行（`[]` —— 单个空行盒的文本就是 `''`）：fresh s 行
+    // 开一个行盒，预存的分隔行（S）不渲染（R1——段落空隙由段距承载，
+    // paragraph-spacing 十一审）。旧实现把分隔行也渲染成 `[ / ]` 再隐藏
+    // （data-ph-sep）。
+    expect(rows.some((s) => s === '[]')).toBe(true)
     await assertDomMatchesSource(r)
     // 已知与 Typora 的分歧（接受，非 bug）：Typora 把软行留在标题内；
     // taipola 在标题下方开一个空行栈。上方断言钉住后者。

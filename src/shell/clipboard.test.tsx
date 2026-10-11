@@ -106,8 +106,10 @@ describe('复制（clipboard/01）', () => {
     // 从第一个可见字符开始，`# ` 不可能在范围内。复制必须把行首标记补回来，
     // 否则整篇复制会丢第一个标记（clipboard/03）。
     const { view, doc } = await renderWithDoc('# 甲\n\n第二行内容\n')
+    // R1: the structural blank separator renders no line box, so `lines` holds
+    // only the two CONTENT lines — the main line is the last one.
     const lines = [...doc.querySelectorAll('[data-vline]')]
-    const main = lines[lines.length - 2] // 「第二行内容」
+    const main = lines[lines.length - 1] // 「第二行内容」
     const mainRun = main.querySelector('[data-run]')?.firstChild as Text
     placeCaretAt(mainRun, mainRun.textContent?.length ?? 0)
     const hidden = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run]') as HTMLElement
@@ -116,10 +118,12 @@ describe('复制（clipboard/01）', () => {
     const firstVisible = [...doc.querySelectorAll('[data-block="0"] [data-vline="0"] [data-run]')].find(
       (r) => getComputedStyle(r).display !== 'none',
     ) as HTMLElement
-    const lastLine = lines[lines.length - 1] as HTMLElement
     const range = document.createRange()
     range.setStart(firstVisible.firstChild as Text, 0)
-    range.setEnd(lastLine, 0)
+    // The selection runs to the END OF THE DOCUMENT (Chromium ⌘A's end is the
+    // editable host's end) — with R1 the trailing newline has no line box of its
+    // own, so the host edge is what carries it.
+    range.setEnd(doc, doc.childNodes.length)
     const sel = window.getSelection()
     sel?.removeAllRanges()
     sel?.addRange(range)
@@ -210,7 +214,8 @@ describe('粘贴（clipboard/02）', () => {
     // 然后选区从第一个可见 run 开始——Chromium ⌘A 就是这个起点。
     const { view, doc } = await renderWithDoc('# 标题\n\n正文\n')
     const lines = [...doc.querySelectorAll('[data-vline]')]
-    const thirdLine = lines[lines.length - 2] as HTMLElement // 「正文」
+    // R1: the blank separator renders no line box; the last vline is 「正文」.
+    const thirdLine = lines[lines.length - 1] as HTMLElement // 「正文」
     const thirdRun = thirdLine.querySelector('[data-run]')?.firstChild as Text
     placeCaretAt(thirdRun, thirdRun.textContent?.length ?? 0)
     const hidden = doc.querySelector('[data-block="0"] [data-vline="0"] [data-run]') as HTMLElement

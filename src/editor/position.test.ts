@@ -38,7 +38,7 @@ function mount(raw: string, caret: number | null, lineCount?: number, softBreakA
     headingText: '',
     softBreakAfter: [],
   }
-  renderDocument(host, [block], [view], [], [0])
+  renderDocument(host, [block], [view], [], [0], new Map())
   return { host, view }
 }
 

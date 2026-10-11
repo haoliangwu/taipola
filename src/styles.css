@@ -859,27 +859,11 @@ body {
   margin-bottom: 4px;
 }
 
-/* The Enter placeholder block draws ALL of its rows (they must exist in the
-   DOM for the read-back). IN-BETWEEN the document — a block follows — the
-   LAST row is the pre-existing paragraph separator (fresh Enter rows are
-   inserted before it), so only it is hidden: one Enter shows one new line,
-   repeated Enters show one each, the separator stays an invisible margin
-   (`.scratch/paragraph-spacing/01`). A TRAILING placeholder shows every row:
-   each Enter there opened one more blank line, and each Backspace pops one. */
-.blk[data-ph-sep] .vl-blank:last-child {
-  display: none;
-}
-
-/* A LINE-START Enter/Shift+Enter stacks its fresh rows AFTER the pre-existing
-   separator blank (the insert point is the caret's line start, past the
-   blank), so the fresh line ends up LAST — the mirror image of the line-end
-   break above. `data-ph-sep-after` hides the separator's FIRST row instead
-   and shows every fresh row (kernel flips the attribute on the placeholder
-   block: repeated line-start Enters kept growing the model while the page
-   never showed a new row). */
-.blk[data-ph-sep-after] .vl-blank:first-child {
-  display: none;
-}
+/* Placeholder/chain render machinery retired (ADR-0005 cut 2): a blank line's
+   row box is decided by the session `kind` map alone — `s` rows render, `S`
+   rows produce no node (the paragraph gap is carried by `margin-bottom` above).
+   The old `data-ph-sep`/`data-ph-sep-after` hide-a-separator-row rules are gone
+   with the attributes. */
 
 /* One source line. One line box tall, whatever the browser would do with its
    content: a line whose text is collapsed (a `---`, a fence marker, an empty list

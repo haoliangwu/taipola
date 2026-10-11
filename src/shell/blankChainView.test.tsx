@@ -103,14 +103,16 @@ describe('软断链视图（typora-parity）', () => {
     await pressShiftEnter(r)
     await flush()
     const rows = stackRows(r)
-    // 3 行盒 = 2 个新行 + 1 个预存分隔（行首链隐藏首行：`data-ph-sep-after`）。
-    expect(rows.length).toBe(3)
-    // 点进上方旧行并打字：字符落那一行。
-    const visible = rows.filter((l) => getComputedStyle(l).display !== 'none')
-    const first = visible[0]!
+    // 2 行盒 = 2 个新行。预存的段落分隔行（kind=S）不渲染行盒——R1 恒等式
+    // （矩阵 §6.4：boxes == 内容行 + kind=='s'）；旧实现把它渲染成一行盒再
+    // 用 display:none 隐藏（data-ph-sep-after），视觉相同，但矩阵把它定为
+    // 0 盒（分隔行空隙由段距承载）。cut 2 采纳 R1。
+    expect(rows.length).toBe(2)
+    // 点进一行并打字：字符落那一行。
+    const first = rows[0]!
     const s = window.getSelection()
     const rg = document.createRange()
-    rg.setStart(first.firstChild ?? first, 0)
+    rg.setStart(first, 0)
     rg.collapse(true)
     s?.removeAllRanges()
     s?.addRange(rg)

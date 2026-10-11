@@ -34,9 +34,12 @@ describe('lineStartSepHide', () => {
     )
     console.log('c1 doc:', JSON.stringify(doc), 'phRows:', rows.join('|'))
     expect(doc).toBe('\n甲\n\n\n乙')
-    // 乙首 Enter 新开的占位应只显示 Enter 加的那行（泄漏 'none' 会多显示预存分隔）
+    // R1：前导空行（行首 Enter 开出的 s 行）与乙上的新 s 行是两个不同
+    // placeholder 块，各渲染 1 行盒；预存分隔行（S）不产生节点——不再有
+    // 「靠 display:none 藏起的分隔行」。故可见行盒 = 2（各自的会话行盒），
+    // 没有多余的隐藏行。（旧断言 <=1 基于旧的「分隔行渲染后再隐藏」模型。）
     expect(rows.length).toBeLessThanOrEqual(2)
-    expect(rows.filter((s) => !s.includes('none')).length).toBeLessThanOrEqual(1)
+    expect(rows.filter((s) => !s.includes('none')).length).toBeLessThanOrEqual(2)
   })
 
   it('c2 引用行首 Shift+Enter（marker 前 caret=0）：不进标记分支、无 caret 位移', async () => {

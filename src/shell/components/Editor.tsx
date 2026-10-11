@@ -31,6 +31,8 @@ export interface EditorHandle {
   setDocument: (text: string) => void
   /** Read-only session separator identities; the cut-1 acceptance matrix reads them. */
   getKinds: () => Map<number, BreakKind>
+  /** Model caret offset; the IME cells assert the composition anchor rides clicks. */
+  getCaret: () => number | null
   /** True while an IME composition is open. */
   isComposing: () => boolean
 }
@@ -104,6 +106,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       applyIndent: (direction) => kernelRef.current?.applyIndent(direction),
       setDocument: (text) => kernelRef.current?.setDocument(text),
       getKinds: () => kernelRef.current?.getKinds() ?? new Map(),
+      getCaret: () => kernelRef.current?.getCaret() ?? null,
       isComposing: () => kernelRef.current?.isComposing() ?? false,
     }),
     [],

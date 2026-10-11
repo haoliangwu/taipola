@@ -306,9 +306,15 @@ export function domToLocal(view: BlockView, node: Node, offset: number): number 
   const line = view.lines[lineIndex]
   if (!line) return null
 
-  // Baseline: source offset where this line starts.
-  let base = 0
-  for (let i = 0; i < lineIndex; i++) base += view.lines[i].sourceToVisible.length + 1
+  // Baseline: source offset where this line starts. The VIEW's own
+  // `sourceStart` is block-local by construction — every line records it, and
+  // for BLANK lines it is the ONLY honest number: a blank line's text IS its
+  // own newline (`sourceToVisible.length` includes it), so summing lengths
+  // plus one junction newline per previous line double-counted a newline for
+  // every blank line above and read a clicked blank row one position too far
+  // (a row at source start 1 read as 2 — the typed character landed in the
+  // next row, and in a chain's last row it landed past the document).
+  const base = line.sourceStart
 
   const runs = [...lineEl.querySelectorAll<HTMLElement>('[data-run]')]
   const inside = offsetInsideRuns(runs, node, offset)

@@ -30,6 +30,7 @@ import type { BlockView, ImageMark, ViewRun } from '../core/view'
 import type { LineState } from '../core/inline'
 import { MATH_BOTH_RE } from '../core/inline'
 import { isBlankLine } from '../core/lines'
+import type { BreakKind } from './kernel'
 import { mathBlockHtml, mathHtml } from './math'
 
 /* -------------------------------------------------------------------------- */
@@ -452,12 +453,20 @@ function lineElement(
 }
 
 /**
- * 一个空白块的渲染态：`none`（普通分隔，不渲染行）、`trailing`（文档末尾的
- * Enter 占位，每一行都渲染）、`in-between`（两块之间的 Enter 占位，只隐藏
- * 最后一行——既有的分隔行）。这个三态取代了历史实现里 "is placeholder" +
- * "hide separator" 两个布尔 + 调用方 `-1` 哨兵的推导组合。
+ * 一个空白块的渲染态：全部由 kind 数组决定（ADR-0005 §2.2）——`s` 行渲染行盒、
+ * `S` 行不渲染。旧的三态（placeholder 机器）已删除，见 ADR-0005 第三刀。
  */
-export type PlaceholderState = 'none' | 'trailing' | 'in-between'
+
+/** True when a blank block's view line (block-relative `sourceStart`) is keyed
+    `soft` in the session's kind map — the one question R1 lets the renderer
+    ask (ADR-0005 §3.1: visibility is decided by `(src, kind)` alone). */
+function isSoftLine(
+  kinds: Map<number, BreakKind>,
+  start: number,
+  line: BlockView['lines'][number],
+): boolean {
+  return kinds.get(start + line.sourceStart) === 's'
+}
 
 function blockElement(
   existing: HTMLElement | null,
@@ -466,7 +475,8 @@ function blockElement(
   lineStates: LineState[],
   start: number,
   gap = 0,
-  placeholder: PlaceholderState = 'none',
+  kinds: Map<number, BreakKind>,
+  soleBlankBlock = false,
 ): HTMLElement {
   const el = existing && existing.hasAttribute('data-block') ? existing : document.createElement('div')
   // The `blk` class is a CSS contract, not decoration: every block-level rule is
@@ -477,6 +487,9 @@ function blockElement(
   setAttr(el, 'data-block', String(block.index))
   setAttr(el, 'data-src-start', String(start))
   setAttr(el, 'data-gap', String(gap))
+  // The VIEW's line count, unconditional: the read-back of a partially rendered
+  // blank block reconstructs its skipped (structural) lines from this span.
+  setAttr(el, 'data-vlines', String(view.lines.length))
   // A COMPLETE `$$…$$` region inside this block makes it a math block: it
   // opens on the first line (or opens+closes on one line) and closes on the
   // last. The view already hides the region's lines for that case (`blockMath`
@@ -496,37 +509,51 @@ function blockElement(
   const blockAlert = lineStates[block.startLine]?.alert ?? ''
   if (blockAlert !== '') setAttr(el, 'data-alert', blockAlert)
   else el.removeAttribute('data-alert')
-  // A PLACEHOLDER blank draws ALL of its rows — the separator rows must stay
-  // in the DOM or the read-back silently drops them. Which rows are VISIBLE
-  // depends on the block's place in the document:
-  // - in-between (a block follows): every row except the LAST one shows — the
-  //   last row is the separator that predates the Enter (fresh lines are
-  //   inserted before it), hidden by CSS (`[data-ph-sep] .vl-blank:last-child`)
-  //   so one Enter shows one new line and repeated Enters show one each;
-  // - trailing (the block IS the document's last): every row is a break Enter
-  //   opened — ALL show, the caret rides the newest (each Enter = one more
-  //   visible blank line, one Backspace pops it back).
-  if (placeholder !== 'none') setAttr(el, 'data-placeholder', '')
+  // A blank block renders only its SOFT rows (kind `s`) plus any row that
+  // CARRIES characters (a whitespace-only line is content, not a separator —
+  // see `blankLine` in core/view): the R1 identity (ADR-0005 §2.2; matrix
+  // §6.4) counts a blank line's box iff it is keyed `s`. A structural `S` row
+  // produces no node at all — its newline is carried by the block's own
+  // read-back, not by a hidden box. The ONE exception: the document's ONLY
+  // block (the empty document, or one made of bare newlines) renders every row
+  // — that box is the whole editing surface and the caret's only anchor. Only
+  // BLANK blocks filter lines; a blank line inside a quote/list/table span is
+  // part of the structure and keeps its row (family ②③, status quo).
+  const blankBlock = firstState?.kind === 'blank'
+  const blankLines = blankBlock && !soleBlankBlock
+    ? Array.from({ length: view.lines.length }, (_, li) => li).filter(
+        (li) =>
+          isSoftLine(kinds, start, view.lines[li]) ||
+          // A whitespace-only line carries a collapsed marker run — content
+          // that must survive the round trip, so its box renders.
+          view.lines[li].runs.length > 0,
+      )
+    : Array.from({ length: view.lines.length }, (_, li) => li)
+  // `data-placeholder` marks a blank block that renders session-soft rows: a
+  // soft CHAIN stays visible after the caret leaves (the kind state owns this
+  // now — ADR-0005 §2.2), and the legacy persisted-chain suites count these
+  // boxes through the same selector. The old hide-a-separator-row attributes
+  // (`data-ph-sep`/`data-ph-sep-after`) are gone with the machinery.
+  if (blankBlock && blankLines.length > 0) setAttr(el, 'data-placeholder', '')
   else el.removeAttribute('data-placeholder')
-  if (placeholder === 'in-between') setAttr(el, 'data-ph-sep', '')
-  else el.removeAttribute('data-ph-sep')
   // While the caret is OUTSIDE a math block, one extra child renders the
   // KaTeX display over the hidden source lines; focused, the child is gone
   // and the lines show their raw source.
   const mathChild = isMathBlock && !mathRevealed ? 1 : 0
-  syncChildren(el, view.lines.length + mathChild, (index, current) => {
-    if (index === view.lines.length) {
+  syncChildren(el, blankLines.length + mathChild, (index, current) => {
+    if (index === blankLines.length) {
       return mathBlockElement(current, mathBodySource(block, view))
     }
-    const line = view.lines[index]
+    const lineIndex = blankLines[index]
+    const line = view.lines[lineIndex]
     const raw = block.raw.slice(line.sourceStart, line.sourceStart + line.sourceToVisible.length)
     return lineElement(
       current,
       line,
-      index,
-      lineStates[block.startLine + index],
+      lineIndex,
+      lineStates[block.startLine + lineIndex],
       raw,
-      view.lines[index + 1]?.continues === true,
+      view.lines[lineIndex + 1]?.continues === true,
     )
   })
   return el
@@ -563,32 +590,32 @@ function syncChildren(
   }
 }
 
-/** Renders the model into `host`, updating in place. */
+/** Renders the model into `host`, updating in place. The renderer reads ONLY
+    the source and the session's kind map — the pure `(src, kind) → expandedDoc
+    → DOM` pipeline of ADR-0005 §2.2. It never looks at the caret, at any
+    pending-break state or at chain memory: whether a blank line draws a box is
+    a decision the kind map answers alone. */
 export function renderDocument(
   host: HTMLElement,
   blocks: Block[],
   views: BlockView[],
   lineStates: LineState[],
   offsets: number[],
-  placeholderBlock = -1,
+  kinds: Map<number, BreakKind>,
 ): void {
   // A blank block BETWEEN two blocks is a paragraph SEPARATOR, not a visible
-  // row: it renders no DOM node, and the gap is carried by the blocks' own
-  // margins (Typora renders `甲\n\n乙` as two <p> with a margin, no blank box).
-  // A blank block that CARRIES characters (a whitespace-only line) is content,
-  // not a separator: it keeps its row so the spaces survive the round trip.
-  // The LAST block is the exception too: a trailing truly-blank block is the
-  // paragraph placeholder Enter just opened — it must render its line box or
-  // the caret has nowhere to go and the next keystroke cannot open the new
-  // paragraph (`.scratch/paragraph-spacing/issues/01` 十一审).
+  // row: it renders no DOM node unless the session opened a SOFT row inside it
+  // (`kind == 's'` — the box Typora's soft break owns), and the gap between the
+  // surrounding blocks is carried by their margins (Typora renders
+  // `甲\n\n乙` as two <p> with a gap and no blank box). A blank block that
+  // CARRIES characters (a whitespace-only line) is content, not a separator: it
+  // keeps its row so the spaces survive the round trip.
   //
-  // `placeholderBlock` is the same exception for an IN-BETWEEN blank: the
-  // placeholder Enter just opened mid-document. It renders its own row so the
-  // break is VISIBLE (Typora drops the caret onto a fresh blank line) instead
-  // of collapsing into the paragraph margin and looking like Enter did
-  // nothing; once the mark is consumed the block goes back to being an
-  // invisible separator (user-measured: Enter after the first line showed no
-  // new line, and repeated Enters piled invisible blanks).
+  // The LAST block still always gets a block element, even when every one of
+  // its rows is structural (renders no line box): the read-back needs its
+  // `data-vlines`/`data-gap` to reconstruct the document's trailing newlines,
+  // and the empty document needs its one editable line. The boxes themselves
+  // follow R1 (matrix §6.4) — a trailing structural blank draws none.
   const lastIndex = blocks.length - 1
   const renderable = blocks.filter(
     (block, i) =>
@@ -596,8 +623,13 @@ export function renderDocument(
       (lineStates[block.startLine]?.kind !== 'blank' ||
         block.raw !== '' ||
         i === lastIndex ||
-        i === placeholderBlock),
+        views[i]!.lines.some((line) => isSoftLine(kinds, offsets[i], line))),
   )
+  // The document that IS a single blank block: its rows are the whole editing
+  // surface (the empty document, or one made of bare newlines), so every row
+  // renders regardless of kind.
+  const soleBlankBlock =
+    blocks.length === 1 && lineStates[blocks[0]!.startLine]?.kind === 'blank'
   syncChildren(host, renderable.length, (i, current) => {
     const block = renderable[i]
     // `views`/`offsets` are indexed by the block's ORIGINAL index, which jumps
@@ -622,26 +654,7 @@ export function renderDocument(
           Math.max(0, views[prev.index].lines.length - prev.raw.split('\n').length)
         : 0
     const gap = prev !== null ? srcStart - prevEnd : srcStart
-    return blockElement(
-      current,
-      block,
-      views[block.index],
-      lineStates,
-      srcStart,
-      gap,
-      // A placeholder blank hides its separator rows differently by place:
-      // a TRAILING placeholder (the document's last block) shows every row —
-      // each one is a break Enter opened, one visible blank per Enter
-      // (`甲` Enter Enter shows two blanks, caret on the second); an
-      // IN-BETWEEN placeholder hides its LAST row only, the separator that
-      // predates the break (`data-ph-sep`). Once the mark is consumed the
-      // block renders every row again, as it always did.
-      block.index === placeholderBlock
-        ? block.index === lastIndex
-          ? 'trailing'
-          : 'in-between'
-        : 'none',
-    )
+    return blockElement(current, block, views[block.index], lineStates, srcStart, gap, kinds, soleBlankBlock)
   })
 }
 
@@ -657,6 +670,7 @@ export function markupSignature(
   views: BlockView[],
   lineStates: LineState[],
   offsets: number[],
+  kinds: Map<number, BreakKind>,
 ): string {
   const parts: string[] = []
   for (let i = 0; i < blocks.length; i++) {
@@ -684,6 +698,9 @@ export function markupSignature(
       if (line.cellRuns) parts.push(`c${line.cellRuns.map((c) => c.join('.')).join(';')}`)
     }
   }
+  // The kind map decides what renders (R1) — it belongs in the render signature,
+  // or a caret move that only changed session soft identity would skip the redraw.
+  for (const [at, kind] of kinds) parts.push(`K${at}${kind === 's' ? 's' : 'S'}`)
   return parts.join('\n')
 }
 
@@ -691,13 +708,36 @@ export function markupSignature(
 /* reading the DOM back into source                                           */
 /* -------------------------------------------------------------------------- */
 
-/** Rebuilds a block's Markdown source from its rendered DOM. */
+/**
+ * Rebuilds a block's Markdown source from its rendered DOM.
+ *
+ * A BLANK block renders only its SOFT (`s`) rows and its whitespace-carrying
+ * rows — the structural (`S`) rows of the same block produce no node. The block
+ * therefore cannot be read by joining the rendered lines: the missing rows are
+ * real newlines in the source. Each line element carries its block-local index
+ * (`data-vline`) and the block carries its full line count (`data-vlines`), so
+ * the source is reconstructed by slotting each rendered row's text into its
+ * index and joining all `V` slots with `\n` — a structural empty row
+ * contributes an empty slot and with it exactly one newline. The block's own
+ * final newline is the one the read-back leaves to the NEXT block's `data-gap`
+ * (the join emits `V − 1` newlines between `V` slots); a trailing row's own
+ * newline is covered by that same gap / the document end instead.
+ * Every other block renders every line; its plain `\n` join is unchanged
+ * (tables re-pad cells, so only the DOM-distance form is safe there).
+ */
 function readBlockSource(host: HTMLElement): string {
-  const out: string[] = []
-  host.querySelectorAll<HTMLElement>('[data-vline]').forEach((lineEl) => {
-    out.push(textOfLine(lineEl))
-  })
-  return out.join('\n')
+  const lines = [...host.querySelectorAll<HTMLElement>('[data-vline]')]
+  if (host.getAttribute('data-kind') !== 'blank') {
+    return lines.map(textOfLine).join('\n')
+  }
+  const total = Number(host.getAttribute('data-vlines') ?? '0')
+  if (total <= 0) return ''
+  const slots = new Array<string>(total).fill('')
+  for (const el of lines) {
+    const li = Number(el.dataset.vline)
+    if (li >= 0 && li < total) slots[li] = textOfLine(el)
+  }
+  return slots.join('\n')
 }
 
 /**

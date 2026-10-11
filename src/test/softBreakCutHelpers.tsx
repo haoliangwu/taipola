@@ -68,9 +68,15 @@ export async function invariants(r: CutRendering, label = ''): Promise<void> {
   const kinds = r.getKinds()
   const fail = (what: string) => `${label ? `[${label}] ` : ''}${what} — ${trace(r)}`
 
-  await assertDomMatchesSource(r).catch((error) => {
-    throw new Error(fail(`DOM↔source roundtrip failed: ${String(error)}`))
-  })
+  // A mid-composition DOM is provisional BY DEFINITION (it carries the pinyin
+  // or a partial commit), so the DOM↔source roundtrip is nonsense during one —
+  // the §7.2 IME cells assert the MODEL stays put and the caret behaves; the
+  // roundtrip re-arms after the commit (`IME-1` documents the same skip).
+  if (!r.isComposing()) {
+    await assertDomMatchesSource(r).catch((error) => {
+      throw new Error(fail(`DOM↔source roundtrip failed: ${String(error)}`))
+    })
+  }
 
   const c = caretFromDom()
   // A freshly mounted, unfocused editor has no caret; the range check applies

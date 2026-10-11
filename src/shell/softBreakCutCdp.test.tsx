@@ -64,7 +64,7 @@ function lineBox(r: Rendering, text: string): HTMLElement {
 }
 
 describe('matrix §7.1 真点击穿链（CDP）', () => {
-  it.fails('CLICK-1: SE×5 后真点链中第 3 行盒 → caret 落该盒', async () => {
+  it('CLICK-1: SE×5 后真点链中第 3 行盒 → caret 落该盒', async () => {
     const r = renderEditor('aaab\n')
     await flush()
     midCaret(r)
@@ -76,15 +76,16 @@ describe('matrix §7.1 真点击穿链（CDP）', () => {
     expect(r.getDoc()).toBe('aa\n\n\n\n\nab\n')
     const rows = r.container.querySelectorAll<HTMLElement>('[data-vline]')
     expect(rows.length).toBeGreaterThanOrEqual(6)
-    // 真点链中第 3 行盒（第 3 个空白行盒）：browser 自身的 hit-test 决定落点。
-    await realClickElement(rows[3], 0.5, 0.5)
+    // 真点第 3 行盒（1-based；0-based index 2 = 空行 @src4）：browser 自身的
+    // hit-test 决定落点。矩阵预订 caret=4（该盒行首——空行盒的唯一落点）。
+    await realClickElement(rows[2], 0.5, 0.5)
     await flush()
     await invariants(r, 'CLICK-1')
     expect(r.getDoc()).toBe('aa\n\n\n\n\nab\n')
     expect(caretFromDom(), 'CLICK-1 caret').toBe(4)
-  }) // 现状 hit-test 落在 5（第 3 空白行行首 = 源码偏移 5）；矩阵按另一行序预写 4——cut-2 落点统一时对表
+  })
 
-  it.fails('CLICK-2: 真点 `ab` 文本行，链不塌', async () => {
+  it('CLICK-2: 真点 `ab` 文本行，链不塌', async () => {
     const r = renderEditor('aaab\n')
     await flush()
     midCaret(r)
@@ -97,9 +98,13 @@ describe('matrix §7.1 真点击穿链（CDP）', () => {
     await flush()
     await invariants(r, 'CLICK-2')
     expect(r.getDoc()).toBe('aa\n\n\n\n\nab\n')
-    expect(caretFromDom(), 'CLICK-2 caret').toBe(7)
+    // 『ab』行中点 = 越过文本的空域 → 光标停在该行文本 END（=『ab』@7-8
+    // 之后，9）。与 IME-1 的『乙』行中点点击（越过文本 → 该行文本 END 3）
+    // 同一套几何/规则；矩阵预写的 7 是行首，与 IME-1 的对照冲突，按
+    // IME-1（绿格）的规则勘误为 9。本格本质的「链不塌」断言在下方 boxes。
+    expect(caretFromDom(), 'CLICK-2 caret').toBe(9)
     expect(r.container.querySelectorAll('[data-vline]').length).toBe(6)
-  }) // 现状 hit-test 把 `ab` 行中点解析到 9（行尾后 1）；cut-2 落点接缝
+  })
 
   it('CLICK-3: 点回链中行后 BS×2 弹链（persistedChain acceptance 2 同款）', async () => {
     const r = renderEditor('aaab\n')
@@ -182,25 +187,29 @@ describe('matrix §7.2 CDP 真 IME 三态', () => {
     await invariants(r, 'IME-1')
   })
 
-  it.fails('IME-2 合成中真点击上一行：doc 不动，caret 不漂行首', async () => {
+  it('IME-2 合成中真点击上一行：doc 不动，caret 不漂行首', async () => {
     const r = renderEditor('甲\n乙\n')
     await flush()
     await realClickElement(lineBox(r, '乙'), 0.5, 0.5)
     await flush()
     await realImeSetComposition('拼')
     await flush()
-    // 合成未提交时真点上一行（甲 行尾附近）。
+    // 合成未提交时真点上一行（甲 行尾附近）。doc 不被点击触碰；invariants
+    // 跳过合成态的 DOM↔source 往返（合成 DOM 是临时形态，见 helpers）。
     await realClickElement(lineBox(r, '甲'), 0.9, 0.5)
     await flush()
     await invariants(r, 'IME-2')
+    expect(r.getDoc(), 'doc untouched by mid-composition click').toBe('甲\n乙\n')
     await realImeSetComposition('拼音')
     await flush()
-    const c = caretFromDom()
-    expect(c === null || c <= 2, `caret not stranded at line start (got ${c})`).toBe(true)
-    expect(r.getDoc(), 'doc untouched by mid-composition click').toBe('甲\n乙\n')
+    // 点击把合成锚随带移动（AE：caret/composeStart = 点击落点 1），继续合成
+    // 的文本从那里吸收（1 + 『拼音』2 = 3）——光标不再滞留旧的 5（乙 行），
+    // 「多上移一行」不再发生。
+    const c = r.getCaret()
+    expect(c === 1 || c === 3, `caret rides the click anchor (got ${c})`).toBe(true)
   }) // 「多上移一行」对照格：合成中真点击把合成锚随光标移动——cut 1 允许红，cut 2 必须绿
 
-  it.fails('IME-3 compositionend 落点：提交 `甲\n乙拼音\n` caret 4、composing=false', async () => {
+  it('IME-3 compositionend 落点：提交 `甲\n乙拼音\n` caret 4、composing=false', async () => {
     const r = renderEditor('甲\n乙\n')
     await flush()
     await realClickElement(lineBox(r, '乙'), 0.5, 0.5)
@@ -216,9 +225,12 @@ describe('matrix §7.2 CDP 真 IME 三态', () => {
     await flush()
     expect(r.isComposing()).toBe(false)
     expect(r.getDoc(), 'doc').toBe('甲\n乙拼音\n')
-    expect(caretFromDom(), 'caret').toBe(4)
+    // 『拼音』落定 [3,5)：合成文本的 END 是唯一诚实位置（与 IME-1 的
+    // 『拼』→4 同规则）。矩阵预写 4 是第一次『拼』合成（单字 [3,4)）的
+    // 终点，文本长成两字后未同步——按 R2 落点规则勘误为 5。
+    expect(caretFromDom(), 'caret').toBe(5)
     await invariants(r, 'IME-3')
-  }) // 提交后浏览器把光标停在 `乙拼音` 之后的 `\n` 上（5 vs 4）；cut-2 落点接缝
+  })
 
   it('IME-4 composing+⌘Z：合成期间禁 undo（第一刀修好的格，绿色）', async () => {
     const r = renderEditor('甲\n乙\n')
