@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, expect } from 'vitest'
 import { useState, useRef } from 'react'
 import { Editor, type EditorHandle } from '../shell/components/Editor'
+import type { BreakKind } from '../editor/kernel'
 import { readDocumentSource, normalizeTables } from '../editor/render'
 
 /**
@@ -23,6 +24,10 @@ export interface Rendering {
   runEl: (block: number, vline: number, run: number) => HTMLElement | null
   /** Preconfigured userEvent instance. */
   user: ReturnType<typeof userEvent.setup>
+  /** Read-only session separator identities (ADR-0005 §2.1). */
+  getKinds: () => Map<number, BreakKind>
+  /** True while an IME composition is open. */
+  isComposing: () => boolean
 }
 
 export function renderEditor(source: string): Rendering {
@@ -35,12 +40,20 @@ export function renderEditor(source: string): Rendering {
     count++
   })
 
+  const handle: { current: EditorHandle | null } = { current: null }
+
   function Harness() {
     const [value, setValue] = useState(source)
     const ref = useRef<EditorHandle>(null)
+    // Mirror the imperative handle to the outer scope so the matrix helpers can
+    // read the kernel's session state (`getKinds`) without a second mount.
+    handle.current = ref.current
     return (
       <Editor
-        ref={ref}
+        ref={(next) => {
+          ref.current = next
+          handle.current = next
+        }}
         value={value}
         onChange={(next) => {
           setValue(next)
@@ -69,6 +82,8 @@ export function renderEditor(source: string): Rendering {
         `[data-block="${block}"] [data-vline="${vline}"] [data-run="${run}"]`,
       ) as HTMLElement | null,
     user: userEvent.setup({ delay: null }),
+    getKinds: () => handle.current?.getKinds() ?? new Map(),
+    isComposing: () => handle.current?.isComposing() ?? false,
   }
 }
 

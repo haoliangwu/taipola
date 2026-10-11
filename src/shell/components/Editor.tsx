@@ -8,7 +8,7 @@
  * edits back through `onChange`.
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { EditorKernel } from '../../editor/kernel'
+import { EditorKernel, type BreakKind } from '../../editor/kernel'
 import type { EditBuffers } from '../../core/editCommands'
 import type { TableMenuState } from './TableMenu'
 
@@ -29,6 +29,10 @@ export interface EditorHandle {
   applyIndent: (direction: 'in' | 'out') => void
   /** Replaces the whole document (opening a file, creating a new one). */
   setDocument: (text: string) => void
+  /** Read-only session separator identities; the cut-1 acceptance matrix reads them. */
+  getKinds: () => Map<number, BreakKind>
+  /** True while an IME composition is open. */
+  isComposing: () => boolean
 }
 
 interface EditorProps {
@@ -99,6 +103,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       applyDocumentEdit: (mutate) => kernelRef.current?.applyDocumentEdit(mutate),
       applyIndent: (direction) => kernelRef.current?.applyIndent(direction),
       setDocument: (text) => kernelRef.current?.setDocument(text),
+      getKinds: () => kernelRef.current?.getKinds() ?? new Map(),
+      isComposing: () => kernelRef.current?.isComposing() ?? false,
     }),
     [],
   )

@@ -97,9 +97,26 @@ interface LineBounds {
   text: string
 }
 
+/**
+ * The identity of a source line held only the SESSION can know (ADR-0005 §2.1).
+ *
+ * - `s` (soft): a blank line this session's Enter/Shift+Enter opened — a
+ *   paragraph-INTERNAL break. It renders its own line box and stays visible
+ *   after the caret leaves (Typora's soft break).
+ * - `S` (structural): a paragraph separator — a blank line that came from the
+ *   file, or one that merely follows an edit. It renders NO line box; the gap
+ *   between the blocks carries the spacing (`data-gap`).
+ *
+ * Only BLANK lines are keyed; a content line is always rendered and carries no
+ * entry. The map is keyed by the line's start source offset.
+ */
+export type BreakKind = 's' | 'S'
+
 interface Snapshot {
   value: string
   caret: number
+  /** The `kind` map at snapshot time; restored WHOLE by undo/redo (ADR §3.5). */
+  kind: Map<number, BreakKind>
 }
 
 export interface EditorKernelHooks {
@@ -232,6 +249,28 @@ export class EditorKernel {
    */
   private softChains: number[] = []
 
+  /**
+   * The session's separator identities (ADR-0005 §2.1): every blank source line
+   * that has an entry, keyed by its start offset. `s` = a blank line this
+   * session's Enter/Shift+Enter opened; `S` = a structural separator. Cut 1 is
+   * the DATA layer only — rendering still rides `pendingBreak`/`softChains`; the
+   * map is maintained structurally (shifted by every commit, pruned when it
+   * stops resolving to a blank line, seeded `S` for new separators) and exposed
+   * read-only for the acceptance matrix.
+   */
+  private kinds = new Map<number, BreakKind>()
+
+  /**
+   * Set while a composition's provisional text has been absorbed into the model
+   * but NOT yet delivered through `onChange`. The autosave/write-back paths key
+   * off `onChange` (they schedule on the shell's `value`), so suppressing the
+   * notification while the IME is composing keeps romanized pinyin out of the
+   * draft and the file (council #3). The flag is the internal dirty marker: the
+   * model is dirty, the content is not published. Flushed at `compositionend`
+   * when the DOM has settled on the model (the no-further-input commit shape).
+   */
+  private notifyPending = false
+
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
 
@@ -242,6 +281,7 @@ export class EditorKernel {
     this.renderClipboardHtml = options.renderClipboardHtml ?? null
     this.reportedLine = lineOfOffset(this.doc, 0)
     this.recompute()
+    this.seedKinds()
   }
 
   /* ---------------------------------------------------------------------- */
@@ -288,6 +328,78 @@ export class EditorKernel {
     return this.caret
   }
 
+  /**
+   * Read-only snapshot of the session's separator identities (ADR-0005 §2.1),
+   * keyed by line start offset. The acceptance matrix asserts R2/R3 marks and
+   * the R6/R7 lifecycle through it; the cut-2 renderer will consume this same
+   * map. A copy — callers cannot mutate kernel state through it.
+   */
+  getKinds(): Map<number, BreakKind> {
+    return new Map(this.kinds)
+  }
+
+  /** True while an IME composition is open (read by the matrix's IME cells). */
+  isComposing(): boolean {
+    return this.composing
+  }
+
+  /**
+   * Seed the `kind` map from the FILE's own face (ADR §2.1): every blank line is
+   * a structural separator. This is the R7 hard boundary — load, refresh and
+   * external restore all converge here, so no session visual survives a reopen.
+   */
+  private seedKinds(): void {
+    const next = new Map<number, BreakKind>()
+    for (const at of this.blankLineStarts()) next.set(at, 'S')
+    this.kinds = next
+  }
+
+  /** Start offsets of every blank source line, in order (the editor's own
+      `blank` line kind, so fences/tables keep their code and rows). */
+  private blankLineStarts(): number[] {
+    const starts: number[] = [0]
+    for (let i = 0; i < this.doc.length; i++) {
+      if (this.doc[i] === '\n') starts.push(i + 1)
+    }
+    const out: number[] = []
+    for (let li = 0; li < starts.length; li++) {
+      if (this.lineStates[li]?.kind === 'blank') out.push(starts[li])
+    }
+    return out
+  }
+
+  /** Whether a source offset is the start of a blank line in the current doc. */
+  private isBlankAt(at: number): boolean {
+    return this.lineStates[lineOfOffset(this.doc, at) - 1]?.kind === 'blank'
+  }
+
+  /**
+   * Structural maintenance after an edit (ADR §3.6): every existing key shifts
+   * with the commit (the same delta rule the caret uses), a key that stops
+   * resolving to a blank line is pruned (typing on an `s` row clears its entry —
+   * R5), and every NEW blank line the edit produced becomes structural. The
+   * session's `s` marks ride the shift; the break sites re-mark the blank they
+   * opened right after this.
+   */
+  private syncKinds(deleteStart: number, delta: number): void {
+    const blanks = new Set(this.blankLineStarts())
+    const out = new Map<number, BreakKind>()
+    for (const [at, kind] of this.kinds) {
+      const next = at >= deleteStart ? Math.max(deleteStart, at + delta) : at
+      if (blanks.has(next)) out.set(next, kind)
+    }
+    // New separators (from an edit, or a fresh break) default to structural; the
+    // break sites overwrite the ones they opened with `s`.
+    for (const at of blanks) if (!out.has(at)) out.set(at, 'S')
+    this.kinds = out
+  }
+
+  /** Records a blank line this session opened as a SOFT break (R2/R3). A
+      non-blank offset (a mid-line split's content placeholder) is left alone. */
+  private markSoftKind(at: number): void {
+    if (this.isBlankAt(at)) this.kinds.set(at, 's')
+  }
+
   setReadOnly(readOnly: boolean): void {
     this.readOnly = readOnly
   }
@@ -302,7 +414,11 @@ export class EditorKernel {
     this.pendingCaret = null
     this.doc = text
     this.caret = 0
+    this.notifyPending = false
     this.recompute()
+    // R7: an external restore is a fresh session face — every separator is
+    // structural again, the session's soft marks are gone.
+    this.seedKinds()
     this.render()
     this.reportedLine = lineOfOffset(text, 0)
     this.hooks.onChange(text)
@@ -621,7 +737,7 @@ export class EditorKernel {
    * back — all in one synchronous frame, which is the whole point of the native
    * kernel: no reconciler can run in between, so no drift can accumulate.
    */
-  private commit(next: string, caretNext: number): void {
+  private commit(next: string, caretNext: number, opts?: { restore?: boolean }): void {
     const prevDoc = this.doc
     const diffStart = sharedPrefix(prevDoc, next)
     const diffDelta = next.length - prevDoc.length
@@ -637,7 +753,7 @@ export class EditorKernel {
     // code, rows and items.
     const clamped = clamp(caretNext, 0, next.length)
     const inserted = next.length - this.doc.length
-    if (inserted > 0) {
+    if (inserted > 0 && !opts?.restore) {
       const insertStart = clamped - inserted
       if (insertStart >= 0) {
         const lineStart = lineOfOffset(this.doc, insertStart)
@@ -775,11 +891,26 @@ export class EditorKernel {
     this.caret = clamp(caretNext, 0, next.length)
     this.pendingCaret = this.caret
     this.recompute()
+    // A RESTORE (undo/redo) carries its own whole `kind` map from the snapshot
+    // (ADR §3.5): delta-following it here would re-shift an already-correct
+    // state. Every other commit maintains it structurally (§3.6).
+    if (opts?.restore) {
+      // Snapshot kinds are authoritative, but a stale key that no longer
+      // resolves to a blank line must still be dropped (defensive: the
+      // snapshot was valid for its own doc, so this is a no-op in practice).
+      const blanks = new Set(this.blankLineStarts())
+      const kept = new Map<number, BreakKind>()
+      for (const [at, kind] of this.kinds) if (blanks.has(at)) kept.set(at, kind)
+      this.kinds = kept
+    } else {
+      this.syncKinds(diffStart, diffDelta)
+    }
     this.render()
     const want = this.pendingCaret
     this.pendingCaret = null
     if (want !== null) this.placeCaret(want)
     this.reportLine()
+    this.notifyPending = false
     this.hooks.onChange(next)
     // The Enter placeholder is single-shot, and it must SURVIVE this commit's
     // own `placeCaret` (the Enter that just carried it consults it again), so
@@ -817,8 +948,15 @@ export class EditorKernel {
     kind: 'enter' | 'soft' | 'prefix',
     anchor: boolean,
     sep: 'sep-first' | 'none' | null = null,
+    recordKind = true,
   ): void {
     this.pendingBreak = { at, kind, sep }
+    // The session identity (ADR §2.1): the blank line an Enter/Shift+Enter
+    // opened is a SOFT break and is remembered as one; a `prefix` row is a
+    // content line of family ②/③ and never enters the kind space. `recordKind`
+    // false is the prefixed-line SOFT break, whose fresh row is not a plain
+    // soft row either.
+    if (kind !== 'prefix' && recordKind) this.markSoftKind(at)
     if (anchor) this.placeCaret(at)
   }
 
@@ -1243,12 +1381,14 @@ private reportLine(): void {
     this.composing = true
     this.composeStart = this.caret
     this.composeLength = 0
+    this.notifyPending = false
   }
 
   private handleCompositionEnd = (): void => {
     this.composing = false
     if (!this.host) {
       this.composed = true
+      this.flushPendingNotify()
       return
     }
     // Split the commit into its two shapes with ONE DOM read:
@@ -1269,6 +1409,9 @@ private reportLine(): void {
     if (next === this.doc) {
       this.composed = false
       if (this.render()) this.placeCaret(this.composeStart + this.composeLength)
+      // The DOM settled on the model with no further input coming: publish the
+      // withheld composing content now (see `notifyPending`).
+      this.flushPendingNotify()
     } else {
       this.composed = true
     }
@@ -1410,7 +1553,22 @@ private reportLine(): void {
     this.caret = this.composeStart + this.composeLength
     this.recompute()
     this.reportLine()
-    this.hooks.onChange(next)
+    // NOTE the model DOES hold the composing text (the provisional absorb is
+    // what keeps the caret honest across the composition's inputs), but it is
+    // NOT published: `onChange` drives the shell's `value` and with it the
+    // autosave/write-back schedules, and a pagehide in the middle of a
+    // composition would otherwise write romanized pinyin into the draft and the
+    // file (council #3). The internal dirty flag is flushed at `compositionend`
+    // once the DOM settles on the model.
+    this.notifyPending = true
+  }
+
+  /** Delivers the deferred `onChange` a composition's absorbed text withheld —
+      the DOM has settled on the model, so the content is no longer provisional. */
+  private flushPendingNotify(): void {
+    if (!this.notifyPending) return
+    this.notifyPending = false
+    this.hooks.onChange(this.doc)
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1422,6 +1580,11 @@ private reportLine(): void {
     const mod = event.metaKey || event.ctrlKey
     if (mod && event.key.toLowerCase() === 'z') {
       event.preventDefault()
+      // An IME composition is mid-flight: the DOM holds provisional text and the
+      // model absorbs it, so an undo here would read uncommitted pinyin back into
+      // the snapshot and desync the composition (council #2). Suppress it — the
+      // check MUST precede `undo`, which the old order ran regardless.
+      if (this.composing) return
       this.undo(event.shiftKey)
       return
     }
@@ -1558,6 +1721,13 @@ private reportLine(): void {
           atLineStart && this.pendingBreak?.kind === 'soft' && this.inPendingBlank(at)
         this.commit(this.doc.slice(0, at) + insert + this.doc.slice(at), fresh)
         if (softCaretOnEnd) {
+          // The opened blank line gets its session identity (ADR-0005 §2.1 R2)
+          // INDEPENDENT of the render machinery below: the trailing-block shape
+          // skips the placeholder branch, but the row is still a session soft
+          // break and the kind map must say so. PREFIXED lines never enter the
+          // kind space (family ②③ — their fresh row is content, or a bare
+          // blank that Typora would render as a marker row).
+          if (prefix === '') this.markSoftKind(fresh)
           if (prefix === '') {
             // A PLAIN line's line-end break marks the fresh row AND renders it
             // with the placeholder machinery — the blank line Shift+Enter just
@@ -1574,9 +1744,16 @@ private reportLine(): void {
             this.renderWithPlaceholder()
             this.placeCaret(fresh)
           } else {
-            this.setPendingBreak(fresh, 'soft', true)
+            this.setPendingBreak(fresh, 'soft', true, undefined, false)
           }
         } else if (atLineStart && prefix === '') {
+          // Mark the opened blank ABOVE even when the render-guard below skips
+          // it (the stack on a TRAILING blank block): the row is a session soft
+          // break either way. A caret already ON a session soft row stacks one
+          // more row BELOW (fresh); anywhere else the break opens the blank at
+          // the caret's own line start.
+          const stacking = this.kinds.get(at) === 's'
+          this.markSoftKind(stacking ? fresh : at)
           // A soft break at a line's START opens the blank line ABOVE. Like
           // the hard-break sibling, that blank is a separator (no line box),
           // so the break would be invisible; mark it as a placeholder so its
@@ -2372,7 +2549,7 @@ private reportLine(): void {
     return null
   }
 
-  private pushUndo(snapshot: Snapshot): void {
+  private pushUndo(snapshot: { value: string; caret: number }): void {
     // Skip only when this exact state is already on TOP of the stack (which would
     // make an undo step a no-op). A seeded placeholder value would silently eat
     // the first edit's pre-state and make that edit impossible to undo, so the
@@ -2386,7 +2563,9 @@ private reportLine(): void {
     // jumped an extra step back (non-empty stack).
     const top = this.undoStack[this.undoStack.length - 1]
     if (top && top.value === snapshot.value) return
-    this.undoStack.push(snapshot)
+    // The `kind` map is captured alongside the value: R6/§3.5 — a snapshot is the
+    // triple `{value, caret, kind}` and undo restores all three WHOLE.
+    this.undoStack.push({ ...snapshot, kind: new Map(this.kinds) })
     if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift()
     this.redoStack = []
   }
@@ -2396,7 +2575,11 @@ private reportLine(): void {
     const to = redo ? this.undoStack : this.redoStack
     const snapshot = from.pop()
     if (!snapshot) return
-    to.push({ value: this.doc, caret: this.caret })
-    this.commit(snapshot.value, snapshot.caret)
+    to.push({ value: this.doc, caret: this.caret, kind: new Map(this.kinds) })
+    // WHOLE restore: the snapshot's kind map replaces the live one, then the
+    // commit runs with `restore` so it does NOT delta-follow it (ADR §3.5 —
+    // `followSoftChains` offsets would re-shift an already-correct map).
+    this.kinds = new Map(snapshot.kind)
+    this.commit(snapshot.value, snapshot.caret, { restore: true })
   }
 }

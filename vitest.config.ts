@@ -43,7 +43,14 @@ export default defineConfig({
             'src/editor/**/*.test.ts',
           ],
           setupFiles: ['./src/test/setup.ts'],
-          css: false,
+          // The editor's CSS is a CONTRACT (ADR-0002 §1, `src/test/setup.ts`):
+          // line-box heights, collapsed marker runs (`display: none`) and the
+          // soft-break shared line are all read back through `getComputedStyle`.
+          // With `css: false` those reads were vacuous — `offsetParent`/
+          // `display` checks and click geometry were testing the absence of the
+          // very stylesheet the assertions are about. `true` injects it so the
+          // layout facts the kernel depends on are real in the test browser.
+          css: true,
         },
       },
     ],

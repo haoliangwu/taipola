@@ -584,7 +584,10 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     line.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     line.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'w' }))
     await flush()
-    expect(r.getDoc()).toBe('~~删除线w~~\n')
+    // 合成期间模型吸收了临时拼音（光标算术需要），但 **onChange 被推迟**：
+    // 自动保存/写盘由 onChange 的 value 驱动，发布临时拼音会在合成中途的
+    // pagehide 把罗马化拼音写进草稿（council #3）。value 停在提交前的内容。
+    expect(r.getDoc()).toBe('~~删除线~~\n')
 
     // 合成期间光标/选区变化很频繁，且随着文本增长会改变显现状态。
     const range = document.createRange()
@@ -645,7 +648,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABC' }))
     await flush()
-    expect(r.getDoc()).toBe('甲ABC\n\n乙\n')
+    // 合成中途的 onChange 被推迟（自动保存不得写临时拼音）——value 未变。
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
 
     // ASCI 提交：合成文本原样落定（内容不变，但 DOM 形态要恢复正常）。
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC' }))
@@ -745,11 +749,12 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     doc.dispatchEvent(new InputEvent('beforeinput', { bubbles: true }))
     doc.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'ABCD' }))
     await flush()
-    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
+    // 合成中途 onChange 推迟（同上）：value 停在提交前。
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
     // 第二个合成输入之后模型光标仍指向合成文本末尾。这里不能直接断言
     // `caretFromDom()`：合成中 DOM 保持临时形态（裸文本节点，不渲染），助手的
     // 行盒读法只会看到行盒起始；模型值由提交后的落点和继续打字验证。
-    expect(r.getDoc()).toBe('甲ABCD\n\n乙\n')
+    expect(r.getDoc()).toBe('甲\n\n乙\n')
 
     // 提交后继续打字：字符跟光标走。
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABCD' }))
@@ -803,7 +808,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     place(t, 6)
     fire('insertCompositionText', 'ABC D ')
     await flush()
-    expect(r.getDoc()).toBe('甲ABC D \n')
+    // 合成中途 onChange 推迟（自动保存不得写临时拼音）。
+    expect(r.getDoc()).toBe('甲\n')
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'ABC D ' }))
     await flush()
     await r.user.keyboard('E')
@@ -851,7 +857,8 @@ describe('换行与退格（A1 后残留的算术 / 映射类）', () => {
     place(t, 1)
     fire('insertCompositionText', 'D')
     await flush()
-    expect(r.getDoc()).toBe('甲D\n')
+    // 合成中途 onChange 推迟（同上）。
+    expect(r.getDoc()).toBe('甲\n')
     doc.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'D' }))
     await flush()
     await r.user.keyboard('E')
@@ -1776,7 +1783,8 @@ describe('空行上打字只插一个字符', () => {
     await flush()
     expect(line.isConnected).toBe(true)
     expect(line.lastChild).toBe(composing)
-    expect(r.getDoc()).toBe('甲乙x\n\n丙\n')
+    // 合成中途 onChange 推迟（自动保存不得写临时拼音）——value 停在提交前。
+    expect(r.getDoc()).toBe('甲乙\n\n丙\n')
 
     composing.textContent = '写'
     line.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
