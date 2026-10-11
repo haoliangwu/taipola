@@ -13,7 +13,7 @@ import {
   typeText,
   type Rendering,
 } from '../test/editorTestUtils'
-import { expectTriple, invariants } from '../test/softBreakCutHelpers'
+import { expectTriple, invariants, putCaret } from '../test/softBreakCutHelpers'
 
 /**
  * The acceptance matrix's main cells (`.scratch/soft-break-cuts/test-matrix.md`
@@ -29,18 +29,6 @@ import { expectTriple, invariants } from '../test/softBreakCutHelpers'
  * cut-1 deliverable, asserted green in `softBreakCutKinds.test.tsx`). Cells are
  * NEVER bent to the current render; the triple stays the ADR target.
  */
-
-/** Place the caret at a character offset inside a run's text. */
-function putCaret(r: Rendering, block: number, vline: number, run: number, at: number): void {
-  const el = r.runEl(block, vline, run)!
-  const sel = window.getSelection()
-  const range = document.createRange()
-  range.setStart(el.firstChild!, at)
-  range.collapse(true)
-  sel?.removeAllRanges()
-  sel?.addRange(range)
-  r.container.focus({ preventScroll: true })
-}
 
 async function flushAll(_r: Rendering): Promise<void> {
   await flush()

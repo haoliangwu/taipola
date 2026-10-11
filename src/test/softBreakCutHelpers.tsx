@@ -31,6 +31,24 @@ export function boxes(r: CutRendering): number {
   return r.container.querySelectorAll('[data-vline]').length
 }
 
+/** Caret at a character offset inside a run's text (persistedChain's pattern). */
+export function putCaret(
+  r: CutRendering,
+  block: number,
+  vline: number,
+  run: number,
+  at: number,
+): void {
+  const el = r.runEl(block, vline, run)!
+  const sel = window.getSelection()
+  const range = document.createRange()
+  range.setStart(el.firstChild!, at)
+  range.collapse(true)
+  sel?.removeAllRanges()
+  sel?.addRange(range)
+  r.container.focus({ preventScroll: true })
+}
+
 /** Whether `at` is the start offset of a blank source line in `doc`. */
 function isBlankLineStart(doc: string, at: number): boolean {
   if (at < 0 || at > doc.length) return false
@@ -58,10 +76,9 @@ function trace(r: CutRendering): string {
  * 3. `kind` lifecycle: every key resolves to a blank line start; values are
  *    `s`|`S`; no key points at a content line or off the document.
  *
- * R1 (the `boxes == content + s` rendering identity) is deliberately NOT here:
- * it is a cut-2 property — until the kind-driven renderer lands, `boxes` is
- * still produced by `pendingBreak`/`softChains`, and asserting the identity now
- * would fail for reasons that have nothing to do with the data layer.
+ * `boxes` is deliberately NOT checked here: the kind-driven renderer has landed
+ * (ADR-0005 cut 2), and the exact box count is pinned per cell by `expectTriple`
+ * in the matrix. The cut-1 kind cells assert doc/caret/kinds only.
  */
 export async function invariants(r: CutRendering, label = ''): Promise<void> {
   const doc = r.getDoc()

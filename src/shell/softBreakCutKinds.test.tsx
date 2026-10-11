@@ -13,7 +13,7 @@ import {
   typeText,
   type Rendering,
 } from '../test/editorTestUtils'
-import { invariants } from '../test/softBreakCutHelpers'
+import { invariants, putCaret } from '../test/softBreakCutHelpers'
 
 /**
  * Cut-1 kind DATA-LAYER cells (ADR-0005 §2.1, matrix §1 rules R2/R3/R4/R5/R6/R7).
@@ -35,18 +35,6 @@ function soft(r: Rendering): number[] {
     .filter(([, k]) => k === 's')
     .map(([at]) => at)
     .sort((a, b) => a - b)
-}
-
-/** Caret at a character offset inside a run's text (persistedChain's pattern). */
-function putCaret(r: Rendering, block: number, vline: number, run: number, at: number): void {
-  const el = r.runEl(block, vline, run)!
-  const sel = window.getSelection()
-  const range = document.createRange()
-  range.setStart(el.firstChild!, at)
-  range.collapse(true)
-  sel?.removeAllRanges()
-  sel?.addRange(range)
-  r.container.focus({ preventScroll: true })
 }
 
 /** Assert doc, caret and the soft-offset set together, then run invariants. */

@@ -122,7 +122,7 @@ export type BreakKind = 's' | 'S'
  * whole soft state in a snapshot).
  */
 interface KindEntry {
-  k: 's' | 'S'
+  sep: 's' | 'S'
   hard?: boolean
 }
 
@@ -186,9 +186,6 @@ export class EditorKernel {
   private signature = ''
   private reportedLine = 0
 
-  /** The placeholder-block machinery is gone (ADR-0005 cut 2): a blank line's
-      visibility is decided by the `kinds` map alone. */
-
   /** True while the DOM selection is one WE placed; see the class comment. */
   private placedByUs = false
   /** Set by `beforeinput`, consumed by `input`. */
@@ -242,7 +239,7 @@ export class EditorKernel {
 
   /**
    * The session's separator identities (ADR-0005 §2.1): every blank source line
-   * that has an entry, keyed by its start offset. `k` is the public
+   * that has an entry, keyed by its start offset. `sep` is the public
    * `s`/`S` value; `hard` rides along for the Enter-vs-Shift+Enter typing
    * decision (R5). The map is maintained structurally (shifted by every commit,
    * pruned when an entry stops resolving to a blank line, seeded `S` for new
@@ -261,8 +258,6 @@ export class EditorKernel {
    * commit time directly, and typing on them must NOT paragraphize (R5).
    */
   private pendingSplit: { block: number; at: number } | null = null
-
-  /** True while the caret sits on a blank line the session keyed `s`. */
 
   /**
    * Set while a composition's provisional text has been absorbed into the model
@@ -340,7 +335,7 @@ export class EditorKernel {
    */
   getKinds(): Map<number, BreakKind> {
     const out = new Map<number, BreakKind>()
-    for (const [at, entry] of this.kinds) out.set(at, entry.k)
+    for (const [at, entry] of this.kinds) out.set(at, entry.sep)
     return out
   }
 
@@ -356,7 +351,7 @@ export class EditorKernel {
    */
   private seedKinds(): void {
     const next = new Map<number, KindEntry>()
-    for (const at of this.blankLineStarts()) next.set(at, { k: 'S' })
+    for (const at of this.blankLineStarts()) next.set(at, { sep: 'S' })
     this.kinds = next
   }
 
@@ -412,16 +407,23 @@ export class EditorKernel {
     }
     // New separators (from an edit, or a fresh break) default to structural; the
     // break sites overwrite the ones they opened with `s`.
-    for (const at of blanks) if (!out.has(at)) out.set(at, { k: 'S' })
+    for (const at of blanks) if (!out.has(at)) out.set(at, { sep: 'S' })
     this.kinds = out
   }
 
-  /** Records a blank line this session opened as a SOFT break (R2/R3). A
-      non-blank offset (a mid-line split's content placeholder) is left alone.
-      `hard` marks a row the ENTER family opened (R5: typing on it starts a new
-      paragraph; Shift+Enter rows continue the paragraph). */
-  private markSoftKind(at: number, hard = false): void {
-    if (this.isBlankAt(at)) this.kinds.set(at, { k: 's', ...(hard ? { hard: true } : {}) })
+  /** Records a blank line this session opened as a SOFT break (R2/R3): a
+      Shift+Enter row or a session soft row the caret can anchor on. Typing fills
+      the row (R5, no paragraphization). A non-blank offset (a mid-line split's
+      content placeholder) is left alone. */
+  private markSoftOpen(at: number): void {
+    if (this.isBlankAt(at)) this.kinds.set(at, { sep: 's' })
+  }
+
+  /** Records a blank row the ENTER family opened (R2/R3 + R5): it renders, and
+      the next keystroke is re-homed onto it and paragraphized into a NEW
+      paragraph rather than a soft continuation. */
+  private markEnterBlank(at: number): void {
+    if (this.isBlankAt(at)) this.kinds.set(at, { sep: 's', hard: true })
   }
 
   /** Keys every blank row of block `index` as a session SOFT row (R1): the rows
@@ -429,7 +431,7 @@ export class EditorKernel {
       anchor on them and Backspace pops them one at a time. */
   private markBlockBlanksSoft(index: number): void {
     for (const at of this.blankLineStarts()) {
-      if (this.blockAt(at) === index) this.markSoftKind(at)
+      if (this.blockAt(at) === index) this.markSoftOpen(at)
     }
   }
 
@@ -453,7 +455,7 @@ export class EditorKernel {
     // Shift+Enter), so the mark alone discriminates; the kind check is
     // defensive only, and a keyless offset (the mid-line split's CONTENT
     // half) passes through — its typing rides branch-3's caret guard.
-    if (this.kinds.has(split.at) && this.kinds.get(split.at)?.k !== 's') return false
+    if (this.kinds.has(split.at) && this.kinds.get(split.at)?.sep !== 's') return false
     // The character must have landed on the pending row's LINE — a click onto
     // another row then typing must NOT be stolen up to the newest row (measured:
     // `甲` Enter Enter, click the first row and type — the character was
@@ -472,7 +474,7 @@ export class EditorKernel {
   private softRowAtCaret(): number {
     const lineStart = this.doc.lastIndexOf('\n', Math.max(0, this.caret - 1)) + 1
     const kind = this.kinds.get(lineStart)
-    if (kind?.k !== 's' || kind.hard) return -1
+    if (kind?.sep !== 's' || kind.hard) return -1
     return lineStart
   }
 
@@ -677,7 +679,7 @@ export class EditorKernel {
       if (!block || block.raw !== '' || this.lineStates[block.startLine]?.kind !== 'blank') break
       if (this.blocks.length === 1) break
       const soft = this.views[index]?.lines.some(
-        (line) => this.kinds.get(this.offsets[index] + line.sourceStart)?.k === 's',
+        (line) => this.kinds.get(this.offsets[index] + line.sourceStart)?.sep === 's',
       )
       if (soft) break
       index -= 1
@@ -882,7 +884,7 @@ export class EditorKernel {
     // A paragraphizing keystroke consumed the blank row it was typed on: drop
     // its session `s` so the row is a structural separator, not a visible box.
     if (clearSplitAt !== null && this.isBlankAt(clearSplitAt)) {
-      this.kinds.set(clearSplitAt, { k: 'S' })
+      this.kinds.set(clearSplitAt, { sep: 'S' })
     }
     this.render()
     const want = this.pendingCaret
@@ -1549,7 +1551,7 @@ private reportLine(): void {
           // Typora would render as a marker row), and their caret never needs
           // re-placing (the commit already anchored it).
           if (prefix === '') {
-            this.markSoftKind(fresh)
+            this.markSoftOpen(fresh)
             // The row was NOT rendered when the commit's placeCaret ran (the
             // kind mark lands after), so anchor again on the fresh row.
             this.render()
@@ -1569,8 +1571,8 @@ private reportLine(): void {
           // repeated marker and needs no blank row (and re-placing the caret
           // there displaced it onto the fresh marker — measured: `> 甲`,
           // caret 0, Shift+Enter → `\n> > 甲`).
-          const stacking = this.kinds.get(at)?.k === 's'
-          this.markSoftKind(stacking ? fresh : at)
+          const stacking = this.kinds.get(at)?.sep === 's'
+          this.markSoftOpen(stacking ? fresh : at)
           const caret = stacking ? fresh : at + 1
           this.render()
           this.placeCaret(caret)
@@ -1675,7 +1677,7 @@ private reportLine(): void {
           const at = rowEnd < this.doc.length ? rowEnd + 1 : rowEnd
           this.pushUndo({ value: this.doc, caret: this.caret })
           this.commit(this.doc.slice(0, at) + '\n' + this.doc.slice(at), rowEnd + 1)
-          this.markSoftKind(rowEnd + 1, true)
+          this.markEnterBlank(rowEnd + 1)
           this.pendingSplit = { block: this.blockAt(rowEnd + 1), at: rowEnd + 1 }
           this.render()
           this.placeCaret(rowEnd + 1)
@@ -1713,7 +1715,7 @@ private reportLine(): void {
                 // blank too — it renders a line of its own, the caret sits ON
                 // it, and the re-home is what turns the next keystroke into a
                 // new paragraph rather than a soft continuation.
-                this.markSoftKind(nextCaret, true)
+                this.markEnterBlank(nextCaret)
                 this.pendingSplit = { block: ground, at: nextCaret }
                 this.render()
                 this.placeCaret(nextCaret)
@@ -1741,7 +1743,7 @@ private reportLine(): void {
           freshIndex < this.blocks.length - 1 &&
           this.lineStates[freshBlock.startLine]?.kind === 'blank'
         ) {
-          this.markSoftKind(caretOn, true)
+          this.markEnterBlank(caretOn)
           this.pendingSplit = { block: freshIndex, at: caretOn }
           this.render()
           this.placeCaret(caretOn)
@@ -1767,7 +1769,7 @@ private reportLine(): void {
           // The mark rides the blank's own start; the caret stays where the
           // insert put it (one past the newline — `Editor.test.tsx` "句首
           // Enter" locks `\n甲乙` with caret 1).
-          this.markSoftKind(live, true)
+          this.markEnterBlank(live)
           this.pendingSplit = { block: freshIndex, at: live }
           this.render()
           this.placeCaret(live + 1)
@@ -1873,7 +1875,7 @@ private reportLine(): void {
         event.preventDefault()
         this.pushUndo({ value: this.doc, caret: this.caret })
         this.commit(this.doc.slice(0, typed) + this.doc.slice(typed + 1), typed)
-        this.markSoftKind(typed)
+        this.markSoftOpen(typed)
         this.render()
         this.placeCaret(typed)
         return
@@ -1918,10 +1920,10 @@ private reportLine(): void {
         this.doc[behind] !== '\n' &&
         this.doc[behind + 1] === '\n' &&
         this.kinds.get(ownLineStart) === undefined &&
-        this.kinds.get(ownLineStart - 1)?.k === 's'
+        this.kinds.get(ownLineStart - 1)?.sep === 's'
       const chainPop =
-        (behind >= 0 && this.doc[behind] === '\n' && this.kinds.get(behind)?.k === 's') ||
-        (this.kinds.get(ownLineStart)?.k === 's' && this.doc[ownLineStart] === '\n') ||
+        (behind >= 0 && this.doc[behind] === '\n' && this.kinds.get(behind)?.sep === 's') ||
+        (this.kinds.get(ownLineStart)?.sep === 's' && this.doc[ownLineStart] === '\n') ||
         filledRow
       if (chainPop) {
         event.preventDefault()
@@ -1933,7 +1935,7 @@ private reportLine(): void {
           // The row reverted to a session `s` row in the model (R5's inverse);
           // its box only renders once the kind says so — place the caret after
           // the render so the new box can anchor it.
-          this.markSoftKind(behind)
+          this.markSoftOpen(behind)
           this.render()
           this.placeCaret(behind)
         }
@@ -1994,7 +1996,8 @@ private reportLine(): void {
           }
         }
         const left = this.leavingEmptyItem(live) ?? backspaceAtContentStart(this.doc, live)
-        if (left) {          event.preventDefault()
+        if (left) {
+          event.preventDefault()
           this.pushUndo({ value: this.doc, caret: this.caret })
           this.commit(left.doc, left.caret)
           return

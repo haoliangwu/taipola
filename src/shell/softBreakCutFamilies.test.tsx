@@ -9,7 +9,7 @@ import {
   caretInTableCell,
   type Rendering,
 } from '../test/editorTestUtils'
-import { expectTriple, invariants } from '../test/softBreakCutHelpers'
+import { expectTriple, invariants, putCaret } from '../test/softBreakCutHelpers'
 
 /**
  * Matrix §4/§5: family ② (quote/list) and ③ (table) — CURRENT behavior is the
@@ -30,17 +30,6 @@ import { expectTriple, invariants } from '../test/softBreakCutHelpers'
  * - `F-Enter-last` / `F-BS(a)`: caret not inside a run at read time (null);
  *   recorded honestly.
  */
-
-function putCaret(r: Rendering, block: number, vline: number, run: number, at: number): void {
-  const el = r.runEl(block, vline, run)!
-  const sel = window.getSelection()
-  const range = document.createRange()
-  range.setStart(el.firstChild!, at)
-  range.collapse(true)
-  sel?.removeAllRanges()
-  sel?.addRange(range)
-  r.container.focus({ preventScroll: true })
-}
 
 async function se(r: Rendering, n = 1): Promise<void> {
   for (let i = 0; i < n; i++) {
